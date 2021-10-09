@@ -10,7 +10,7 @@
 	|   dislay buffer      |
 	-----------------------
 
-- first layer for file operations like open/read/write/close/callback.
+- first layer for file operations like load/free/info callback.
 this will include format probe 
 
 - second layer for data decoding and encoding.

@@ -7,7 +7,8 @@
 
 #include "file.h"
 
-int BMP_probe(const char* filename)
+static int 
+BMP_probe(const char* filename)
 {
     const char* bmptype[] = {
         "BM",
@@ -38,7 +39,8 @@ int BMP_probe(const char* filename)
     return -EINVAL;
 }
 
-struct pic* BMP_load(const char* filename)
+static struct pic* 
+BMP_load(const char* filename)
 {
     BMP * b = malloc(sizeof(BMP));
     FILE *f = fopen(filename, "rb");
@@ -57,7 +59,8 @@ struct pic* BMP_load(const char* filename)
     return p;
 }
 
-void BMP_free(struct pic* p)
+static void 
+BMP_free(struct pic* p)
 {
     BMP * bmp = (BMP *)(p->pic);
     free(bmp->data);
@@ -65,7 +68,7 @@ void BMP_free(struct pic* p)
     free(p);
 }
 
-void 
+static void 
 BMP_info(FILE* f, struct pic* p)
 {
     struct bmp_type {
@@ -116,7 +119,8 @@ static struct file_ops bmp_ops = {
     .info = BMP_info,
 };
 
-void BMP_init()
+void 
+BMP_init(void)
 {
     file_ops_register(&bmp_ops);
 }

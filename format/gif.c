@@ -13,24 +13,24 @@
 typedef struct {
 	int length;
 	int prev;
-	byte data;
+	uint8_t data;
 } Entry;
 
-ushort fget_ushort(FILE* file) {
-	ushort value;
+uint16_t fget_uint16_t(FILE* file) {
+	uint16_t value;
 	fread(&value, 2, 1, file);
 	return value;
 }
 
-byte fget_byte(FILE* file) {
-	return (byte)fgetc(file);
+uint8_t fget_byte(FILE* file) {
+	return (uint8_t)fgetc(file);
 }
 
 void read_logical_screen_descriptor(GIF* gif, FILE* file) {
-	gif->width = fget_ushort(file);
-	gif->height = fget_ushort(file);
+	gif->width = fget_uint16_t(file);
+	gif->height = fget_uint16_t(file);
 
-	byte packet = fget_byte(file);
+	uint8_t packet = fget_byte(file);
 	gif->uses_global_ct = (packet & 0x80) != 0;
 	gif->global_ct_resolution = ((packet & 0x70) >> 4) + 1;
 	gif->global_ct_sorted = (packet & 0x08) != 0;
@@ -47,14 +47,15 @@ void read_logical_screen_descriptor(GIF* gif, FILE* file) {
 	}
 }
 
-int read_blocks(byte** data, FILE* file) {
-	byte block_length = fget_byte(file);
+int read_blocks(uint8_t** data, FILE* file) 
+{
+	uint8_t block_length = fget_byte(file);
 	int total_length = 0;
 	while (block_length) {
 		if (total_length == 0) {
-			*data = (byte*)malloc(block_length);
+			*data = (uint8_t*)malloc(block_length);
 		} else {
-			*data = (byte*)realloc(*data, total_length + block_length);
+			*data = (uint8_t*)realloc(*data, total_length + block_length);
 		}
 		fread(*data + total_length, 1, block_length, file);
 		total_length += block_length;
@@ -63,7 +64,7 @@ int read_blocks(byte** data, FILE* file) {
 	return total_length;
 }
 
-void read_image_data(int lzw_code_size, const byte* compressed, int compressed_length, byte* decompressed) {
+void read_image_data(int lzw_code_size, const uint8_t* compressed, int compressed_length, uint8_t* decompressed) {
 	int code_length = lzw_code_size + 1;
 	int clear_code = 1 << lzw_code_size;
 	int end_of_information = clear_code + 1;
@@ -175,12 +176,12 @@ Graphic* gif_next_dataless_graphic(GIF* gif) {
 
 void read_image(GIF* gif, FILE* file) {
 	Image* image = (Image*)malloc(sizeof(Image));
-	image->left = fget_ushort(file);
-	image->top = fget_ushort(file);
-	image->width = fget_ushort(file);
-	image->height = fget_ushort(file);
+	image->left = fget_uint16_t(file);
+	image->top = fget_uint16_t(file);
+	image->width = fget_uint16_t(file);
+	image->height = fget_uint16_t(file);
 
-	byte packet = fget_byte(file);
+	uint8_t packet = fget_byte(file);
 	image->interlaced = (packet & 0x40) != 0;
 	image->uses_local_ct = (packet & 0x80) != 0;
 	image->local_ct_sorted = (packet & 0x20) != 0;
@@ -194,10 +195,10 @@ void read_image(GIF* gif, FILE* file) {
 	}
 
 	int image_data_length = image->width * image->height;
-	image->data = (byte*)malloc(image_data_length);
+	image->data = (uint8_t*)malloc(image_data_length);
 	
-	byte* compressed = NULL;;
-	byte lzw_code_size = fget_byte(file);
+	uint8_t* compressed = NULL;;
+	uint8_t lzw_code_size = fget_byte(file);
 	int compressed_length = read_blocks(&compressed, file);
 	read_image_data(lzw_code_size, compressed, compressed_length, image->data);
 	free(compressed);
@@ -211,15 +212,15 @@ void read_plaintext_ext(GIF* gif, FILE* file) {
 	// no one ever uses this, but hey. if you want it, it's here.
 	PlainText* plaintext = (PlainText*)malloc(sizeof(PlainText));
 	fget_byte(file);
-	plaintext->text_left = fget_ushort(file);
-	plaintext->text_top = fget_ushort(file);
-	plaintext->text_width = fget_ushort(file);
-	plaintext->text_height = fget_ushort(file);
+	plaintext->text_left = fget_uint16_t(file);
+	plaintext->text_top = fget_uint16_t(file);
+	plaintext->text_width = fget_uint16_t(file);
+	plaintext->text_height = fget_uint16_t(file);
 	plaintext->char_width = fget_byte(file);
 	plaintext->char_height = fget_byte(file);
 	plaintext->foreground_color_index = fget_byte(file);
 	plaintext->background_color_index = fget_byte(file);
-	plaintext->text_length = read_blocks((byte**)(&plaintext->text), file);
+	plaintext->text_length = read_blocks((uint8_t**)(&plaintext->text), file);
 	fget_byte(file);
 
 	Graphic* graphic = gif_next_dataless_graphic(gif);
@@ -231,11 +232,11 @@ void read_graphic_control_ext(GIF* gif, FILE* file) {
 	GraphicControl* control = (GraphicControl*)malloc(sizeof(GraphicControl));
 
 	fget_byte(file);
-	byte packet = fget_byte(file);
+	uint8_t packet = fget_byte(file);
 	control->disposal_method = (packet >> 2) & 7;
 	control->requires_user_input = (packet & 2) != 0;
 	control->uses_transparency = (packet & 1) != 0;
-	control->delay = fget_ushort(file);
+	control->delay = fget_uint16_t(file);
 	control->transparent_color_index = fget_byte(file);
 	fget_byte(file);
 
@@ -256,7 +257,7 @@ Extension* gif_increment_extensions(GIF* gif) {
 
 void read_comment_ext(GIF* gif, FILE* file) {
 	Comment* comment = (Comment*)malloc(sizeof(Comment));
-	comment->text_length = read_blocks((byte**)&comment->text, file);
+	comment->text_length = read_blocks((uint8_t**)&comment->text, file);
 
 	Extension* extension = gif_increment_extensions(gif);
 	extension->type = EXTENSION_COMMENT;
@@ -276,7 +277,7 @@ void read_application_ext(GIF* gif, FILE* file) {
 }
 
 void read_extension(GIF* gif, FILE* file) {
-	byte extension_code = fget_byte(file);
+	uint8_t extension_code = fget_byte(file);
 	switch (extension_code) {
 	case GRAPHIC_PLAINTEXT:
 		read_plaintext_ext(gif, file);
@@ -298,7 +299,7 @@ void read_extension(GIF* gif, FILE* file) {
 
 void read_contents(GIF* gif, FILE* file) {
 	while (!feof(file)) {
-		byte block_code = fget_byte(file);
+		uint8_t block_code = fget_byte(file);
 		switch (block_code) {
 		case GRAPHIC_IMAGE:
 			read_image(gif, file);
@@ -328,7 +329,7 @@ GIF* read_gif(FILE* file) {
 	gif->extension_count = 0;
 	gif->graphics = NULL;
 	gif->extensions = NULL;
-
+	int len = fread(&gif->file_h, 1, GIF_FILE_HEADER_LEN, file);
 	read_logical_screen_descriptor(gif, file);
 	read_contents(gif, file);
 
@@ -336,32 +337,58 @@ GIF* read_gif(FILE* file) {
 }
 
 struct pic* GIF_load(const char* filename) {
-	struct pic *p = malloc(sizeof(struct pic));
-	FILE* file = fopen(filename, "rb");
-	GIF* gif = read_gif(file);
-	fclose(file);
-	p->pic = gif;
-	return p;
+    struct pic *p = malloc(sizeof(struct pic));
+    FILE* file = fopen(filename, "rb");
+    GIF* gif = read_gif(file);
+    fclose(file);
+    p->pic = gif;
+    p->width = gif->width;
+    p->height = gif->height;
+    p->depth = 24;
+    p->pitch = ((p->width * p->height + 31) >> 5) << 2;
+    p->pixels = gif->graphics->image->data;
+    return p;
 }
 
-int GIF_probe(const char* filename)
+static int 
+GIF_probe(const char* filename)
 {
-	char head[6];
-	FILE* f = fopen(filename, "rb");
-	if (f == NULL) {
+    struct gif_file_header head;
+    FILE* f = fopen(filename, "rb");
+    if (f == NULL) {
         printf("fail to open %s\n", filename);
         return -ENOENT;
     }
-	int len = fread(head, 1, 6, f);
-	if (len < 6) {
+    int len = fread(&head, 1, GIF_FILE_HEADER_LEN, f);
+    if (len < 6) {
         fclose(f);
         return -EBADF;
     }
-	fclose(f);
-	if (!memcmp(head, "GIF89a", 6) || !memcmp(head, "GIF87a", 6)) {
-		return 0;
+    fclose(f);
+    if (!memcmp(&head, "GIF89a", GIF_FILE_HEADER_LEN) || 
+            !memcmp(&head, "GIF87a", GIF_FILE_HEADER_LEN)) {
+        return 0;
+    }
+    return -EINVAL;
+}
+
+static void 
+GIF_info(FILE* f, struct pic* p)
+{
+    GIF *g = (GIF*)(p->pic);
+    fprintf(f, "GIF file format:\n");
+    fprintf(f, "version %c%c%c\n", g->file_h.version[0], g->file_h.version[1], g->file_h.version[2]);
+    fprintf(f, "\timage width %d height %d:\n", g->width, g->height);
+    fprintf(f, "\tbackground_color_index: %d\n", g->background_color_index);
+    fprintf(f, "\taspect_ratio: %d\n", g->aspect_ratio);
+    if (g->uses_global_ct) {
+        fprintf(f, "\tglobal_ct_resolution: %d\n", g->global_ct_resolution);
+        fprintf(f, "\tglobal_ct_size: %d\n", g->global_ct_size);
+        fprintf(f, "\tglobal_ct_sorted: %d\n", g->global_ct_sorted);
 	}
-	return -EINVAL;
+	fprintf(f, "------------------------------\n");
+	fprintf(f, "\tgraphic_count: %d\n", g->graphic_count);
+	fprintf(f, "\textension_count: %d\n", g->extension_count);
 }
 
 void image_free(Image* image) {
@@ -437,6 +464,7 @@ static struct file_ops gif_ops = {
     .probe = GIF_probe,
     .load = GIF_load,
     .free = GIF_free,
+	.info = GIF_info,
 };
 
 void GIF_init(void)

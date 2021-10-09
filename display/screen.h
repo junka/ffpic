@@ -19,7 +19,8 @@ typedef struct {
     int (*uninit)(void);
 } Screen;
 
-int pic_draw(const uint8_t * image, int w, int h);
+int pic_draw(void *pixels, int width, int height, int depth, int pitch,
+            uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask);
 
 int pic_refresh();
 

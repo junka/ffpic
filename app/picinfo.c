@@ -1,25 +1,27 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "screen.h"
-#include "gif.h"
-
-extern Screen scrn;
+#include "file.h"
 
 int main(int argc, const char *argv[])
 {
     int ret;
-    const char *filename = argv[1];
-    GIF *g = GIF_Load(filename);
-    pic_register_screens();
-    scrn.init(g->width, g->height);
-    printf("aaaa\n");
-    printf("number %d width %d, height %d\n", g->graphic_count, g->width, g->height);
-    ret = pic_draw(g->graphics->image->data, g->graphics->image->width, g->graphics->image->height);
-    if (ret) {
-        printf("fail to draw");
+    if (argc < 2) {
+        printf("Please input a valid picture path\n");
+        return -1;
     }
-    scrn.uninit();
-    GIF_Free(g);
+    const char *filename = argv[1];
+
+    file_ops_init();
+    struct file_ops *ops = file_probe(filename);
+    if (ops == NULL) {
+        printf("file format is not supported\n");
+        return 0;
+    }
+    struct pic *p = file_load(ops, filename);
+
+    file_info(ops, p);
+
+    file_free(ops, p);
     return 0;
 }

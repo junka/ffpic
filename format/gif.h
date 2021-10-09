@@ -105,7 +105,7 @@ typedef struct {
 	Extension* extensions;
 } GIF;
 
-GIF* GIF_Load(const char*);
-void GIF_Free(GIF*);
+
+void GIF_init(void);
 
 #endif

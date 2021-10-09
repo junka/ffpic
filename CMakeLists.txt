@@ -29,30 +29,40 @@ list(APPEND FFPIC_DIRS
             "${FFPIC_ROOT}/coding")
 
 list(APPEND FFPIC_SOURCES
-            "${FFPIC_ROOT}/display/screen.c"
-            "${FFPIC_ROOT}/format/gif.c")
+            "${FFPIC_ROOT}/display/screen.c")
+
+list(APPEND FFPIC_FORMART
+            "${FFPIC_ROOT}/format/gif.c"
+            "${FFPIC_ROOT}/format/bmp.c"
+            "${FFPIC_ROOT}/format/file.c")
 
 list(APPEND FFPIC_HEADERS
             "${FFPIC_ROOT}/coding/lzw.h"
             "${FFPIC_ROOT}/coding/coding.h"
             "${FFPIC_ROOT}/display/screen.h"
-            "${FFPIC_ROOT}/format/gif.h")
+            "${FFPIC_ROOT}/format/gif.h"
+            "${FFPIC_ROOT}/format/bmp.h"
+            "${FFPIC_ROOT}/format/file.h")
 
 find_package(SDL2)
 find_package(SDL2_IMAGE)
 
-add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_HEADERS})
+add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_FORMART})
+target_include_directories(ffpic PRIVATE ${FFPIC_HEADERS})
 
 
-add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" $<TARGET_OBJECTS:ffpic>)
-target_link_libraries(picinfo ffpic)
+add_executable(picshow "${FFPIC_ROOT}/app/picshow.c" $<TARGET_OBJECTS:ffpic>)
+add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART})
+
+target_link_libraries(picshow ffpic)
+target_include_directories(picshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 
 if(SDL2_FOUND)
   target_include_directories(ffpic PRIVATE ${SDL2_INCLUDE_DIRS})
-  target_include_directories(picinfo PRIVATE ${SDL2_INCLUDE_DIRS})
+  target_include_directories(picshow PRIVATE ${SDL2_INCLUDE_DIRS})
   message("SDL2 library found ${SDL2_INCLUDE_DIRS}")
-  target_link_libraries(picinfo ${SDL2_LIBRARIES})
+  target_link_libraries(picshow ${SDL2_LIBRARIES})
 else(SDL2_FOUND)
   message(FATAL_ERROR "SDL2 library not found")
 endif(SDL2_FOUND)

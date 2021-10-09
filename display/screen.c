@@ -1,5 +1,6 @@
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "screen.h"
 
@@ -71,32 +72,26 @@ pic_screen_uninit()
     return 0;
 }
 
-int pic_draw(const uint8_t * image, int w, int h)
+int pic_draw(void *pixels, int width, int height, int depth, int pitch,
+            uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
 {
     SDL_Rect r;
-    SDL_RWops *rw = SDL_RWFromMem((void *)image, w*h);
-    // SDL_Surface * s = IMG_Load_RW(rw, 1);
-    SDL_Surface *s = SDL_CreateRGBSurfaceFrom((void *)image, w, h, 4*8, h*4,
-         0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
+
+    SDL_Surface *s = SDL_CreateRGBSurfaceFrom(pixels, width, height, depth, pitch,
+         rmask, gmask, bmask, amask);
     if (s == NULL) {
         return -1;
     }
 
-    SDL_Surface * ws = SDL_GetWindowSurface(scrn.w);
+    SDL_Texture * texture = SDL_CreateTextureFromSurface(scrn.r, s);
 
-    // SDL_SetRenderDrawColor(scrn.r, 0, 0, 255, 255);
-
-    r.x = 0;
-    r.y = 0;
-    r.w = w;
-    r.h = h;
-
-    // SDL_RenderDrawRect(scrn.r, &r);
-    // SDL_RenderFillRect(scrn.r, &r);
     SDL_Event e;
 
     bool quit = false;
     while (!quit) {
+        SDL_RenderClear(scrn.r);
+        SDL_RenderCopy(scrn.r, texture, NULL, NULL);
+        SDL_RenderPresent(scrn.r);
         if (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT){
                 quit = true;
@@ -108,8 +103,6 @@ int pic_draw(const uint8_t * image, int w, int h)
                 quit = true;
             }
         }
-        SDL_BlitSurface(s, NULL, ws, NULL);
-        SDL_UpdateWindowSurface(scrn.w);
     }
 
     SDL_FreeSurface(s);

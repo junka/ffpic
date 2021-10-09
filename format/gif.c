@@ -1,8 +1,10 @@
-#include "gif.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
+#include "gif.h"
+#include "file.h"
 
 #define EXTENSION_INTRODUCER   0x21
 #define TRAILER                0x3B
@@ -320,12 +322,6 @@ void read_contents(GIF* gif, FILE* file) {
 }
 
 GIF* read_gif(FILE* file) {
-	char head[6];
-	fread(head, 1, 6, file);
-	if (memcmp(head, "GIF89a", 6) != 0 && memcmp(head, "GIF87a", 6) != 0) {
-		printf("Invalid header\n");
-		return NULL;
-	}
 
 	GIF* gif = (GIF*)malloc(sizeof(GIF));
 	gif->graphic_count = 0;
@@ -339,11 +335,33 @@ GIF* read_gif(FILE* file) {
 	return gif;
 }
 
-GIF* GIF_Load(const char* filename) {
+struct pic* GIF_load(const char* filename) {
+	struct pic *p = malloc(sizeof(struct pic));
 	FILE* file = fopen(filename, "rb");
 	GIF* gif = read_gif(file);
 	fclose(file);
-	return gif;
+	p->pic = gif;
+	return p;
+}
+
+int GIF_probe(const char* filename)
+{
+	char head[6];
+	FILE* f = fopen(filename, "rb");
+	if (f == NULL) {
+        printf("fail to open %s\n", filename);
+        return -ENOENT;
+    }
+	int len = fread(head, 1, 6, f);
+	if (len < 6) {
+        fclose(f);
+        return -EBADF;
+    }
+	fclose(f);
+	if (!memcmp(head, "GIF89a", 6) || !memcmp(head, "GIF87a", 6)) {
+		return 0;
+	}
+	return -EINVAL;
 }
 
 void image_free(Image* image) {
@@ -394,7 +412,8 @@ void extension_free(Extension* extension) {
 	}
 }
 
-void GIF_Free(GIF* gif) {
+void GIF_free(struct pic *p) {
+	GIF* gif = (GIF*)(p->pic);
 	if (gif->graphic_count) {
 		while (gif->graphic_count)
 			graphic_free(gif->graphics + --gif->graphic_count);
@@ -411,4 +430,16 @@ void GIF_Free(GIF* gif) {
 		free(gif->global_ct);
 
 	free(gif);
+	free(p);
+}
+static struct file_ops gif_ops = {
+    .name = "GIF",
+    .probe = GIF_probe,
+    .load = GIF_load,
+    .free = GIF_free,
+};
+
+void GIF_init(void)
+{
+    file_ops_register(&gif_ops);
 }

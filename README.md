@@ -18,4 +18,6 @@ this will include format probe
 - third layer for real buffer maniplate. for now, choose sdl2 as a frame for dispaly
 
 
-# ffpic
+# Samples
+
+take bmp/gif samples from [https://filesamples.com/formats/bmp] etc

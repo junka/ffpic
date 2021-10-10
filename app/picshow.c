@@ -30,7 +30,7 @@ int main(int argc, const char *argv[])
     printf("width %d, height %d\n", g->width, g->height);
     ret = pic_draw(g->pixels, g->width, g->height, g->depth, g->pitch, g->rmask, g->gmask, g->bmask, g->amask);
     if (ret) {
-        printf("fail to draw");
+        printf("fail to draw\n");
     }
     scrn.uninit();
     ops->free(g);

@@ -31,28 +31,23 @@ list(APPEND FFPIC_DIRS
 list(APPEND FFPIC_SOURCES
             "${FFPIC_ROOT}/display/screen.c")
 
+list(APPEND FFPIC_CODING
+            "${FFPIC_ROOT}/coding/lzw.c")
+
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/gif.c"
             "${FFPIC_ROOT}/format/bmp.c"
             "${FFPIC_ROOT}/format/file.c")
 
-list(APPEND FFPIC_HEADERS
-            "${FFPIC_ROOT}/coding/lzw.h"
-            "${FFPIC_ROOT}/coding/coding.h"
-            "${FFPIC_ROOT}/display/screen.h"
-            "${FFPIC_ROOT}/format/gif.h"
-            "${FFPIC_ROOT}/format/bmp.h"
-            "${FFPIC_ROOT}/format/file.h")
-
 find_package(SDL2)
 find_package(SDL2_IMAGE)
 
-add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_FORMART})
-target_include_directories(ffpic PRIVATE ${FFPIC_HEADERS})
+add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_CODING} ${FFPIC_FORMART})
+target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 
 
 add_executable(picshow "${FFPIC_ROOT}/app/picshow.c" $<TARGET_OBJECTS:ffpic>)
-add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART})
+add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
 
 target_link_libraries(picshow ffpic)
 target_include_directories(picshow PRIVATE ${FFPIC_DIRS})

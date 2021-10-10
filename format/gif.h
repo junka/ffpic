@@ -9,42 +9,54 @@
 #define DISPOSE_CLEAR     2
 #define DISPOSE_RESTORE   3
 
-#define GRAPHIC_IMAGE         0x2C
-#define GRAPHIC_PLAINTEXT     0x01
-#define EXTENSION_COMMENT     0xFE
-#define EXTENSION_APPLICATION 0xFF
+#define _LITTLE_ENDIAN_
+
+#pragma pack(push, 1)
 
 typedef struct {
 	uint8_t r, g, b;
 } Color;
 
-typedef struct {
-	uint8_t disposal_method;
-	bool requires_user_input;
-	bool uses_transparency;
-	uint16_t delay; // in hundreths of a second (0.01)
+struct graphic_control_extension {
+	uint8_t block_size;
+#ifdef _LITTLE_ENDIAN_
+	uint8_t transparent_color_flag : 1;
+	uint8_t user_input_flag : 1;
+	uint8_t disposal_method : 3;
+	uint8_t reserved : 3;
+#endif
+	uint16_t delay_time;         // in hundreths of a second (0.01)
 	uint8_t transparent_color_index;
-} GraphicControl;
+	uint8_t block_terminator;
+};
 
-typedef struct {
+struct image_descriptor {
+	// uint8_t seprator; //0x2C
 	uint16_t left;
 	uint16_t top;
 	uint16_t width;
 	uint16_t height;
-	bool interlaced;
+#ifdef _LITTLE_ENDIAN_
+	uint8_t local_color_table_size : 3;
+	uint8_t reserved : 2;
+	uint8_t sort_flag : 1;
+	uint8_t interlace_flag :1;
+	uint8_t local_color_table_flag :1;
+#endif
+};
 
-	bool uses_local_ct;
-	int local_ct_size;
-	bool local_ct_sorted;
+typedef struct {
+	struct image_descriptor image_dsc;
 	Color* local_ct;
 
 	bool has_graphic_control;
-	GraphicControl* control;
+	struct graphic_control_extension* control;
 
 	uint8_t* data;
 } Image;
 
-typedef struct {
+struct plaintext_extension {
+	uint8_t block_size;
 	uint16_t text_left;
 	uint16_t text_top;
 	uint16_t text_width;
@@ -53,22 +65,30 @@ typedef struct {
 	uint8_t char_height;
 	uint8_t foreground_color_index;
 	uint8_t background_color_index;
+};
+
+typedef struct {
+	struct plaintext_extension text_ext;
 	char* text;
 	int text_length;
 } PlainText;
 
 typedef struct {
 	bool has_control;
-	GraphicControl* control;
+	struct graphic_control_extension* control;
 
 	uint8_t type;
 	Image* image;
 	PlainText* plaintext;	
 } Graphic;
 
-typedef struct {
+struct application_extension {
+	uint8_t block_size;
 	uint8_t identifier[8];
 	uint8_t auth_code[3];
+};
+typedef struct {
+	struct application_extension app_ext;
 	uint8_t* data;
 	int data_length;
 } Application;
@@ -86,25 +106,31 @@ typedef struct {
 
 #define GIF_FILE_HEADER_LEN (6)
 
-#pragma pack(push, 1)
 struct gif_file_header
 {
 	uint8_t signature[3];
 	uint8_t version[3];
 };
 
+struct logical_screen_descriptor {
+	uint16_t screen_witdh;    // unit in pixel
+	uint16_t screen_height;
+#ifdef _LITTLE_ENDIAN_
+	uint8_t global_color_table_size : 3;
+	uint8_t global_color_sort_flag : 1;
+	uint8_t global_color_resolution : 3;
+	uint8_t global_color_table_flag : 1;
+#endif
+	uint8_t background_color_index;
+	uint8_t pixel_aspect_ratio; // width:height ratio
+};
+
 #pragma pack(pop)
+
 typedef struct {
 	struct gif_file_header file_h;
-	uint16_t width;
-	uint16_t height;
-	uint8_t background_color_index;
-	uint8_t aspect_ratio;
+	struct logical_screen_descriptor ls_dsc;
 
-	bool uses_global_ct;
-	uint8_t global_ct_resolution;
-	int global_ct_size;
-	bool global_ct_sorted;
 	Color* global_ct;
 
 	int graphic_count;

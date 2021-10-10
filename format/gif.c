@@ -5,51 +5,20 @@
 
 #include "gif.h"
 #include "file.h"
+#include "lzw.h"
+
+#define GRAPHIC_IMAGE          0x2C
+#define GRAPHIC_PLAINTEXT      0x01
+#define EXTENSION_COMMENT      0xFE
+#define EXTENSION_APPLICATION  0xFF
 
 #define EXTENSION_INTRODUCER   0x21
 #define TRAILER                0x3B
 #define GRAPHIC_CONTROL        0xF9
 
-typedef struct {
-	int length;
-	int prev;
-	uint8_t data;
-} Entry;
-
-uint16_t fget_uint16_t(FILE* file) {
-	uint16_t value;
-	fread(&value, 2, 1, file);
-	return value;
-}
-
-uint8_t fget_byte(FILE* file) {
-	return (uint8_t)fgetc(file);
-}
-
-void read_logical_screen_descriptor(GIF* gif, FILE* file) {
-	gif->width = fget_uint16_t(file);
-	gif->height = fget_uint16_t(file);
-
-	uint8_t packet = fget_byte(file);
-	gif->uses_global_ct = (packet & 0x80) != 0;
-	gif->global_ct_resolution = ((packet & 0x70) >> 4) + 1;
-	gif->global_ct_sorted = (packet & 0x08) != 0;
-	gif->global_ct_size = 2 << (packet & 0x07);
-
-	gif->background_color_index = fget_byte(file);
-	gif->aspect_ratio = fget_byte(file);
-
-	if (gif->uses_global_ct) {
-		gif->global_ct = (Color*)malloc(3 * gif->global_ct_size);
-		fread(gif->global_ct, 3, gif->global_ct_size, file);
-	} else {
-		gif->global_ct = NULL;
-	}
-}
-
 int read_blocks(uint8_t** data, FILE* file) 
 {
-	uint8_t block_length = fget_byte(file);
+	uint8_t block_length = (uint8_t)fgetc(file);
 	int total_length = 0;
 	while (block_length) {
 		if (total_length == 0) {
@@ -59,99 +28,11 @@ int read_blocks(uint8_t** data, FILE* file)
 		}
 		fread(*data + total_length, 1, block_length, file);
 		total_length += block_length;
-		block_length = fget_byte(file);
+		block_length = (uint8_t)fgetc(file);
 	}
 	return total_length;
 }
 
-void read_image_data(int lzw_code_size, const uint8_t* compressed, int compressed_length, uint8_t* decompressed) {
-	int code_length = lzw_code_size + 1;
-	int clear_code = 1 << lzw_code_size;
-	int end_of_information = clear_code + 1;
-	int reset_code_length = code_length;
-	int prev = -1;
-
-	int buffer = 0;
-	int buffer_size = 0;
-
-	int dictionary_index;
-	int dictionary_capacity = 1 << code_length;
-	Entry* dictionary = (Entry*)malloc(dictionary_capacity * sizeof(Entry));
-	for (dictionary_index = 0; dictionary_index < clear_code; dictionary_index++) {
-		dictionary[dictionary_index].data = dictionary_index;
-		dictionary[dictionary_index].prev = -1;
-		dictionary[dictionary_index].length = 1;
-	}
-	dictionary_index += 2;
-
-	for (int i = 0; i<compressed_length; i++) {
-		buffer |= compressed[i] << buffer_size;
-		buffer_size += 8;
-
-		while (buffer_size >= code_length) {
-			buffer_size -= code_length;
-			int code = buffer & ((1 << code_length) - 1);
-			buffer >>= code_length;
-
-			if (code == clear_code) {
-				code_length = reset_code_length;
-				dictionary_capacity = 1 << code_length;
-
-				for (dictionary_index = 0; dictionary_index < clear_code; dictionary_index++) {
-					dictionary[dictionary_index].data = dictionary_index;
-					dictionary[dictionary_index].prev = -1;
-					dictionary[dictionary_index].length = 1;
-				}
-				dictionary_index += 2;
-				prev = -1;
-				continue;
-			}
-
-			if (code == end_of_information) {
-				free(dictionary);
-				return;
-			}
-
-			if ((prev > -1) && (dictionary_index != dictionary_capacity)) {
-				if (code > dictionary_index) {
-					printf("lzw code error, got %d, but dict %d\n", code, dictionary_index);
-					free(dictionary);
-					return;
-				}
-
-				int ptr = code == dictionary_index ? prev : code;
-				while (dictionary[ptr].prev != -1) {
-					ptr = dictionary[ptr].prev;
-				}
-				dictionary[dictionary_index].data = dictionary[ptr].data;
-				dictionary[dictionary_index].prev = prev;
-				dictionary[dictionary_index].length 	= dictionary[prev].length + 1;
-				dictionary_index++;
-
-				if ((dictionary_index == dictionary_capacity) && (code_length < 12)) {
-					code_length++;
-					dictionary_capacity <<= 1;
-					dictionary = (Entry*)realloc(dictionary, dictionary_capacity * sizeof(Entry));
-				}
-			}
-
-			prev = code;
-			int match_length = dictionary[code].length;
-			while (code != -1) {
-				decompressed[dictionary[code].length - 1] = dictionary[code].data;
-				if (dictionary[code].prev == code) {
-					printf("self reference error\n");
-					free(dictionary);
-					return;
-				}
-				code = dictionary[code].prev;
-			}
-			decompressed += match_length;
-		}
-	}
-
-	free(dictionary);
-}
 
 Graphic* gif_increment_graphics(GIF* gif) {
 	if (gif->graphic_count++ == 0) {
@@ -176,31 +57,24 @@ Graphic* gif_next_dataless_graphic(GIF* gif) {
 
 void read_image(GIF* gif, FILE* file) {
 	Image* image = (Image*)malloc(sizeof(Image));
-	image->left = fget_uint16_t(file);
-	image->top = fget_uint16_t(file);
-	image->width = fget_uint16_t(file);
-	image->height = fget_uint16_t(file);
+	fread(&image->image_dsc, sizeof(struct image_descriptor), 1, file);
 
-	uint8_t packet = fget_byte(file);
-	image->interlaced = (packet & 0x40) != 0;
-	image->uses_local_ct = (packet & 0x80) != 0;
-	image->local_ct_sorted = (packet & 0x20) != 0;
-	image->local_ct_size = 2 << (packet & 0x07);
-
-	if (image->uses_local_ct) {
-		image->local_ct = (Color*)malloc(3 * image->local_ct_size);
-		fread(image->local_ct, 3, image->local_ct_size, file);
+	if (image->image_dsc.local_color_table_flag) {
+		image->local_ct = (Color*)malloc(3 * (2 << image->image_dsc.local_color_table_size));
+		fread(image->local_ct, 3, 2 << image->image_dsc.local_color_table_size, file);
 	} else {
 		image->local_ct = NULL;
 	}
 
-	int image_data_length = image->width * image->height;
+	int image_data_length = image->image_dsc.width * image->image_dsc.height;
 	image->data = (uint8_t*)malloc(image_data_length);
 	
 	uint8_t* compressed = NULL;;
-	uint8_t lzw_code_size = fget_byte(file);
+	uint8_t lzw_code_size = (uint8_t)fgetc(file);
 	int compressed_length = read_blocks(&compressed, file);
-	read_image_data(lzw_code_size, compressed, compressed_length, image->data);
+
+	lzw_decode(lzw_code_size, compressed, compressed_length, image->data);
+	
 	free(compressed);
 
 	Graphic* graphic = gif_next_dataless_graphic(gif);
@@ -208,41 +82,29 @@ void read_image(GIF* gif, FILE* file) {
 	graphic->image = image;
 }
 
-void read_plaintext_ext(GIF* gif, FILE* file) {
+void 
+read_plaintext_ext(GIF* gif, FILE* f) 
+{
 	// no one ever uses this, but hey. if you want it, it's here.
 	PlainText* plaintext = (PlainText*)malloc(sizeof(PlainText));
-	fget_byte(file);
-	plaintext->text_left = fget_uint16_t(file);
-	plaintext->text_top = fget_uint16_t(file);
-	plaintext->text_width = fget_uint16_t(file);
-	plaintext->text_height = fget_uint16_t(file);
-	plaintext->char_width = fget_byte(file);
-	plaintext->char_height = fget_byte(file);
-	plaintext->foreground_color_index = fget_byte(file);
-	plaintext->background_color_index = fget_byte(file);
-	plaintext->text_length = read_blocks((uint8_t**)(&plaintext->text), file);
-	fget_byte(file);
+	fread(&plaintext->text_ext, sizeof(struct plaintext_extension), 1, f);
+	plaintext->text_length = read_blocks((uint8_t**)(&plaintext->text), f);
+	fgetc(f);
 
 	Graphic* graphic = gif_next_dataless_graphic(gif);
 	graphic->type = GRAPHIC_PLAINTEXT;
 	graphic->plaintext = plaintext;
 }
 
-void read_graphic_control_ext(GIF* gif, FILE* file) {
-	GraphicControl* control = (GraphicControl*)malloc(sizeof(GraphicControl));
-
-	fget_byte(file);
-	uint8_t packet = fget_byte(file);
-	control->disposal_method = (packet >> 2) & 7;
-	control->requires_user_input = (packet & 2) != 0;
-	control->uses_transparency = (packet & 1) != 0;
-	control->delay = fget_uint16_t(file);
-	control->transparent_color_index = fget_byte(file);
-	fget_byte(file);
+void 
+read_graphic_control_ext(GIF* gif, FILE* file) 
+{
+	struct graphic_control_extension *ctrl = malloc(sizeof(struct graphic_control_extension));
+	fread(ctrl, sizeof(struct graphic_control_extension), 1, file);
 
 	Graphic* graphic = gif_increment_graphics(gif);
 	graphic->has_control = true;
-	graphic->control = control;
+	graphic->control = ctrl;
 	graphic->type = 0;
 }
 
@@ -264,12 +126,11 @@ void read_comment_ext(GIF* gif, FILE* file) {
 	extension->comment = comment;
 }
 
-void read_application_ext(GIF* gif, FILE* file) {
+void read_application_ext(GIF* gif, FILE* f) {
 	Application* application = (Application*)malloc(sizeof(Application));
-	fget_byte(file);
-	fread(application->identifier, 1, 8, file);
-	fread(application->auth_code, 1, 3, file);
-	application->data_length = read_blocks(&application->data, file);
+	
+	fread(&application->app_ext, sizeof(struct application_extension), 1, f);
+	application->data_length = read_blocks(&application->data, f);
 
 	Extension* extension = gif_increment_extensions(gif);
 	extension->type = EXTENSION_APPLICATION;
@@ -277,7 +138,7 @@ void read_application_ext(GIF* gif, FILE* file) {
 }
 
 void read_extension(GIF* gif, FILE* file) {
-	uint8_t extension_code = fget_byte(file);
+	uint8_t extension_code = (uint8_t)fgetc(file);
 	switch (extension_code) {
 	case GRAPHIC_PLAINTEXT:
 		read_plaintext_ext(gif, file);
@@ -299,7 +160,7 @@ void read_extension(GIF* gif, FILE* file) {
 
 void read_contents(GIF* gif, FILE* file) {
 	while (!feof(file)) {
-		uint8_t block_code = fget_byte(file);
+		uint8_t block_code = (uint8_t)fgetc(file);
 		switch (block_code) {
 		case GRAPHIC_IMAGE:
 			read_image(gif, file);
@@ -322,16 +183,23 @@ void read_contents(GIF* gif, FILE* file) {
 	}
 }
 
-GIF* read_gif(FILE* file) {
+GIF* read_gif(FILE* f) {
 
 	GIF* gif = (GIF*)malloc(sizeof(GIF));
 	gif->graphic_count = 0;
 	gif->extension_count = 0;
 	gif->graphics = NULL;
 	gif->extensions = NULL;
-	int len = fread(&gif->file_h, 1, GIF_FILE_HEADER_LEN, file);
-	read_logical_screen_descriptor(gif, file);
-	read_contents(gif, file);
+	fread(&gif->file_h, 1, GIF_FILE_HEADER_LEN, f);
+	fread(&gif->ls_dsc, 1, sizeof(struct logical_screen_descriptor), f);
+
+	if (gif->ls_dsc.global_color_table_flag) {
+		gif->global_ct = (Color*)malloc(3 * (2<< gif->ls_dsc.global_color_table_size));
+		fread(gif->global_ct, 3, 2 << gif->ls_dsc.global_color_table_size, f);
+	} else {
+		gif->global_ct = NULL;
+	}
+	read_contents(gif, f);
 
 	return gif;
 }
@@ -342,11 +210,15 @@ struct pic* GIF_load(const char* filename) {
     GIF* gif = read_gif(file);
     fclose(file);
     p->pic = gif;
-    p->width = gif->width;
-    p->height = gif->height;
+    p->width = gif->ls_dsc.screen_witdh;
+    p->height = gif->ls_dsc.screen_height;
     p->depth = 24;
     p->pitch = ((p->width * p->height + 31) >> 5) << 2;
     p->pixels = gif->graphics->image->data;
+	p->amask = 0;
+	p->rmask = 0;
+	p->gmask = 0;
+	p->bmask = 0;
     return p;
 }
 
@@ -378,21 +250,23 @@ GIF_info(FILE* f, struct pic* p)
     GIF *g = (GIF*)(p->pic);
     fprintf(f, "GIF file format:\n");
     fprintf(f, "version %c%c%c\n", g->file_h.version[0], g->file_h.version[1], g->file_h.version[2]);
-    fprintf(f, "\timage width %d height %d:\n", g->width, g->height);
-    fprintf(f, "\tbackground_color_index: %d\n", g->background_color_index);
-    fprintf(f, "\taspect_ratio: %d\n", g->aspect_ratio);
-    if (g->uses_global_ct) {
-        fprintf(f, "\tglobal_ct_resolution: %d\n", g->global_ct_resolution);
-        fprintf(f, "\tglobal_ct_size: %d\n", g->global_ct_size);
-        fprintf(f, "\tglobal_ct_sorted: %d\n", g->global_ct_sorted);
+    fprintf(f, "\timage width %d height %d:\n", g->ls_dsc.screen_witdh, g->ls_dsc.screen_height);
+    fprintf(f, "\tbackground_color_index: %d\n", g->ls_dsc.background_color_index);
+    fprintf(f, "\taspect_ratio: %f\n", g->ls_dsc.pixel_aspect_ratio?((g->ls_dsc.pixel_aspect_ratio + 15)/64.0) : 0);
+    if (g->ls_dsc.global_color_table_flag) {
+        fprintf(f, "\tglobal_ct_resolution: %d\n", g->ls_dsc.global_color_resolution+1);
+        fprintf(f, "\tglobal_ct_size: %d\n", 2 << g->ls_dsc.global_color_table_size);
+        fprintf(f, "\tglobal_ct_sorted: %d\n", g->ls_dsc.global_color_sort_flag);
 	}
 	fprintf(f, "------------------------------\n");
 	fprintf(f, "\tgraphic_count: %d\n", g->graphic_count);
 	fprintf(f, "\textension_count: %d\n", g->extension_count);
+	fprintf(f, "\tfirst image: width %d height %d\n", g->graphics->image->image_dsc.width,
+				g->graphics->image->image_dsc.height);
 }
 
 void image_free(Image* image) {
-	if (image->uses_local_ct)
+	if (image->image_dsc.local_color_table_flag)
 		free(image->local_ct);
 
 	free(image->data);
@@ -453,7 +327,7 @@ void GIF_free(struct pic *p) {
 		free(gif->extensions);
 	}
 
-	if (gif->uses_global_ct)
+	if (gif->ls_dsc.global_color_table_flag)
 		free(gif->global_ct);
 
 	free(gif);

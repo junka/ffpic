@@ -32,9 +32,13 @@ list(APPEND FFPIC_SOURCES
             "${FFPIC_ROOT}/display/screen.c")
 
 list(APPEND FFPIC_CODING
-            "${FFPIC_ROOT}/coding/lzw.c")
+            "${FFPIC_ROOT}/coding/lzw.c"
+            "${FFPIC_ROOT}/coding/lz77.c"
+            "${FFPIC_ROOT}/coding/huffman.c"
+            "${FFPIC_ROOT}/coding/deflate.c")
 
 list(APPEND FFPIC_FORMART
+            "${FFPIC_ROOT}/format/png.c"
             "${FFPIC_ROOT}/format/gif.c"
             "${FFPIC_ROOT}/format/bmp.c"
             "${FFPIC_ROOT}/format/file.c")

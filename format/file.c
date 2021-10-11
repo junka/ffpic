@@ -3,6 +3,7 @@
 #include "file.h"
 #include "bmp.h"
 #include "gif.h"
+#include "png.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -47,4 +48,5 @@ file_ops_init(void)
 {
     BMP_init();
     GIF_init();
+    PNG_init();
 }

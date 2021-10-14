@@ -11,6 +11,7 @@ void
 huffman_tree_init(huffman_tree* tree, unsigned* buffer, unsigned numcodes, unsigned maxbitlen)
 {
 	tree->tree2d = buffer;
+	tree->tree1d = 0;
 
 	tree->numcodes = numcodes;
 	tree->maxbitlen = maxbitlen;
@@ -88,7 +89,7 @@ huffman_decode_symbol(const unsigned char *in, unsigned long *bp,
                     const huffman_tree* codetree, unsigned long inlength)
 {
 	unsigned treepos = 0, ct;
-	unsigned char bit;
+	uint8_t bit;
 	for (;;) {
 		/* error: end of input memory reached without endcode */
 		if (((*bp) & 0x07) == 0 && ((*bp) >> 3) > inlength) {

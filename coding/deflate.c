@@ -1,4 +1,7 @@
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 
 #include "deflate.h"
@@ -10,26 +13,32 @@ struct tinf_tree {
 };
 
 struct tinf_data {
-	const unsigned char *source;
-	const unsigned char *source_end;
+	const uint8_t *source;
+	const uint8_t *source_end;
 	unsigned int tag;
 	int bitcount;
-	// int overflow;
 
-	unsigned char *dest_start;
-	unsigned char *dest;
-	unsigned char *dest_end;
+	uint8_t *dest_start;
+	uint8_t *dest;
+	uint8_t *dest_end;
 
 	struct tinf_tree ltree; /* Literal/length tree */
 	struct tinf_tree dtree; /* Distance tree */
 };
+
+
+enum {
+    BTYPE_NOCOMPRESSION = 0,
+    BTYPE_COMPRESSED_WITH_FIXED_HUFFMAN = 1,
+    BTYPE_COMPRESSED_WITH_DYNAMIC_HUFFMAN = 2,
+};
+
 
 static unsigned int read_le16(const unsigned char *p)
 {
 	return ((unsigned int) p[0])
 	     | ((unsigned int) p[1] << 8);
 }
-
 
 
 static void tinf_refill(struct tinf_data *d, int num)
@@ -40,9 +49,6 @@ static void tinf_refill(struct tinf_data *d, int num)
 	while (d->bitcount < num) {
 		if (d->source != d->source_end) {
 			d->tag |= (unsigned int) *d->source++ << d->bitcount;
-		}
-		else {
-			// d->overflow = 1;
 		}
 		d->bitcount += 8;
 	}
@@ -191,7 +197,8 @@ static int tinf_build_tree(struct tinf_tree *t, const unsigned char *lengths,
 }
 
 /* Inflate an uncompressed block of data */
-static int tinf_inflate_uncompressed_block(struct tinf_data *d)
+static int 
+tinf_inflate_nocompression_block(struct tinf_data *d)
 {
 	unsigned int length, invlength;
 
@@ -205,19 +212,21 @@ static int tinf_inflate_uncompressed_block(struct tinf_data *d)
 	/* Get one's complement of length */
 	invlength = read_le16(d->source + 2);
 
+    printf("no compression %d, %d\n", length, invlength);
 	/* Check length */
 	if (length != (~invlength & 0x0000FFFF)) {
-		return -1;
+		return -2;
 	}
+
 
 	d->source += 4;
 
 	if (d->source_end - d->source < length) {
-		return -2;
+		return -3;
 	}
 
 	if (d->dest_end - d->dest < length) {
-		return -1;
+		return -4;
 	}
 
 	/* Copy block */
@@ -389,6 +398,8 @@ static int tinf_decode_trees(struct tinf_data *d, struct tinf_tree *lt,
 	/* Get 4 bits HCLEN (4-19) */
 	hclen = tinf_getbits_base(d, 4, 4);
 
+    printf("hlit %d, hdist %d, hclen %d\n", hlit, hdist, hclen);
+
 	/*
 	 * The RFC limits the range of HLIT to 286, but lists HDIST as range
 	 * 1-32, even though distance codes 30 and 31 have no meaning. While
@@ -499,13 +510,11 @@ static int tinf_inflate_fixed_block(struct tinf_data *d)
 	return tinf_inflate_block_data(d, &d->ltree, &d->dtree);
 }
 
-
 /* Inflate a block of data compressed with dynamic Huffman trees */
 static int tinf_inflate_dynamic_block(struct tinf_data *d)
 {
 	/* Decode trees from stream */
 	int res = tinf_decode_trees(d, &d->ltree, &d->dtree);
-
 	if (res != 0) {
 		return res;
 	}
@@ -519,39 +528,61 @@ void
 deflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decompressed, int* descompressed_len)
 {
 	struct tinf_data d;
-	int bfinal;
+	unsigned bfinal = 0;
+
+    struct zlib_header h;
+    uint16_t check;
+    memcpy(&h, compressed, 2);
+    if (h.compress_method != 8) {
+        printf("not deflate, cm %d\n", h.compress_method);
+    }
+    memcpy(&check, &h, 2);
+    if( ntohl(check) % 31) {
+        printf("fcheck zlib error, fcheck %x\n", h.FCHECK);
+    }
+    if (h.compression_info > 7) {
+        printf("too big window for lz77 not allowed %d\n", h.compression_info);
+    }
+    //PNG does not have a preset dict, so 
+    if (h.preset_dict) {
+        printf("for png preset dict should not be set\n");
+    }
+    // printf("conpression level %d\n", h.compression_level);
+
+    uint32_t alder32 = *(uint32_t *)(compressed + compressed_length - 4);
+    // printf("alder32 is %x\n", alder32);
 
 	/* Initialise data */
-	d.source = (const unsigned char *) compressed;
-	d.source_end = d.source + compressed_length;
+	d.source = compressed + 2;
+	d.source_end = d.source + compressed_length - 6;
 	d.tag = 0;
 	d.bitcount = 0;
 
-	d.dest = (unsigned char *) decompressed;
+	d.dest = decompressed;
 	d.dest_start = d.dest;
 	d.dest_end = d.dest + *descompressed_len;
 
-	do {
+	 while (!bfinal) 
+     {
 		unsigned int btype;
 		int res;
 
 		/* Read final block flag */
 		bfinal = tinf_getbits(&d, 1);
-
 		/* Read block type (2 bits) */
 		btype = tinf_getbits(&d, 2);
 
+        printf("btype %d\n", btype);
 		/* Decompress block */
 		switch (btype) {
-		case 0:
-			/* Decompress uncompressed block */
-			res = tinf_inflate_uncompressed_block(&d);
+		case BTYPE_NOCOMPRESSION:
+            /* skip any remaining bits in byte */
+			res = tinf_inflate_nocompression_block(&d);
 			break;
-		case 1:
-			/* Decompress block with fixed Huffman trees */
+		case BTYPE_COMPRESSED_WITH_FIXED_HUFFMAN:
 			res = tinf_inflate_fixed_block(&d);
 			break;
-		case 2:
+		case BTYPE_COMPRESSED_WITH_DYNAMIC_HUFFMAN:
 			/* Decompress block with dynamic Huffman trees */
 			res = tinf_inflate_dynamic_block(&d);
 			break;
@@ -560,10 +591,10 @@ deflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decomp
 			break;
 		}
 
-		if (res != 0) {
-			return;
-		}
-	} while (!bfinal);
+        if (res != 0) {
+            printf("deflate error %d\n", res);
+        }
+	}
 
 	*descompressed_len = d.dest - d.dest_start;
 

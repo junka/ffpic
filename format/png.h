@@ -43,10 +43,6 @@ struct color{
     uint8_t blue;
 };
 
-struct png_palette {
-    struct color * palette;
-};
-
 struct png_image_trailer {
     uint32_t length; // 00 00 00 00
     uint32_t end;    // 49 45 4E 44
@@ -87,12 +83,49 @@ struct international_textual_data {
 //     uint32_t crc;
 // };
 
+struct icc_profile {
+    char *name;
+    uint8_t compression_method;
+    uint8_t* compression_profile;
+};
+
+struct chromaticities_white_point {
+    uint32_t white_x;
+    uint32_t white_y;
+    uint32_t red_x;
+    uint32_t red_y;
+    uint32_t green_x;
+    uint32_t green_y;
+    uint32_t blue_x;
+    uint32_t blue_y;
+};
+
+struct suggested_palette {
+    char * name;
+    uint8_t sample_depth;
+};
+
+struct last_modification {
+    uint16_t year;
+    uint8_t mon;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t min;
+    uint8_t sec;
+};
+
 typedef struct {
     struct png_file_header sig;
     struct png_ihdr ihdr;
-
+    
+    struct color * palette;
+    
     int size;
     uint8_t *data;
+
+    struct chromaticities_white_point cwp;
+    uint32_t gamma;
+    struct icc_profile icc;
 
     uint32_t n_text;
     struct textual_data *textual;
@@ -101,6 +134,8 @@ typedef struct {
     uint32_t n_itext;
     struct international_textual_data *itextual;
 
+    uint16_t* freqs;
+    struct last_modification last_mod;
 } PNG;
 
 #pragma pack(pop)

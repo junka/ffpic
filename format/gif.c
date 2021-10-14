@@ -67,14 +67,28 @@ void read_image(GIF* gif, FILE* file) {
 	}
 
 	int image_data_length = image->image_dsc.width * image->image_dsc.height;
-	image->data = (uint8_t*)malloc(image_data_length);
+	image->data = (uint8_t*)malloc(image_data_length * 3);
 	
 	uint8_t* compressed = NULL;;
 	uint8_t lzw_code_size = (uint8_t)fgetc(file);
 	int compressed_length = read_blocks(&compressed, file);
 
 	lzw_decode(lzw_code_size, compressed, compressed_length, image->data);
-	
+	uint8_t *p = image->data;
+	Color *ct = NULL;
+	if (image->local_ct == NULL) {
+		ct = gif->global_ct;
+	} else {
+		ct = image->local_ct;
+	}
+	for (int j = image->image_dsc.height- 1; j >= 0; j --) {
+		for(int i = image->image_dsc.width- 1; i >=0; i -- ) {
+			*(p +  (j * 3 *image->image_dsc.width)+ i) = ct[ *(p+i+j*image->image_dsc.width)].b;
+			*(p +  (j * 3 *image->image_dsc.width)+ i + 1) = ct[ *(p+i+j*image->image_dsc.width)].g;
+			*(p +  (j * 3 *image->image_dsc.width)+ i + 2 ) = ct[ *(p+i+j*image->image_dsc.width)].r; 
+		}
+	}
+
 	free(compressed);
 
 	Graphic* graphic = gif_next_dataless_graphic(gif);
@@ -263,6 +277,9 @@ GIF_info(FILE* f, struct pic* p)
 	fprintf(f, "\textension_count: %d\n", g->extension_count);
 	fprintf(f, "\tfirst image: width %d height %d\n", g->graphics->image->image_dsc.width,
 				g->graphics->image->image_dsc.height);
+	fprintf(f, "\tfirst image: left %d top %d\n", g->graphics->image->image_dsc.left,
+				g->graphics->image->image_dsc.top);
+	fprintf(f, "\tfirst image: interlace %d\n", g->graphics->image->image_dsc.interlace_flag);
 }
 
 void image_free(Image* image) {

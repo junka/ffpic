@@ -4,6 +4,7 @@
 #include "bmp.h"
 #include "gif.h"
 #include "png.h"
+#include "tiff.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -20,21 +21,24 @@ file_probe(const char *filename)
     return NULL;
 }
 
-struct pic *file_load(struct file_ops* ops, const char *filename)
+struct pic *
+file_load(struct file_ops* ops, const char *filename)
 {
     return ops->load(filename);
 }
 
-void file_free(struct file_ops* ops, struct pic *f)
+void 
+file_free(struct file_ops* ops, struct pic *f)
 {
     if(ops->free)
         ops->free(f);
 }
 
-void file_info(struct file_ops* ops, struct pic *p)
+void 
+file_info(struct file_ops* ops, struct pic *p)
 {
     if (ops->info)
-        ops->info(stdout, p);
+        ops->info(stderr, p);
 }
 
 void 
@@ -49,4 +53,5 @@ file_ops_init(void)
     BMP_init();
     GIF_init();
     PNG_init();
+    TIFF_init();
 }

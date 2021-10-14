@@ -24,7 +24,7 @@ struct pic {
     int width;
     int height;
     int depth;
-    int pitch;
+    int pitch;  //bytes per line
     uint32_t rmask;
     uint32_t gmask;
     uint32_t bmask;

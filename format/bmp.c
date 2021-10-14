@@ -41,7 +41,7 @@ BMP_probe(const char* filename)
 static struct pic* 
 BMP_load(const char* filename)
 {
-    BMP * b = malloc(sizeof(BMP));
+    BMP * b = calloc(sizeof(BMP), 1);
     FILE *f = fopen(filename, "rb");
     struct pic *p = malloc(sizeof(struct pic));
     fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);

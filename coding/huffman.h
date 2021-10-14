@@ -7,6 +7,8 @@ extern "C"{
 
 typedef struct huffman_tree {
 	unsigned* tree2d;
+	unsigned* tree1d;
+	unsigned* lengths; /*the lengths of the codes of the 1d-tree*/
 	unsigned maxbitlen;	/*maximum number of bits a single code can get */
 	unsigned numcodes;	/*number of symbols in the alphabet = number of codes */
 } huffman_tree;

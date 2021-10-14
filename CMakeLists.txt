@@ -26,7 +26,8 @@ list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2)
 list(APPEND FFPIC_DIRS
             "${FFPIC_ROOT}/display"
             "${FFPIC_ROOT}/format"
-            "${FFPIC_ROOT}/coding")
+            "${FFPIC_ROOT}/coding"
+            "${FFPIC_ROOT}/utils")
 
 list(APPEND FFPIC_SOURCES
             "${FFPIC_ROOT}/display/screen.c")
@@ -35,12 +36,15 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lzw.c"
             "${FFPIC_ROOT}/coding/lz77.c"
             "${FFPIC_ROOT}/coding/huffman.c"
-            "${FFPIC_ROOT}/coding/deflate.c")
+            "${FFPIC_ROOT}/coding/deflate.c"
+            "${FFPIC_ROOT}/utils/crc.c"
+            "${FFPIC_ROOT}/utils/alder.c")
 
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/png.c"
             "${FFPIC_ROOT}/format/gif.c"
             "${FFPIC_ROOT}/format/bmp.c"
+            "${FFPIC_ROOT}/format/tiff.c"
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)

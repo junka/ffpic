@@ -12,6 +12,8 @@ static int pic_screen_uninit();
 
 Screen scrn = {
     .name = "SDL2",
+    .width = 0,
+    .height = 0,
     .w = NULL,
     .r = NULL,
     .t = NULL,
@@ -20,7 +22,7 @@ Screen scrn = {
 };
 
 static int 
-pic_screen_init(int w, int h)
+pic_screen_init(const char* title, int w, int h)
 {
     int ret;
 
@@ -29,8 +31,8 @@ pic_screen_init(int w, int h)
         return -1;
     }
 
-    scrn.w = SDL_CreateWindow("Pic", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    scrn.w = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                w, h, SDL_WINDOW_SHOWN);
     if (scrn.w == NULL) {
         return -1;
     }
@@ -75,7 +77,7 @@ pic_screen_uninit()
 int pic_draw(void *pixels, int width, int height, int depth, int pitch,
             uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
 {
-    SDL_Rect r;
+    SDL_Rect rect;
 
     SDL_Surface *s = SDL_CreateRGBSurfaceFrom(pixels, width, height, depth, pitch,
          rmask, gmask, bmask, amask);
@@ -87,10 +89,15 @@ int pic_draw(void *pixels, int width, int height, int depth, int pitch,
 
     SDL_Event e;
 
+    rect.w = width;
+    rect.h = height;
+    rect.x = scrn.width/2 - width/2;
+    rect.y = scrn.height/2 - height/2;
+
     bool quit = false;
     while (!quit) {
         SDL_RenderClear(scrn.r);
-        SDL_RenderCopy(scrn.r, texture, NULL, NULL);
+        SDL_RenderCopy(scrn.r, texture, NULL, &rect);
         SDL_RenderPresent(scrn.r);
         if (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT){

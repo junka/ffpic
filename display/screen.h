@@ -15,7 +15,7 @@ typedef struct {
     SDL_Renderer *r;
     SDL_Texture *t;
 
-    int (*init)(int w, int h);
+    int (*init)(const char* title, int w, int h);
     int (*uninit)(void);
 } Screen;
 

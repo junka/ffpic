@@ -46,6 +46,20 @@ struct bmp_info_header {
     uint32_t colors_important;
 };
 
+/* BITMAPV4HEADER */
+struct bmp_color_header {
+    uint32_t red_mask;         // Bit mask for the red channel
+    uint32_t green_mask;       // Bit mask for the green channel
+    uint32_t blue_mask;        // Bit mask for the blue channel
+    uint32_t alpha_mask;       // Bit mask for the alpha channel
+    uint32_t color_space_type; // Default "sRGB" (0x73524742)
+    uint32_t unused[16];       // Unused data for sRGB color space
+};
+
+struct bmp_v5_header {
+
+};
+
 enum halftoning_algrithm {
    NONE = 0,
    ERROR_DIFFUSION = 1,
@@ -64,13 +78,12 @@ struct bmp_info_header2 {
     uint32_t app_identifier;
 };
 
-struct bmp_color_header {
-    uint32_t red_mask;         // Bit mask for the red channel
-    uint32_t green_mask;       // Bit mask for the green channel
-    uint32_t blue_mask;        // Bit mask for the blue channel
-    uint32_t alpha_mask;       // Bit mask for the alpha channel
-    uint32_t color_space_type; // Default "sRGB" (0x73524742)
-    uint32_t unused[16];       // Unused data for sRGB color space
+
+struct bmp_color_entry {
+    uint8_t blue;
+    uint8_t green;
+    uint8_t red;
+    uint8_t alpha;
 };
 
 #pragma pack(pop)
@@ -79,7 +92,8 @@ typedef struct BMP {
     struct bmp_file_header file_header;
     struct bmp_info_header dib;
     struct bmp_color_header color;
-    void *data;
+    struct bmp_color_entry * palette;
+    uint8_t *data;
 } BMP;
 
 void BMP_init(void);

@@ -72,6 +72,23 @@ read_ppm_bin_data(PNM* m, FILE *f)
     }
 }
 
+void 
+read_pgm_bin_data(PNM* m, FILE *f)
+{
+    int off = ftell(f);
+    fseek(f, 0, SEEK_END);
+    int last = ftell(f);
+    fseek(f, off, SEEK_SET);
+    m->data = malloc((last - off)*4);
+    for(int i = 0; i < last-off / 3; i++) {
+        uint8_t c = fgetc(f);
+        m->data[4*i + 2] = c;
+        m->data[4*i + 1] = c;
+        m->data[4*i] = c;
+    }
+    fread(m->data , 1, last - off, f);
+}
+
 struct pic* PNM_load(const char *filename)
 {
     struct pic * p = calloc(sizeof(struct pic), 1);
@@ -85,15 +102,17 @@ struct pic* PNM_load(const char *filename)
     if(v == 2 || v == 5 || v == 3 || v == 6) {
         m->color_size = read_int_till_delimeter(f);
     }
-    //ppm binary
-    if (v == 6) {
-        read_ppm_bin_data(m, f);
-    }
-    fclose(f);
     p->width = m->width;
     p->height = m->height;
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
+    //ppm binary
+    if (v == 6) {
+        read_ppm_bin_data(m, f);
+    } else if (v == 5) {
+        read_pgm_bin_data(m, f);
+    }
+    fclose(f);
     p->pixels = m->data;
     return p;
 }

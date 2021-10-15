@@ -43,7 +43,7 @@ BMP_load(const char* filename)
 {
     BMP * b = calloc(sizeof(BMP), 1);
     FILE *f = fopen(filename, "rb");
-    struct pic *p = malloc(sizeof(struct pic));
+    struct pic *p = calloc(sizeof(struct pic), 1);
     fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);
     fread(&b->dib, sizeof(struct bmp_info_header), 1, f);
     //FIXME: header length and later struct

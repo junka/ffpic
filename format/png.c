@@ -112,7 +112,7 @@ PNG_load(const char* filename)
         "gIFx",
         "IEND"
     };
-    PNG * b = malloc(sizeof(PNG));
+    PNG * b = calloc(sizeof(PNG), 1);
     b->n_ctext = 0;
     b->n_text = 0;
     b->n_itext = 0;
@@ -346,7 +346,7 @@ PNG_load(const char* filename)
     crc32 = finish_crc32(crc32);
     CRC_ASSER(crc32, crc);
     fclose(f);
-    struct pic *p = malloc(sizeof(struct pic));
+    struct pic *p = calloc(sizeof(struct pic), 1);
     p->pic = b;
     p->width = b->ihdr.width;
     p->height = b->ihdr.height;

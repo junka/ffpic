@@ -5,6 +5,7 @@
 #include "gif.h"
 #include "png.h"
 #include "tiff.h"
+#include "pnm.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -54,4 +55,5 @@ file_ops_init(void)
     GIF_init();
     PNG_init();
     TIFF_init();
+    PNM_init();
 }

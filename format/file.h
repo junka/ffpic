@@ -21,6 +21,8 @@ struct file_ops {
 
 struct pic {
     void *pixels;
+    int left;
+    int top;
     int width;
     int height;
     int depth;

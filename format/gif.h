@@ -14,8 +14,17 @@
 #pragma pack(push, 1)
 
 typedef struct {
-	uint8_t r, g, b;
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
 } Color;
+
+enum dispose_method {
+	UNSPECIFIED = 0,
+	DO_NOT_DISPOSE = 1,
+	RESTORE_TO_BACKGROUND = 2,
+	RESTORE_TO_PREVIOUS = 3,
+};
 
 struct graphic_control_extension {
 	uint8_t block_size;

@@ -76,7 +76,7 @@ BMP_load(const char* filename)
     // width must be multiple of four bytes
     p->width = ((b->dib.width + 3) >> 2) << 2;
     p->height = b->dib.height;
-    p->pitch = ((p->width * p->depth + 31) >> 5) << 2;
+    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     b->data = malloc(b->dib.height * p->pitch);
     p->pic = b;
 

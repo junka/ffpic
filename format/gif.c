@@ -7,14 +7,16 @@
 #include "file.h"
 #include "lzw.h"
 
-#define GRAPHIC_IMAGE          0x2C
+
 #define GRAPHIC_PLAINTEXT      0x01
+#define GRAPHIC_IMAGE          0x2C
+#define GRAPHIC_CONTROL        0xF9
+
 #define EXTENSION_COMMENT      0xFE
 #define EXTENSION_APPLICATION  0xFF
 
 #define EXTENSION_INTRODUCER   0x21
 #define TRAILER                0x3B
-#define GRAPHIC_CONTROL        0xF9
 
 int read_blocks(uint8_t** data, FILE* file) 
 {
@@ -55,24 +57,26 @@ Graphic* gif_next_dataless_graphic(GIF* gif) {
 	return gif_increment_graphics(gif);
 }
 
-void read_image(GIF* gif, FILE* file) {
+void read_image(GIF* gif, FILE* f) {
 	Image* image = (Image*)malloc(sizeof(Image));
-	fread(&image->image_dsc, sizeof(struct image_descriptor), 1, file);
+	fread(&image->image_dsc, sizeof(struct image_descriptor), 1, f);
 
 	if (image->image_dsc.local_color_table_flag) {
-		image->local_ct = (Color*)malloc(3 * (2 << image->image_dsc.local_color_table_size));
-		fread(image->local_ct, 3, 2 << image->image_dsc.local_color_table_size, file);
+		image->local_ct = (Color*)malloc(sizeof(Color) * (2 << image->image_dsc.local_color_table_size));
+		for (int i = 0; i < 2 << image->image_dsc.local_color_table_size; i ++) {
+			fread(image->local_ct, 3, 2 << image->image_dsc.local_color_table_size, f);
+		}
 	} else {
 		image->local_ct = NULL;
 	}
 
 	int width = ((image->image_dsc.width + 3) >> 2) << 2;
 	int image_data_length = width * image->image_dsc.height;
-	image->data = (uint8_t*)malloc(image_data_length * 3);
+	image->data = (uint8_t*)malloc(image_data_length * 4);
 	
 	uint8_t* compressed = NULL;;
-	uint8_t lzw_code_size = (uint8_t)fgetc(file);
-	int compressed_length = read_blocks(&compressed, file);
+	uint8_t lzw_code_size = (uint8_t)fgetc(f);
+	int compressed_length = read_blocks(&compressed, f);
 
 	lzw_decode(lzw_code_size, compressed, compressed_length, image->data);
 	uint8_t *p = image->data;
@@ -82,12 +86,13 @@ void read_image(GIF* gif, FILE* file) {
 	} else {
 		ct = image->local_ct;
 	}
-	for (int j = image->image_dsc.height- 1; j >= 0; j --) {
+	for (int j = image->image_dsc.height - 1; j >= 0; j --) {
 		for(int i = width- 1; i >=0; i -- ) {
 			uint8_t cindex = *(p+i+j*width);
-			*(p +  (j * 3 * width)+ 3*i) = ct[cindex].b;
-			*(p +  (j * 3 * width)+ 3*i + 1) = ct[cindex].g;
-			*(p +  (j * 3 * width)+ 3*i + 2 ) = ct[cindex].r; 
+			*(p +  (j * 4 * width)+ 4*i) = ct[cindex].b;
+			*(p +  (j * 4 * width)+ 4*i + 1) = ct[cindex].g;
+			*(p +  (j * 4 * width)+ 4*i + 2 ) = ct[cindex].r; 
+			// *(p +  (j * 4 * width)+ 4*i + 3 ) = 0;
 		}
 	}
 
@@ -228,8 +233,8 @@ struct pic* GIF_load(const char* filename) {
     p->pic = gif;
     p->width = gif->ls_dsc.screen_witdh;
     p->height = gif->ls_dsc.screen_height;
-    p->depth = 24;
-    p->pitch = ((p->width * p->depth + 31) >> 5) << 2;
+    p->depth = 32;
+    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = gif->graphics->image->data;
 	// p->amask = 0;
 	// p->rmask = 0;
@@ -277,12 +282,52 @@ GIF_info(FILE* f, struct pic* p)
 	fprintf(f, "------------------------------\n");
 	fprintf(f, "\tgraphic_count: %d\n", g->graphic_count);
 	fprintf(f, "\textension_count: %d\n", g->extension_count);
+	if (g->graphics->control) {
+		fprintf(f, "\tfirst image: disposal_method %d\n", g->graphics->control->disposal_method);
+		fprintf(f, "\tfirst image: delay_time %d\n", g->graphics->control->delay_time);
+	}
 	fprintf(f, "\tfirst image: width %d height %d\n", g->graphics->image->image_dsc.width,
 				g->graphics->image->image_dsc.height);
 	fprintf(f, "\tfirst image: left %d top %d\n", g->graphics->image->image_dsc.left,
 				g->graphics->image->image_dsc.top);
 	fprintf(f, "\tfirst image: interlace %d\n", g->graphics->image->image_dsc.interlace_flag);
 	fprintf(f, "\tfirst image: local_color_flag %d\n", g->graphics->image->image_dsc.local_color_table_flag);
+
+	if (g->graphic_count > 1) {
+		if (g->graphics->control) {
+			fprintf(f, "\tsecond image: disposal_method %d\n", g->graphics[1].control->disposal_method);
+			fprintf(f, "\tsecond image: delay_time %d\n", g->graphics[1].control->delay_time);
+		}
+		fprintf(f, "\tsecond image: image type %d\n", g->graphics[1].type);
+		fprintf(f, "\tsecond image: width %d height %d\n", g->graphics[1].image->image_dsc.width,
+					g->graphics[1].image->image_dsc.height);
+		fprintf(f, "\tsecond image: left %d top %d\n", g->graphics[1].image->image_dsc.left,
+					g->graphics[1].image->image_dsc.top);
+		fprintf(f, "\tsecond image: interlace %d\n", g->graphics[1].image->image_dsc.interlace_flag);
+		fprintf(f, "\tsecond image: local_color_flag %d\n", g->graphics[1].image->image_dsc.local_color_table_flag);
+		fprintf(f, "------------------------------\n");
+		if (g->extension_count) {
+			for(int i = 0; i < g->extension_count; i ++) {
+				switch(g->extensions[i].type) {
+					case EXTENSION_COMMENT:
+						fprintf(f, "\tcomment extension:\n");
+						fprintf(f, "\t%s\n", g->extensions[i].comment->text);
+						break;
+					case EXTENSION_APPLICATION:
+						fprintf(f, "\tapp extension:\n");
+						fprintf(f, "\tid %c%c%c%c%c%c%c%c\n", g->extensions[i].application->app_ext.identifier[0],
+						g->extensions[i].application->app_ext.identifier[1],g->extensions[i].application->app_ext.identifier[2],
+						g->extensions[i].application->app_ext.identifier[3],g->extensions[i].application->app_ext.identifier[4],
+						g->extensions[i].application->app_ext.identifier[5],g->extensions[i].application->app_ext.identifier[6],
+						g->extensions[i].application->app_ext.identifier[7]);
+						break;
+					default:
+						fprintf(f, "\tunknown extension\n");
+						break;
+				}
+			}
+		}
+	}
 }
 
 void image_free(Image* image) {

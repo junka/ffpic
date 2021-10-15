@@ -5,6 +5,7 @@
 extern "C"{
 #endif
 
+#include <stdbool.h>
 #include <SDL.h>
 
 typedef struct {
@@ -14,15 +15,18 @@ typedef struct {
     SDL_Window *w;
     SDL_Renderer *r;
     SDL_Texture *t;
+    SDL_Thread *tid;
 
     int (*init)(const char* title, int w, int h);
     int (*uninit)(void);
 } Screen;
 
-int pic_draw(void *pixels, int width, int height, int depth, int pitch,
+int pic_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch,
             uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask);
 
 int pic_refresh();
+
+void pic_poll_block(bool q);
 
 int pic_clear();
 

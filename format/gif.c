@@ -66,7 +66,8 @@ void read_image(GIF* gif, FILE* file) {
 		image->local_ct = NULL;
 	}
 
-	int image_data_length = image->image_dsc.width * image->image_dsc.height;
+	int width = ((image->image_dsc.width + 3) >> 2) << 2;
+	int image_data_length = width * image->image_dsc.height;
 	image->data = (uint8_t*)malloc(image_data_length * 3);
 	
 	uint8_t* compressed = NULL;;
@@ -82,10 +83,11 @@ void read_image(GIF* gif, FILE* file) {
 		ct = image->local_ct;
 	}
 	for (int j = image->image_dsc.height- 1; j >= 0; j --) {
-		for(int i = image->image_dsc.width- 1; i >=0; i -- ) {
-			*(p +  (j * 3 *image->image_dsc.width)+ i) = ct[ *(p+i+j*image->image_dsc.width)].b;
-			*(p +  (j * 3 *image->image_dsc.width)+ i + 1) = ct[ *(p+i+j*image->image_dsc.width)].g;
-			*(p +  (j * 3 *image->image_dsc.width)+ i + 2 ) = ct[ *(p+i+j*image->image_dsc.width)].r; 
+		for(int i = width- 1; i >=0; i -- ) {
+			uint8_t cindex = *(p+i+j*width);
+			*(p +  (j * 3 * width)+ 3*i) = ct[cindex].b;
+			*(p +  (j * 3 * width)+ 3*i + 1) = ct[cindex].g;
+			*(p +  (j * 3 * width)+ 3*i + 2 ) = ct[cindex].r; 
 		}
 	}
 
@@ -227,12 +229,12 @@ struct pic* GIF_load(const char* filename) {
     p->width = gif->ls_dsc.screen_witdh;
     p->height = gif->ls_dsc.screen_height;
     p->depth = 24;
-    p->pitch = ((p->width * p->height + 31) >> 5) << 2;
+    p->pitch = ((p->width * p->depth + 31) >> 5) << 2;
     p->pixels = gif->graphics->image->data;
-	p->amask = 0;
-	p->rmask = 0;
-	p->gmask = 0;
-	p->bmask = 0;
+	// p->amask = 0;
+	// p->rmask = 0;
+	// p->gmask = 0;
+	// p->bmask = 0;
     return p;
 }
 
@@ -266,7 +268,7 @@ GIF_info(FILE* f, struct pic* p)
     fprintf(f, "version %c%c%c\n", g->file_h.version[0], g->file_h.version[1], g->file_h.version[2]);
     fprintf(f, "\timage width %d height %d:\n", g->ls_dsc.screen_witdh, g->ls_dsc.screen_height);
     fprintf(f, "\tbackground_color_index: %d\n", g->ls_dsc.background_color_index);
-    fprintf(f, "\taspect_ratio: %f\n", g->ls_dsc.pixel_aspect_ratio?((g->ls_dsc.pixel_aspect_ratio + 15)/64.0) : 0);
+    fprintf(f, "\taspect_ratio: %.2f\n", g->ls_dsc.pixel_aspect_ratio?((g->ls_dsc.pixel_aspect_ratio + 15)/64.0) : 0);
     if (g->ls_dsc.global_color_table_flag) {
         fprintf(f, "\tglobal_ct_resolution: %d\n", g->ls_dsc.global_color_resolution+1);
         fprintf(f, "\tglobal_ct_size: %d\n", 2 << g->ls_dsc.global_color_table_size);
@@ -280,6 +282,7 @@ GIF_info(FILE* f, struct pic* p)
 	fprintf(f, "\tfirst image: left %d top %d\n", g->graphics->image->image_dsc.left,
 				g->graphics->image->image_dsc.top);
 	fprintf(f, "\tfirst image: interlace %d\n", g->graphics->image->image_dsc.interlace_flag);
+	fprintf(f, "\tfirst image: local_color_flag %d\n", g->graphics->image->image_dsc.local_color_table_flag);
 }
 
 void image_free(Image* image) {

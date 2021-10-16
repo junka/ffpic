@@ -132,9 +132,9 @@ void pic_poll_block(bool q)
             if (e.type == SDL_QUIT){
                 quit = true;
             }
-            if (e.type == SDL_KEYDOWN){
-                quit = true;
-            }
+            // if (e.type == SDL_KEYDOWN){
+            //     quit = true;
+            // }
             if (e.type == SDL_MOUSEBUTTONDOWN) {
                 quit = true;
             }

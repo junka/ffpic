@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 
@@ -32,22 +33,22 @@ PNM_probe(const char *filename)
 }
 
  
-uint8_t 
+static uint8_t 
 read_skip_delimeter(FILE *f)
 {
     uint8_t c = fgetc(f);
-    while (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
+    while (feof(f) || c == ' ' || c == '\n' || c == '\t' || c == '\r') {
         c = fgetc(f);
     }
     return c;
 }
 
 
-int 
+static int 
 read_int_till_delimeter(FILE *f) {
     int r = 0;
     uint8_t c = read_skip_delimeter(f);
-    while(c != ' ' && c != '\n' && c != '\t' && c != '\r') {
+    while(!feof(f) && c != ' ' && c != '\n' && c != '\t' && c != '\r') {
         r = r * 10;
         r += c - '0';
         c = fgetc(f);
@@ -55,14 +56,19 @@ read_int_till_delimeter(FILE *f) {
     return r;
 }
 
-void 
+static uint8_t
+read_ascii_one(FILE *f) {
+    uint8_t c = read_skip_delimeter(f);
+    return c - '0';
+}
+
+static void 
 read_ppm_bin_data(PNM* m, FILE *f)
 {
     int off = ftell(f);
     fseek(f, 0, SEEK_END);
     int last = ftell(f);
     fseek(f, off, SEEK_SET);
-    m->data = malloc((last - off)/3 *4);
 
     //RGB color need do reorder for display
     for(int i = 0; i < last-off / 3; i++) {
@@ -72,21 +78,153 @@ read_ppm_bin_data(PNM* m, FILE *f)
     }
 }
 
-void 
+static void 
 read_pgm_bin_data(PNM* m, FILE *f)
 {
     int off = ftell(f);
     fseek(f, 0, SEEK_END);
     int last = ftell(f);
     fseek(f, off, SEEK_SET);
-    m->data = malloc((last - off)*4);
-    for(int i = 0; i < last-off / 3; i++) {
+    if (last - off < m->width * m->height) {
+        printf("corrupt file size \n");
+        return;
+    }
+    int i =0 , j =0;
+    int pitch = ((m->width * 32 + 31) >> 5) << 2;
+    while(!feof(f)) {
         uint8_t c = fgetc(f);
-        m->data[4*i + 2] = c;
-        m->data[4*i + 1] = c;
-        m->data[4*i] = c;
+        m->data[j * pitch + 4 * i + 2] = c;
+        m->data[j * pitch + 4 * i + 1] = c;
+        m->data[j * pitch + 4 * i] = c;
+        i ++;
+        if(i == m->width) {
+            i = 0;
+            j ++;
+            if (j == m->height) {
+                return;
+            }
+        }
+    }
+}
+
+static void 
+read_pbm_bin_data(PNM* m, FILE *f)
+{
+    int off = ftell(f);
+    fseek(f, 0, SEEK_END);
+    int last = ftell(f);
+    fseek(f, off, SEEK_SET);
+    int n = 0;
+    for(int i = 0; i < last-off; i++) {
+        uint8_t c = fgetc(f);
+        for (int j = 7; j >= 0; j --) {
+            if (n < m->width) {
+                if (((c >> j) & 0x01) == 0) {
+                    m->data[32*i + 4*(7-j) + 2] = 0xFF;
+                    m->data[32*i + 4*(7-j) + 1] = 0xFF;
+                    m->data[32*i + 4*(7-j)] = 0xFF;
+                } else {
+                    m->data[32*i + 4*(7-j) + 2] = 0;
+                    m->data[32*i + 4*(7-j) + 1] = 0;
+                    m->data[32*i + 4*(7-j)] = 0;
+                }
+            } 
+            n ++;
+            if(n >= m->width && j > 0)
+            {
+                //do noting to skip bits
+            } 
+            else {
+                n = 0;
+            }
+
+        }
     }
     fread(m->data , 1, last - off, f);
+}
+
+uint8_t 
+read_skip_comments_line(FILE *f)
+{
+    int c = read_skip_delimeter(f);
+    bool comment = false;
+    if (c == '#') {
+        comment = true;
+    }
+    while (comment && !feof(f)) {
+        c = fgetc(f);
+        if (c == '\n') {
+            comment = false;
+            c = read_skip_comments_line(f);
+        }
+    }
+    return c;
+}
+
+static void
+read_pbm_ascii_data(PNM *m, FILE *f)
+{
+    int i = 0, j = 0;
+    int pitch = ((m->width * 32 + 31) >> 5) << 2;
+    while(!feof(f)) {
+        int c = read_ascii_one(f);
+        if (c == 0) {
+                m->data[j * pitch + i * 4 + 2] = 0xFF;
+                m->data[j * pitch + i * 4 + 1] = 0xFF;
+                m->data[j * pitch + i * 4] = 0xFF;
+        }
+        i ++;
+        if(i == m->width) {
+            i = 0;
+            j ++;
+            if (j == m->height)
+                return;
+        }
+    }
+}
+
+
+static void
+read_pgm_ascii_data(PNM *m, FILE *f)
+{
+    int i = 0, j = 0;
+    int pitch = ((m->width * 32 + 31) >> 5) << 2;
+    while(!feof(f)) {
+        int grey = read_int_till_delimeter(f);
+        m->data[j * pitch + i * 4 + 2] = grey;
+        m->data[j * pitch + i * 4 + 1] = grey;
+        m->data[j * pitch + i * 4] = grey;
+        i ++;
+        if(i == m->width) {
+            i = 0;
+            j ++;
+            if (j == m->height) {
+                return;
+            }
+        }
+    }
+}
+
+static void
+read_ppm_ascii_data(PNM *m, FILE *f)
+{
+    int i = 0, j = 0;
+    int pitch = ((m->width * 32 + 31) >> 5) << 2;
+    while (!feof(f)) {
+        read_skip_comments_line(f);
+        fseek(f, -1, SEEK_CUR);
+        m->data[j * pitch + i * 4 + 2] = read_int_till_delimeter(f);
+        m->data[j * pitch + i * 4 + 1] = read_int_till_delimeter(f);
+        m->data[j * pitch + i * 4] = read_int_till_delimeter(f);
+        i ++;
+        if(i == m->width) {
+            i = 0;
+            j ++;
+            if (j == m->height) {
+                return;
+            }
+        }
+    }
 }
 
 struct pic* PNM_load(const char *filename)
@@ -96,21 +234,54 @@ struct pic* PNM_load(const char *filename)
     p->pic = m;
     FILE *f = fopen(filename, "rb");
     fread(&m->pn, sizeof(struct file_header), 1, f);
-    m->width = read_int_till_delimeter(f);
-    m->height = read_int_till_delimeter(f);
+    fgetc(f);
     uint8_t v = m->pn.version - '0';
-    if(v == 2 || v == 5 || v == 3 || v == 6) {
+
+    // ascii format may get comments
+    if(v == 1 || v == 2 || v ==3 ) {
+        read_skip_comments_line(f);
+        fseek(f, -1, SEEK_CUR);
+    }
+    m->width = read_int_till_delimeter(f);
+    if (v == 1 || v == 2 || v ==3 ) {
+        read_skip_comments_line(f);
+        fseek(f, -1, SEEK_CUR);
+    }
+    m->height = read_int_till_delimeter(f);
+    if (v == 1 || v == 2 || v ==3 ) {
+        read_skip_comments_line(f);
+        fseek(f, -1, SEEK_CUR);
+    }
+    if (v == 2 || v == 5 || v == 3 || v == 6) {
         m->color_size = read_int_till_delimeter(f);
     }
     p->width = m->width;
     p->height = m->height;
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    //ppm binary
-    if (v == 6) {
-        read_ppm_bin_data(m, f);
-    } else if (v == 5) {
-        read_pgm_bin_data(m, f);
+    m->data = malloc(p->pitch * p->height);
+
+    switch (v) {
+        case 6:
+            read_ppm_bin_data(m, f);
+            break;
+        case 5:
+            read_pgm_bin_data(m, f);
+            break;
+        case 4:
+            read_pbm_bin_data(m, f);
+            break;
+        case 3:
+            read_ppm_ascii_data(m, f);
+            break;
+        case 2:
+            read_pgm_ascii_data(m, f);
+            break;
+        case 1:
+            read_pbm_ascii_data(m, f);
+            break;
+        default:
+            break;
     }
     fclose(f);
     p->pixels = m->data;

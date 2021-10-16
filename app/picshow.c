@@ -28,7 +28,7 @@ main(int argc, const char *argv[])
         printf("file format is not support\n");
         return -1;
     }
-
+    int left, top;
     struct pic *p = ops->load(filename);
     snprintf(title, 128, "%s (%d * %d)", filename, p->width, p->height);
     if (p->width < 180 || p->height < 60) {
@@ -36,8 +36,13 @@ main(int argc, const char *argv[])
     } else {
         scrn.init(title, p->width, p->height);
     }
-
-    ret = pic_draw(p->pixels, p->left, p->top, p->width, p->height, p->depth,
+    top = p->top;
+    left = p->left;
+    if (p->width < 180 || p->height < 60) {
+        top = top ? top : 360/2 - p->height/2;
+        left = left ? left : 480 /2 - p->width/2;
+    }
+    ret = pic_draw(p->pixels, left, top, p->width, p->height, p->depth,
                  p->pitch, p->rmask, p->gmask, p->bmask, p->amask);
     if (ret) {
         printf("fail to draw\n");

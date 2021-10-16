@@ -227,6 +227,64 @@ read_ppm_ascii_data(PNM *m, FILE *f)
     }
 }
 
+static int 
+read_string_till_delimeter(FILE *f, char *str) {
+    int r = 0;
+    uint8_t c = read_skip_delimeter(f);
+    while(!feof(f) && c != ' ' && c != '\n' && c != '\t' && c != '\r') {
+        *str++ = c;
+        c = fgetc(f);
+    }
+    *str = '\0';
+    return 0;
+}
+static void
+read_pam_attribe(PNM *m , FILE *f)
+{
+    char str[32];
+    read_string_till_delimeter(f, str);
+    while (strcmp(str, "ENDHDR")) {
+        if (!strcmp(str, "WIDTH")) {
+            m->width = read_int_till_delimeter(f);
+        } else if (!strcmp(str, "HEIGHT")) {
+            m->height = read_int_till_delimeter(f);
+        } else if (!strcmp(str, "DEPTH")) {
+            m->depth = read_int_till_delimeter(f);
+        } else if (!strcmp(str, "MAXVAL")) {
+            m->color_size = read_int_till_delimeter(f);
+        } else if (!strcmp(str, "TUPLTYPE")) {
+            read_string_till_delimeter(f, str);
+            if (!strcmp(str, "BLACKANDWHITE")) {
+                m->tupe_type = BLACKANDWHITE;
+            } else if (!strcmp(str, "GRAYSCALE")) {
+                m->tupe_type = GRAYSCALE;
+            } else if (!strcmp(str, "RGB")) {
+                m->tupe_type = RGB;
+            } else if (!strcmp(str, "BLACKANDWHITE_ALPHA")) {
+                m->tupe_type = BLACKANDWHITE_ALPHA;
+            } else if (!strcmp(str, "GRAYSCALE_ALPHA")) {
+                m->tupe_type = GRAYSCALE_ALPHA;
+            } else if (!strcmp(str, "RGB_ALPHA")) {
+                m->tupe_type = RGB_ALPHA;
+            }
+        }
+        read_string_till_delimeter(f, str);
+    }
+}
+
+static void
+read_pam_data(PNM *m, FILE *f)
+{
+    if(m->tupe_type == BLACKANDWHITE && m->depth == 1) {
+        read_pbm_bin_data(m, f);
+    } else if (m->tupe_type == RGB && m->depth == 3) {
+        read_ppm_bin_data(m, f);
+    } else if (m->tupe_type == RGB_ALPHA && m->depth == 4)
+    {
+
+    }
+}
+
 struct pic* PNM_load(const char *filename)
 {
     struct pic * p = calloc(sizeof(struct pic), 1);
@@ -237,23 +295,30 @@ struct pic* PNM_load(const char *filename)
     fgetc(f);
     uint8_t v = m->pn.version - '0';
 
-    // ascii format may get comments
-    if(v == 1 || v == 2 || v ==3 ) {
-        read_skip_comments_line(f);
-        fseek(f, -1, SEEK_CUR);
+    if (v == 7)
+    {
+        read_pam_attribe(m, f);
     }
-    m->width = read_int_till_delimeter(f);
-    if (v == 1 || v == 2 || v ==3 ) {
-        read_skip_comments_line(f);
-        fseek(f, -1, SEEK_CUR);
-    }
-    m->height = read_int_till_delimeter(f);
-    if (v == 1 || v == 2 || v ==3 ) {
-        read_skip_comments_line(f);
-        fseek(f, -1, SEEK_CUR);
-    }
-    if (v == 2 || v == 5 || v == 3 || v == 6) {
-        m->color_size = read_int_till_delimeter(f);
+    else
+    {
+        // ascii format may get comments
+        if(v == 1 || v == 2 || v ==3 ) {
+            read_skip_comments_line(f);
+            fseek(f, -1, SEEK_CUR);
+        }
+        m->width = read_int_till_delimeter(f);
+        if (v == 1 || v == 2 || v ==3 ) {
+            read_skip_comments_line(f);
+            fseek(f, -1, SEEK_CUR);
+        }
+        m->height = read_int_till_delimeter(f);
+        if (v == 1 || v == 2 || v ==3 ) {
+            read_skip_comments_line(f);
+            fseek(f, -1, SEEK_CUR);
+        }
+        if (v == 2 || v == 5 || v == 3 || v == 6) {
+            m->color_size = read_int_till_delimeter(f);
+        }
     }
     p->width = m->width;
     p->height = m->height;
@@ -262,6 +327,9 @@ struct pic* PNM_load(const char *filename)
     m->data = malloc(p->pitch * p->height);
 
     switch (v) {
+        case 7:
+            read_pam_data(m, f);
+            break;
         case 6:
             read_ppm_bin_data(m, f);
             break;

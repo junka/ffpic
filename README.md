@@ -27,6 +27,7 @@ supported file formart is:
 | PBM | y | Portable BitMap image |
 | PGM | y | Portable GrayMap image |
 | PPM | y | Portable PixelMap image |
+| PAM | * | Portable Arbitrary image |
 
 
 

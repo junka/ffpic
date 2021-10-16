@@ -20,14 +20,27 @@ struct file_header {
 //     uint8_t blue;
 // };
 
+enum tuple_type {
+    BLACKANDWHITE = 1,
+    GRAYSCALE = 2,
+    RGB = 3,
+    BLACKANDWHITE_ALPHA = 4,
+    GRAYSCALE_ALPHA = 5, 
+    RGB_ALPHA = 6
+};
+
 typedef struct {
     struct file_header pn;
     int width;
     int height;
     int color_size;
 
+    int depth;
+    int tupe_type;
+
     uint8_t *data;
 }PNM;
+
 
 #pragma pack(pop)
 

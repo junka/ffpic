@@ -38,7 +38,8 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/huffman.c"
             "${FFPIC_ROOT}/coding/deflate.c"
             "${FFPIC_ROOT}/utils/crc.c"
-            "${FFPIC_ROOT}/utils/alder.c")
+            "${FFPIC_ROOT}/utils/alder.c"
+            "${FFPIC_ROOT}/utils/hexdump.c")
 
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/png.c"
@@ -57,6 +58,8 @@ target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 
 add_executable(picshow "${FFPIC_ROOT}/app/picshow.c" $<TARGET_OBJECTS:ffpic>)
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
+target_link_libraries(picinfo z)
+target_link_libraries(picshow z)
 
 target_link_libraries(picshow ffpic)
 target_include_directories(picshow PRIVATE ${FFPIC_DIRS})

@@ -4,6 +4,8 @@
 #include <string.h>
 #include <assert.h>
 
+#include <zlib.h>
+
 #include "deflate.h"
 
 struct tinf_tree {
@@ -598,4 +600,9 @@ deflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decomp
 
 	*descompressed_len = d.dest - d.dest_start;
 
+}
+
+int inflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decompressed, int* descompressed_len)
+{
+    return uncompress(decompressed, descompressed_len, compressed, compressed_length);
 }

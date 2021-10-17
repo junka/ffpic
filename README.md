@@ -29,8 +29,13 @@ supported file formart is:
 | PPM | y | Portable PixelMap image |
 | PAM | * | Portable Arbitrary image |
 
+### display rgb data
+Tips on display:
+after decoding, usually we get rgb data from least significant byte, But
+for sdl display, the data need to be  ```BGRA``` from least significant byte.
 
+So, a reorder is need for display.
 
 ### Samples
 
-take bmp/gif samples from [https://filesamples.com/formats/bmp] etc
+take bmp/gif samples from [https://filesamples.com/formats/$formt] format is bmp/png etc

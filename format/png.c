@@ -48,7 +48,8 @@ read_char_till_null(FILE *f, uint8_t *buff, int len)
     return n;
 }
 
-int calc_image_raw_size(PNG *p)
+static int 
+calc_png_bits_per_pixel(PNG *p)
 {
     int color_len;
     switch(p->ihdr.color_type) {
@@ -71,21 +72,147 @@ int calc_image_raw_size(PNG *p)
             color_len = 0;
             break;
     }
-    return p->ihdr.width * (p->ihdr.height * (color_len * p->ihdr.bit_depth) + 7)/8 + p->ihdr.height;
+    return p->ihdr.bit_depth * color_len;
 }
 
-enum filter_type {
-    FILTER_NONE = 0,
-    FILTER_SUB = 1,
-    FILTER_UP = 2,
-    FILTER_AVERAGE = 3,
-    FILTER_PAETH = 4
-};
+static int 
+calc_image_raw_size(PNG *p)
+{
+    return p->ihdr.height * (p->ihdr.width * calc_png_bits_per_pixel(p) + 7)/8 + p->ihdr.height;
+}
+
+/*Paeth predicter, used by PNG filter type 4*/
+static int 
+paeth_predictor(int a, int b, int c)
+{
+	int p = a + b - c;
+	int pa = p > a ? p - a : a - p;
+	int pb = p > b ? p - b : b - p;
+	int pc = p > c ? p - c : c - p;
+
+	if (pa <= pb && pa <= pc)
+		return a;
+	else if (pb <= pc)
+		return b;
+	else
+		return c;
+}
+
+static void 
+unfilter_scanline(unsigned char *recon, const unsigned char *scanline, 
+        const unsigned char *precon, unsigned long bytewidth, 
+        unsigned char filterType, unsigned long length)
+{
+	/*
+	   For PNG filter method 0
+	   unfilter a PNG image scanline by scanline. when the pixels are smaller than 1 byte, the filter works byte per byte (bytewidth = 1)
+	   precon is the previous unfiltered scanline, recon the result, scanline the current one
+	   the incoming scanlines do NOT include the filtertype byte, that one is given in the parameter filterType instead
+	   recon and scanline MAY be the same memory address! precon must be disjoint.
+	 */
+
+	unsigned long i;
+	switch (filterType) {
+	case FILTER_NONE:
+		for (i = 0; i < length; i++)
+			recon[i] = scanline[i];
+		break;
+	case FILTER_SUB:
+		for (i = 0; i < bytewidth; i++)
+			recon[i] = scanline[i];
+		for (i = bytewidth; i < length; i++)
+			recon[i] = scanline[i] + recon[i - bytewidth];
+		break;
+	case FILTER_UP:
+		if (precon)
+			for (i = 0; i < length; i++)
+				recon[i] = scanline[i] + precon[i];
+		else
+			for (i = 0; i < length; i++)
+				recon[i] = scanline[i];
+		break;
+	case FILTER_AVERAGE:
+		if (precon) {
+			for (i = 0; i < bytewidth; i++)
+				recon[i] = scanline[i] + precon[i] / 2;
+			for (i = bytewidth; i < length; i++)
+				recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
+		} else {
+			for (i = 0; i < bytewidth; i++)
+				recon[i] = scanline[i];
+			for (i = bytewidth; i < length; i++)
+				recon[i] = scanline[i] + recon[i - bytewidth] / 2;
+		}
+		break;
+	case FILTER_PAETH:
+		if (precon) {
+			for (i = 0; i < bytewidth; i++)
+				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(0, precon[i], 0));
+			for (i = bytewidth; i < length; i++)
+				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], precon[i], precon[i - bytewidth]));
+		} else {
+			for (i = 0; i < bytewidth; i++)
+				recon[i] = scanline[i];
+			for (i = bytewidth; i < length; i++)
+				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], 0, 0));
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+static void 
+remove_padding_bits(unsigned char *out, const unsigned char *in, 
+            unsigned long olinebits, unsigned long ilinebits, unsigned h)
+{
+	/*
+	   After filtering there are still padding bpp if scanlines have non multiple of 8 bit amounts. They need to be removed (except at last scanline of (Adam7-reduced) image) before working with pure image buffers for the Adam7 code, the color convert code and the output to the user.
+	   in and out are allowed to be the same buffer, in may also be higher but still overlapping; in must have >= ilinebits*h bpp, out must have >= olinebits*h bpp, olinebits must be <= ilinebits
+	   also used to move bpp after earlier such operations happened, e.g. in a sequence of reduced images from Adam7
+	   only useful if (ilinebits - olinebits) is a value in the range 1..7
+	 */
+	unsigned y;
+	unsigned long diff = ilinebits - olinebits;
+	unsigned long obp = 0, ibp = 0;	/*bit pointers */
+	for (y = 0; y < h; y++) {
+		unsigned long x;
+		for (x = 0; x < olinebits; x++) {
+			unsigned char bit = (unsigned char)((in[(ibp) >> 3] >> (7 - ((ibp) & 0x7))) & 1);
+			ibp++;
+
+			if (bit == 0)
+				out[(obp) >> 3] &= (unsigned char)(~(1 << (7 - ((obp) & 0x7))));
+			else
+				out[(obp) >> 3] |= (1 << (7 - ((obp) & 0x7)));
+			++obp;
+		}
+		ibp += diff;
+	}
+}
 
 static void
-PNG_filter(const uint8_t *buf)
+PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 {
+    uint8_t type = *buf;
+    int bpp = calc_png_bits_per_pixel(p);
+    unsigned bytewidth = (bpp + 7) / 8;	/*bytewidth is used for filtering, is 1 when bpp < 8, number of bytes per pixel otherwise */
+	unsigned linebytes = (p->ihdr.width * bpp + 7) / 8;
 
+	unsigned char *prevline = 0;
+
+    for (int y = 0; y < p->ihdr.height; y++) {
+        unsigned long outindex = linebytes * y;
+		unsigned long pos = (1 + linebytes) * y;	/*the extra filterbyte added to each row */
+		unsigned char filterType = buf[pos];
+        unfilter_scanline(&p->data[outindex], &buf[pos + 1], prevline, bytewidth, filterType, linebytes);
+        prevline = &p->data[outindex];
+    }
+
+    if (bytewidth == 1 && p->ihdr.width * bpp != (linebytes * 8)) {
+        //means get padding per line
+		remove_padding_bits(p->data, buf, p->ihdr.width * bpp, linebytes * 8, p->ihdr.height);
+	}
 }
 
 static struct pic* 
@@ -112,12 +239,9 @@ PNG_load(const char* filename)
         "gIFx",
         "IEND"
     };
-    PNG * b = calloc(sizeof(PNG), 1);
-    b->n_ctext = 0;
-    b->n_text = 0;
-    b->n_itext = 0;
-    b->size = 0;
-    b->data = NULL;
+    struct pic *p = calloc(1, sizeof(struct pic));
+    PNG * b = calloc(1, sizeof(PNG));
+
     FILE *f = fopen(filename, "rb");
     fread(&b->sig, sizeof(struct png_file_header), 1, f);
 
@@ -130,9 +254,6 @@ PNG_load(const char* filename)
     uint8_t *data = NULL, *compressed = NULL;
     int compressed_size = 0;
     uint32_t crc32, crc;
-
-    b->size = calc_image_raw_size(b);
-    b->data = malloc(b->size);
 
     fread(&length, 1, sizeof(uint32_t), f);
     fread(&chunk_type, 1, sizeof(uint32_t), f);
@@ -163,7 +284,6 @@ PNG_load(const char* filename)
                     fread(compressed + compressed_size - length , 1, length, f);
                     crc32 = update_crc(crc32, (uint8_t *)compressed + compressed_size - length, length);
                 }
-                deflate_decode(compressed, compressed_size, b->data, &b->size);
                 break;
             case CHARS2UINT("gAMA"):
                 fread(&b->gamma, sizeof(uint32_t), 1, f);
@@ -339,24 +459,38 @@ PNG_load(const char* filename)
         length = ntohl(length);
         fread(&chunk_type, sizeof(uint32_t), 1, f);
     }
-
     /* check iEND chunk */
     crc32 = init_crc32((uint8_t*)&chunk_type, sizeof(uint32_t));
     fread(&crc, sizeof(uint32_t), 1, f);
     crc32 = finish_crc32(crc32);
     CRC_ASSER(crc32, crc);
     fclose(f);
-    struct pic *p = calloc(sizeof(struct pic), 1);
+    b->size = calc_image_raw_size(b);
+    printf("compressed size %d, pre allocate %d\n", compressed_size, b->size);
+    
+    uint8_t* udata = malloc(b->size);
+    // b->size = 8192;
+    int a = inflate_decode(compressed, compressed_size, udata, &b->size);
+    free(compressed);
+    b->data = (uint8_t*)malloc(b->size);
+    printf("ret %d, size %d\n", a, b->size);
+
+    PNG_unfilter(b, udata, b->size);
+#if 0
+    #include "utils.h"
+    hexdump(stdout, "png raw data", b->data, 512);
+#endif
+    free(udata);
     p->pic = b;
     p->width = b->ihdr.width;
     p->height = b->ihdr.height;
-    p->depth = b->ihdr.bit_depth;
+    p->depth = calc_png_bits_per_pixel(b);
     p->pixels = b->data;
     p->rmask = 0;
     p->gmask = 0;
     p->bmask = 0;
     p->amask = 0xFF;
-    p->pitch = ((b->ihdr.width * b->ihdr.bit_depth + 31) >> 5) << 2;
+    p->pitch = ((b->ihdr.width * p->depth + 31) >> 5) << 2;
     return p;
 }
 
@@ -364,6 +498,18 @@ static void
 PNG_free(struct pic* p)
 {
     PNG *b = (PNG *)(p->pic);
+    if (b->palette)
+        free(b->palette);
+    if (b->itextual)
+        free(b->itextual);
+    if (b->textual)
+        free(b->textual);
+    if (b->ctextual)
+        free(b->ctextual);
+    if (b->freqs)
+        free(b->freqs);
+    if (b->data)
+        free(b->data);
     free(b);
     free(p);
 }

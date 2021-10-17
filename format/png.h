@@ -114,6 +114,15 @@ struct last_modification {
     uint8_t sec;
 };
 
+enum filter_type {
+    FILTER_NONE = 0,
+    FILTER_SUB = 1,
+    FILTER_UP = 2,
+    FILTER_AVERAGE = 3,
+    FILTER_PAETH = 4
+};
+
+
 typedef struct {
     struct png_file_header sig;
     struct png_ihdr ihdr;

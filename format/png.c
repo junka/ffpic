@@ -105,7 +105,8 @@ unfilter_scanline(unsigned char *recon, const unsigned char *scanline,
 {
 	/*
 	   For PNG filter method 0
-	   unfilter a PNG image scanline by scanline. when the pixels are smaller than 1 byte, the filter works byte per byte (bytewidth = 1)
+	   unfilter a PNG image scanline by scanline. 
+       when the pixels are smaller than 1 byte, the filter works byte per byte (bytewidth = 1)
 	   precon is the previous unfiltered scanline, recon the result, scanline the current one
 	   the incoming scanlines do NOT include the filtertype byte, that one is given in the parameter filterType instead
 	   recon and scanline MAY be the same memory address! precon must be disjoint.

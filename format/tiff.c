@@ -32,20 +32,20 @@ TIFF_probe(const char *filename)
 
 
 void
-read_de(TIFF * t, FILE *f)
+read_de(struct tiff_directory_entry *de, FILE *f)
 {
-    struct tiff_directory_entry de;
-    fread(&de, 12, 1, f);
+    
+    fread(de, 12, 1, f);
     int tlen = 0;
-    switch(de.type) {
+    switch(de->type) {
         case TAG_BYTE:
-            tlen = 1 * de.len;
+            tlen = 1 * de->len;
             break;
         case TAG_SHORT:
-            tlen = 2 * de.len;
+            tlen = 2 * de->len;
             break;
         case TAG_LONG:
-            tlen = 4 * de.len;
+            tlen = 4 * de->len;
             break;
         case TAG_RATIONAL:
             break;
@@ -54,16 +54,16 @@ read_de(TIFF * t, FILE *f)
         default:
             break;
     }
-    if (de.len <=4 ) {
-        de.value = (uint8_t *)&de.offset;
+    if (de->len <=4 ) {
+        de->value = (uint8_t *)&de->offset;
     }
     else
     {
-        de.value = malloc(de.len);
-        fseek(f, de.offset, SEEK_SET);
-        fread(de.value, de.len, 1, f);
+        de->value = malloc(de->len);
+        fseek(f, de->offset, SEEK_SET);
+        fread(de->value, de->len, 1, f);
     }
-    switch(de.type) {
+    switch(de->type) {
         case TAG_BYTE:
             break;
         case TAG_SHORT:
@@ -83,18 +83,63 @@ read_de(TIFF * t, FILE *f)
 int 
 read_ifd(TIFF *t, FILE *f)
 {
-    t->ifd = malloc(sizeof(struct tiff_file_directory));
-    fread(&t->ifd->num, 2, 1, f);
-    for (int i = 0; i < t->ifd->num; i++) {
-        read_de(t, f);
+    t->ifd_num ++;
+    if (t->ifd == NULL)
+        t->ifd = malloc(sizeof(struct tiff_file_directory));
+    else {
+        t->ifd = realloc(t->ifd, t->ifd_num * sizeof(struct tiff_file_directory));
     }
-    fread(&t->ifd->next_offset, 4, 1, f);
-    if(t->ifd->next_offset) {
-        fseek(f, t->ifd->next_offset, SEEK_SET);
-        return 1;
+    fread(&t->ifd[t->ifd_num-1].num, 2, 1, f);
+    t->ifd[t->ifd_num-1].de = malloc(sizeof(struct tiff_directory_entry) * t->ifd[t->ifd_num-1].num);
+    for (int i = 0; i < t->ifd[t->ifd_num-1].num; i++) {
+        read_de(t->ifd[t->ifd_num-1].de + i, f);
     }
+    fread(&t->ifd[t->ifd_num-1].next_offset, 4, 1, f);
+    if(t->ifd[t->ifd_num-1].next_offset) {
+        fseek(f, t->ifd[t->ifd_num-1].next_offset, SEEK_SET);
+        read_ifd(t, f);
+    }
+
     return 0;
-} 
+}
+
+int read_int_from_de(struct tiff_directory_entry *de)
+{
+    switch(de->type) {
+        case TAG_BYTE:
+        case TAG_SHORT:
+        case TAG_LONG:
+            return de->offset;
+        default:
+            break;
+    }
+    return *de->value;
+}
+
+static void 
+tiff_compose_image_from_de(TIFF *t)
+{
+    for (int i = 0; i < t->ifd_num; i ++) {
+        for(int j = 0; j < t->ifd[i].num; j ++) {
+            switch (t->ifd[i].de[j].tag) {
+                case TID_IMAGEWIDTH:
+                    t->ifd[i].width = read_int_from_de(&t->ifd[i].de[j]);
+                    break;
+                case TID_IMAGEHEIGHT:
+                    t->ifd[i].height = read_int_from_de(&t->ifd[i].de[j]);
+                    break;
+                case TID_SAMPLESPERPIXEL:
+                    t->ifd[i].depth = read_int_from_de(&t->ifd[i].de[j]);
+                    break;
+                case TID_COMPRESSION:
+                    t->ifd[i].compression = read_int_from_de(&t->ifd[i].de[j]);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+}
 
 struct pic*
 TIFF_load(const char *filename)
@@ -105,10 +150,10 @@ TIFF_load(const char *filename)
     p->pic = t;
     fread(&t->ifh, sizeof(struct tiff_file_header), 1, f);
     fseek(f, t->ifh.start_offset, SEEK_SET);
-    int next = read_ifd(t, f);
-    while (next) {
-        next = read_ifd(t, f);
-    }
+    read_ifd(t, f);
+    
+    fclose(f);
+    tiff_compose_image_from_de(t);
 
     return p;
 }
@@ -118,6 +163,8 @@ TIFF_free(struct pic * p)
 {
     TIFF * t = (TIFF *)p->pic;
     free(t);
+    if (t->ifd)
+        free(t->ifd);
     free(p);
 }
 
@@ -128,8 +175,11 @@ TIFF_info(FILE *f, struct pic* p)
     fprintf(f, "TIFF file format:\n");
     fprintf(f, "\tbyte order: %s\n", t->ifh.byteorder == 0x4D4D ? 
                     "big endian": "little endian");
+    fprintf(f, "\tIFD num: %d\n", t->ifd_num);
     fprintf(f, "----------------------------------\n");
-    fprintf(f, "\tifd %d\n", t->ifd->num);
+    fprintf(f, "\tfirst IFD: DE num %d\n", t->ifd->num);
+    fprintf(f, "\tfirst IFD: width %d, height %d, depth %d, compression %d\n",
+         t->ifd->width, t->ifd->height, t->ifd->depth, t->ifd->compression);
     fprintf(f, "\n");
 }
 

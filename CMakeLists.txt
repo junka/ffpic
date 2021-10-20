@@ -62,9 +62,13 @@ add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CO
 target_link_libraries(picinfo z)
 target_link_libraries(picshow z)
 
+add_executable(coding_test "${FFPIC_ROOT}/app/coding_test.c" ${FFPIC_CODING})
+target_link_libraries(coding_test z)
+
 target_link_libraries(picshow ffpic)
 target_include_directories(picshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
+target_include_directories(coding_test PRIVATE ${FFPIC_DIRS})
 
 if(SDL2_FOUND)
   target_include_directories(ffpic PRIVATE ${SDL2_INCLUDE_DIRS})

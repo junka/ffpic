@@ -6,22 +6,19 @@ extern "C"{
 #endif
 
 typedef struct huffman_tree {
-	unsigned* tree2d;
+	int* tree2d;
 	unsigned* tree1d;
-	unsigned* lengths; /*the lengths of the codes of the 1d-tree*/
-	unsigned maxbitlen;	/*maximum number of bits a single code can get */
-	unsigned numcodes;	/*number of symbols in the alphabet = number of codes */
+	uint8_t* lengths; /*the lengths of the codes of the 1d-tree*/
+	int maxbitlen;	/*maximum number of bits a single code can get */
+	int numcodes;	/*number of symbols in the alphabet = number of codes */
 } huffman_tree;
 
 
-void 
-huffman_tree_init(huffman_tree* tree, unsigned* buffer, unsigned numcodes, unsigned maxbitlen);
+void huffman_tree_init(huffman_tree* tree, int* buffer, int numcodes, int maxbitlen);
 
 void huffman_tree_create_lengths(huffman_tree* tree, const unsigned *bitlen);
 
-unsigned 
-huffman_decode_symbol(const unsigned char *in, unsigned long *bp, 
-                    const huffman_tree* codetree, unsigned long inlength);
+int huffman_decode_symbol(uint8_t *in, int *bp, huffman_tree* codetree, int inbitlength);
 
 #ifdef __cplusplus
 }

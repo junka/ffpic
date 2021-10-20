@@ -4,20 +4,43 @@
 
 #include "huffman.h"
 
-#define MAX_BIT_LENGTH 15 /* largest bitlen used by any tree type */
-#define MAX_SYMBOLS 288 /* largest number of symbols used by any tree type */
+#define MAX_BIT_LENGTH 16 /* largest bitlen used by any tree type */
+#define MAX_SYMBOLS 256 /* largest number of symbols used by any tree type */
+
+#define READ_BIT(x, i)	((x[(i) >> 3] >> ((i) & 0x7)) & 0x1)
+
+static inline uint8_t  __read_bits(uint8_t *x, uint8_t i, uint8_t n)
+{
+	uint8_t ret = 0;
+	for (uint8_t d = 0; d < n; d ++) {
+		ret |= READ_BIT(x, i+d) << d;
+	}
+	return ret;
+}
+
+#define READ_BITS(x, i, n) __read_bits(x, i, n)
 
 void 
-huffman_tree_init(huffman_tree* tree, unsigned* buffer, unsigned numcodes, unsigned maxbitlen)
+huffman_tree_init(huffman_tree* tree, int* buffer, int numcodes, int maxbitlen)
 {
 	tree->tree2d = buffer;
-	tree->tree1d = 0;
+	tree->tree1d = NULL;
+	tree->lengths = NULL;
 
 	tree->numcodes = numcodes;
 	tree->maxbitlen = maxbitlen;
 }
 
-/*given the code lengths (as stored in the PNG file), generate the tree as defined by Deflate. maxbitlen is the maximum bits that a code in the tree can have. return value is error.*/
+void 
+huffman_cleanup(huffman_tree* tree)
+{
+	free(tree->tree2d);
+	free(tree->tree1d);
+	free(tree->lengths);
+}
+
+/* given the code lengths (as stored in the PNG file), generate the tree as defined by Deflate.
+ * maxbitlen is the maximum bits that a code in the tree can have. return value is error. */
 void huffman_tree_create_lengths(huffman_tree* tree, const unsigned *bitlen)
 {
 	unsigned tree1d[MAX_SYMBOLS];
@@ -84,30 +107,35 @@ void huffman_tree_create_lengths(huffman_tree* tree, const unsigned *bitlen)
 	}
 }
 
-unsigned 
-huffman_decode_symbol(const unsigned char *in, unsigned long *bp, 
-                    const huffman_tree* codetree, unsigned long inlength)
+
+
+int
+huffman_decode_symbol(uint8_t *in, int *bp, huffman_tree* codetree, int inbitlength)
 {
 	unsigned treepos = 0, ct;
 	uint8_t bit;
 	for (;;) {
 		/* error: end of input memory reached without endcode */
-		if (((*bp) & 0x07) == 0 && ((*bp) >> 3) > inlength) {
-			return 0;
+		// if (((*bp) & 0x07) == 0 && ((*bp) >> 3) > inbitlength) {
+		// 	return 0;
+		// }
+		if (*bp >= inbitlength) {
+			return -1;
 		}
 
-		// bit = read_bit(bp, in);
-        bit = (unsigned char)((in[(*bp) >> 3] >> ((*bp) & 0x7)) & 1);
-        (*bp)++;
+		bit = READ_BIT(in, *bp);
+		(*bp)++;
 
 		ct = codetree->tree2d[(treepos << 1) | bit];
 		if (ct < codetree->numcodes) {
+			/* get decoded symbol */
 			return ct;
 		}
 
 		treepos = ct - codetree->numcodes;
 		if (treepos >= codetree->numcodes) {
-			return 0;
+			return -1;
 		}
 	}
 }
+

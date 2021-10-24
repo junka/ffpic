@@ -5,20 +5,32 @@
 extern "C"{
 #endif
 
+#define MAX_BIT_LEN (16)
+#define FAST_HF_SIZE (256)
+
 typedef struct huffman_tree {
-	int* tree2d;
-	unsigned* tree1d;
-	uint8_t* lengths; /*the lengths of the codes of the 1d-tree*/
-	int maxbitlen;	/*maximum number of bits a single code can get */
-	int numcodes;	/*number of symbols in the alphabet = number of codes */
+	uint8_t fast[2][FAST_HF_SIZE];	/* lookup table for 8 bit codec, align all codes to 8 bits*/
+									/* 0 for codes, 1 for symbols */
+	uint16_t* slow[MAX_BIT_LEN - 8][2];	   /* symbols length over 8 bits */
+	uint8_t slow_cnt[MAX_BIT_LEN - 8];
+	int maxbitlen;	   /*maximum number of bits a single code can get */
+	int numcodes;	   /*number of symbols in the alphabet = number of codes */
 } huffman_tree;
 
 
-void huffman_tree_init(huffman_tree* tree, int* buffer, int numcodes, int maxbitlen);
+huffman_tree* huffman_tree_init();
 
-void huffman_tree_create_lengths(huffman_tree* tree, const unsigned *bitlen);
+void huffman_cleanup(huffman_tree *t);
 
-int huffman_decode_symbol(uint8_t *in, int *bp, huffman_tree* codetree, int inbitlength);
+void huffman_build_lookup_table(huffman_tree* tree, const uint8_t count[16], const uint8_t syms[]);
+
+void huffman_decode_start(uint8_t *in, int inbytelen);
+
+int huffman_decode_symbol(huffman_tree* codetree);
+
+int huffman_read_symbol(int n);
+
+void huffman_decode_end(void);
 
 #ifdef __cplusplus
 }

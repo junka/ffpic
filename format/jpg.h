@@ -34,22 +34,27 @@ extern "C" {
 
 
 #define COM MARKER(0xFE)
+
+
+#define EOB (0x00)
+
  
 #pragma pack(push, 1)
 
-struct jpg_color {
-    uint8_t Y;
-    uint8_t Cb;
-    uint8_t Cr;
+struct jpg_component {
+    uint8_t cid; /* component Id (1 = Y, 2 = Cb, 3 = Cr, 4 = I, 5 = Q)*/
+    uint8_t vertical : 4;  /* sampling factors , bit 0-3 vertical., 4-7 horizontal.*/
+    uint8_t horizontal : 4;
+    uint8_t qt_id;  /* quantization table number */
 };
 
 struct start_frame {
     uint16_t len;
-    uint8_t accur;
+    uint8_t precision;  /*This is in bits/sample, usually 8 (12 and 16 not supported by most software).*/
     uint16_t height;
     uint16_t width;
-    uint8_t color_num; // 3 for YCbCr or YIQ , and 4 for CMYK
-    struct jpg_color *colors;
+    uint8_t components_num; // 1 for grey scaled, 3 for YCbCr or YIQ , and 4 for CMYK
+    struct jpg_component *colors;
 };
 
 struct jfif {
@@ -67,9 +72,9 @@ struct jfif {
 
 struct dqt {
     uint16_t len;
-    uint8_t qulity:4;   /* 0 means 8bits, 1 means 16bits*/
+    uint8_t precision:4;   /* 0 means 8bits, 1 means 16bits*/
     uint8_t id:4;       /* 0 - 3 */
-    uint64_t *tdata;
+    uint16_t *tdata;
 };
 
 struct dht {
@@ -81,7 +86,7 @@ struct dht {
 
 };
 
-struct scan_header {
+struct comp_sel {
     uint8_t component_selector;
     uint8_t DC_entropy:4;
     uint8_t AC_entropy:4;
@@ -89,8 +94,8 @@ struct scan_header {
 
 struct start_of_scan {
     uint16_t len;
-    uint8_t nums;
-    struct scan_header* sheaders;
+    uint8_t nums; //same with start_frame components_num, 1 for grey, 3 for YCbCr, 4 for CMYK
+    struct comp_sel* comps;
     uint8_t predictor_start;
     uint8_t predictor_end;
     uint8_t approx_bits_h:4;
@@ -112,6 +117,7 @@ typedef struct {
     struct dht dht[2][16];
     struct start_of_scan sos;
     struct comment_segment comment;
+    uint8_t *data;
 }JPG;
 
 

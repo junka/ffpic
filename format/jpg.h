@@ -141,7 +141,7 @@ struct restart_interval {
     uint16_t interval; /* This is in units of MCU blocks, means that every n MCU
                         blocks a RSTn marker can be found. The first marker will
                         be RST0, then RST1 etc, after RST7 repeating from RST0.*/
-}
+};
 
 #pragma pack(pop)
 

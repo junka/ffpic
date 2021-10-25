@@ -449,11 +449,11 @@ YCrCB_to_RGB24(JPG *j, uint8_t* Y, uint8_t* Cr, uint8_t* Cb, int v)
 #define SCALEBITS       10
 #define ONE_HALF        (1UL << (SCALEBITS-1))
 #define FIX(x)          ((int)((x) * (1UL<<SCALEBITS) + 0.5))
-
+    int width = j->sof.width % 8 == 0 ? j->sof.width : j->sof.width + 8 - (j->sof.width % 8);
 	p = j->data;
-	p2 = j->data + j->sof.width * 3;
+	p2 = j->data + width * 3;
 
-	offset_to_next_row = (j->sof.width * 3 * 2) - 16 * 3;
+	offset_to_next_row = (width * 3 * 2) - 16 * 3;
 	for (int i = 0; i < 8; i++) {
 
 		for (int k = 0; k < 8; k++) {
@@ -533,7 +533,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     int bytes_block = pitch * ystride;
     int bytes_mcu = xstride * 3;
     uint8_t *ptr;
-    j->data = malloc(j->sof.width * j->sof.height * 4);
+    int width = j->sof.width % 8 == 0 ? j->sof.width : j->sof.width + 8 - (j->sof.width % 8);
+    int height = j->sof.height % 8 == 0 ? j->sof.height : j->sof.height + 8 - (j->sof.height % 8);
+    j->data = malloc(width * height * 4);
     printf("bytes per block %d, bytes per mcu %d\n", bytes_block, bytes_mcu);
 #if 0
     #include "utils.h"
@@ -542,9 +544,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     huffman_decode_start(data, len);
     uint8_t Y[64*4], Cr[64], Cb[64];
 
-    for (int y = 0; y < j->sof.height / ystride; y++) {
+    for (int y = 0; y < height / ystride; y++) {
         ptr = j->data + y * bytes_block;
-        for (int x = 0; x < j->sof.width; x += xstride) {
+        for (int x = 0; x < width; x += xstride) {
             // Y
             for (int cy = 0; cy < yn; cy++) {
                 decode_data_unit(d);
@@ -578,7 +580,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 void 
 read_compressed_image(JPG* j, FILE *f)
 {
-    uint8_t* compressed = malloc(j->sof.width * j->sof.height *j->sof.components_num);
+    int width = j->sof.width % 8 == 0 ? j->sof.width : j->sof.width + 8 - (j->sof.width % 8);
+    int height = j->sof.height % 8 == 0 ? j->sof.height : j->sof.height + 8 - (j->sof.height % 8);
+    uint8_t* compressed = malloc(width * height *j->sof.components_num);
     uint8_t prev , c = fgetc(f);
     int l = 0;
     do {
@@ -698,8 +702,9 @@ JPG_free(struct pic *p)
             free(j->dqt[i].tdata);
         }
     }
-    if (j->data)
+    if (j->data) {
         free(j->data);
+    }
     free(j);
     free(p);
 }

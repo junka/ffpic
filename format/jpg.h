@@ -16,9 +16,37 @@ extern "C" {
 #define MARKER(v) _MARKER(0xFF, v)
 
 #define SOF0 MARKER(0xC0)
+#define SOF1 MARKER(0xC1)
+/* usually unsupported below */
 #define SOF2 MARKER(0xC2)
+#define SOF3 MARKER(0xC3)
+
+#define SOF5 MARKER(0xC5)
+#define SOF6 MARKER(0xC6)
+#define SOF7 MARKER(0xC7)
+
+//for arithmetic coding, usually unsupported
+#define SOF9 MARKER(0xC9)
+#define SOF10 MARKER(0xCA)
+#define SOF11 MARKER(0xCB)
+
+#define SOF13 MARKER(0xCD)
+#define SOF14 MARKER(0xCE)
+#define SOF15 MARKER(0xCF)
+
+//undefined/reserved (causes decoding error)
+// #define JPG     MARKER(0xC8)
+// ignore (skip)
+#define JPG0    MARKER(0xF0)
+#define JPG13   MARKER(0xFD)
 
 #define DHT MARKER(0xC4)
+
+//Define Arithmetic Table
+#define DAC MARKER(0xCC)
+
+//RSTn for resync, may be ignored
+#define RST0 MARKER(0xD0)
 
 #define SOI MARKER(0xD8)
 #define EOI MARKER(0xD9)
@@ -107,6 +135,13 @@ struct comment_segment {
     uint16_t len;
     uint8_t *data;
 };
+
+struct restart_interval {
+    uint16_t len;
+    uint16_t interval; /* This is in units of MCU blocks, means that every n MCU
+                        blocks a RSTn marker can be found. The first marker will
+                        be RST0, then RST1 etc, after RST7 repeating from RST0.*/
+}
 
 #pragma pack(pop)
 

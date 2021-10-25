@@ -45,7 +45,7 @@ int main()
     uint8_t dc[16]={0, 2, 2, 3, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     uint8_t syms[] = {3, 4, 2, 5, 1, 6, 7, 0, 8, 9};
     huffman_tree *tree = huffman_tree_init();
-    huffman_build_lookup_table(tree, dc, syms);
+    huffman_build_lookup_table(tree, 0, 0, dc, syms);
     uint8_t data[] = {0xFC , 0xFF, 0xE2 , 0xAF , 0xEF , 0xF3 , 0x15, 0x7F};
     huffman_decode_start(data, 8);
     int a = huffman_decode_symbol(tree);

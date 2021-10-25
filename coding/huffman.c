@@ -56,7 +56,8 @@ read_bits(struct bits_vec *v, int n)
 {
 	uint8_t read = 0;
 	int ret = 0;
-	if (v->offset > 0) {
+	if (v->offset > 0)
+	{
 		ret = *(v->ptr);
 		ret &= ((1 << (8 - v->offset)) - 1);
 		read = 8 - v->offset;
@@ -68,12 +69,12 @@ read_bits(struct bits_vec *v, int n)
 		read += 8;
 	}
 	if (read > 8)
-		ret >>= ((8 + n - read) % 8);
+		ret >>= ((read - n) % 8);
 	else 
-		ret >>= ((read - n)%8);
+		ret >>= ((read - n) % 8);
 	ret &= ((1 << n) -1);
 	// printf("ret %d, read %d\n", ret, read);
-	if((n + v->offset)%8) {
+	if((n + v->offset) % 8) {
 		v->ptr --;
 	}
 	v->offset = ((v->offset + (n%8))%8);
@@ -121,26 +122,47 @@ huffman_cleanup(huffman_tree* tree)
 {
 	for (int i = 0; i < MAX_BIT_LEN - 8; i ++) {
 		for (int j = 0; j < 2; j ++) {
-			if (tree->slow[i][j])
+			if (tree->slow[i][j]) {
 				free(tree->slow[i][j]);
+			}
 		}
 	}
 	free(tree);
 }
 
+void
+huffman_dump_table(huffman_tree* tree)
+{
+	printf("%p: %s %d\n", tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
+	printf("fast lookup table:\n");
+	for (int i = 0; i < 256; i ++) {
+		printf("\t%d\t%x\t%d\n", i, tree->fast[0][i], tree->fast[1][i]);
+	}
+	printf("slow lookup table:\n");
+	for (int i = 9; i <= 16; i ++) {
+		for (int j = 0; j < tree->slow_cnt[i-9]; j ++) {
+			printf("\t%d\t%x\t%d\n", tree->slow[i-9][0][j], tree->slow[i-9][1][j], i);
+		}
+	}
+}
+
 /* given the code lengths, generate the tree 
  * maxbitlen is the maximum bits that a code in the tree can have. return value is error. */
 void 
-huffman_build_lookup_table(huffman_tree* tree, const uint8_t count[16], const uint8_t syms[])
+huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uint8_t count[16], const uint8_t syms[])
 {
-	uint8_t coding[MAX_SYMBOLS];
+	uint16_t coding[MAX_SYMBOLS];
 	uint8_t bitlen[MAX_SYMBOLS];
 	unsigned bits, n = 0, i = 0;
 	int maxbitlen = 0, numofcodes = 0;
     int k = 0;
 
+	tree->dc_ac = dc;
+	tree->tid = id;
 	/* initialize local vectors */
-	memset(coding, 0xFF, sizeof(coding));
+	memset(tree->fast[0], 0xFF, FAST_HF_SIZE);
+	memset(tree->slow, 0, sizeof(uint16_t*)*(MAX_BIT_LEN - 8)*2);
+	memset(coding, 0xFFFF, sizeof(coding));
 	memset(bitlen, 0, sizeof(bitlen));
 
     for (int i = MAX_BIT_LENGTH - 1; i >= 0; i--) {
@@ -185,8 +207,8 @@ huffman_build_lookup_table(huffman_tree* tree, const uint8_t count[16], const ui
 			for (int j = 0; j < (1 << (8 - bitlen[i])); j ++) {
 				tree->fast[0][((coding[i] << (8 - bitlen[i])) | j)] = syms[i];
 				tree->fast[1][((coding[i] << (8 - bitlen[i])) | j)] = bitlen[i];
-#if NDEBUG
-				printf("i %d bitlen %d ,code %d fast %d \n", i, bitlen[i], coding[i],
+#if 0
+				printf("ith %d bitlen %d ,code %x, sym %x, fast %d \n", i, bitlen[i], coding[i], syms[i],
 					 (coding[i] << (8 - bitlen[i]))|j);
 #endif
 			}
@@ -195,10 +217,10 @@ huffman_build_lookup_table(huffman_tree* tree, const uint8_t count[16], const ui
 		}
 	}
 	//we need slow table when max bits greater than 8
-	for (int j = 8; j <= bits; j ++) {
-		tree->slow_cnt[j-8] = count[j];
-		tree->slow[j-8][0] = malloc(count[j]);
-		tree->slow[j-8][1] = malloc(count[j]);
+	for (int j = 9; j <= bits; j ++) {
+		tree->slow_cnt[j-9] = count[j];
+		tree->slow[j-9][0] = malloc(count[j]);
+		tree->slow[j-9][1] = malloc(count[j]);
 	}
 	//build slow lookup list
 	for (; i < numofcodes; i ++) {
@@ -208,7 +230,7 @@ huffman_build_lookup_table(huffman_tree* tree, const uint8_t count[16], const ui
 
 		tree->slow[bitlen[i] - 8 - 1][0][n] = coding[i];
 		tree->slow[bitlen[i] - 8 - 1][1][n] = syms[i];
-		// printf("n %d, slow bitlen %d, coding %x, sym %x\n",n, bitlen[i], coding[i], syms[i]);
+		// printf("ith %d, slow bitlen %d, coding %x, sym %x\n", i, bitlen[i], coding[i], syms[i]);
 		n ++;
 	}
 }
@@ -225,9 +247,13 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	ct = tree->fast[0][c];
 	if (ct != 0xFF) {
 		/* get decoded symbol */
+		// if(tree->fast[1][c] == 0) {
+		// 	printf("decoded bitlen is 0, tree %d %d\n", tree->dc_ac, tree->tid);
+		// 	huffman_dump_table(tree);
+		// }
 		// printf("off %d decode %d, bitlen %d\n", v->offset, ct, tree->fast[1][c]);
 		STEP_BACK(v, 8 - tree->fast[1][c]);
-		printf("read %x index %ld off %d decode %d, bitlen %d\n", c, v->ptr-v->start, v->offset, ct, tree->fast[1][c]);
+		// printf("read %x index %ld off %d decode %d, bitlen %d\n", c, v->ptr-v->start, v->offset, ct, tree->fast[1][c]);
 		return ct;
 	}
 	bl = 8;
@@ -236,7 +262,7 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 		c = ( (c << 1) | READ_BIT(v));
 		for (int i =0; i < tree->slow_cnt[bl-8]; i ++) {
 			if ( c == tree->slow[bl-8][0][i]) {
-				printf("offset %d decode %d, bitlen %d\n", v->offset, c, bl);
+				// printf("offset %d decode %d, bitlen %d\n", v->offset, c, bl);
 				return tree->slow[bl-8][1][i];
 			}
 		}

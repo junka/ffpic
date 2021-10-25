@@ -391,8 +391,9 @@ decode_data_unit(struct decoder *d)
             else if (lead_zero == 0) 
                 lead_zero = 64 - i;
         }
-        while (lead_zero--) {
+        while (lead_zero>0) {
             p[zigzag[i++]] = 0;
+            lead_zero--;
         }
 
         if (ac) {
@@ -417,8 +418,8 @@ init_decoder(JPG* j, struct decoder *d, uint8_t comp_id)
     huffman_tree * ac_tree= huffman_tree_init();
     int dc_ht_id = j->sos.comps[comp_id].DC_entropy;
     int ac_ht_id = j->sos.comps[comp_id].AC_entropy;
-    huffman_build_lookup_table(dc_tree, j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
-    huffman_build_lookup_table(dc_tree, j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
+    huffman_build_lookup_table(dc_tree, 0, dc_ht_id, j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
+    huffman_build_lookup_table(ac_tree, 1, ac_ht_id, j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -524,17 +525,19 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     for (int i = 0; i < j->sof.components_num; i ++) {
         init_decoder(j, d+i, i);
     }
+    // huffman_dump_table(d[0].dc);
     int ystride = j->sof.colors[0].vertical * 8;
     int xstride = j->sof.colors[0].horizontal * 8;
     int pitch = j->sof.width * 3;
+    // int pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     int bytes_block = pitch * ystride;
     int bytes_mcu = xstride * 3;
     uint8_t *ptr;
-    j->data = malloc(j->sof.width * j->sof.height * 3);
-
-#if 1
+    j->data = malloc(j->sof.width * j->sof.height * 4);
+    printf("bytes per block %d, bytes per mcu %d\n", bytes_block, bytes_mcu);
+#if 0
     #include "utils.h"
-    hexdump(stdout, "jpg raw data", data, 8);
+    hexdump(stdout, "jpg raw data", data, 16);
 #endif
     huffman_decode_start(data, len);
     uint8_t Y[64*4], Cr[64], Cb[64];
@@ -556,15 +559,14 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
             decode_data_unit(d+2);
             idct_float(d, Cb, 8);
 
-
             YCrCB_to_RGB24(j, Y, Cr, Cb, yn);
 
             j->data += bytes_mcu;
         }
     }
+    #include "utils.h"
+    hexdump(stdout, "jpg decode data", j->data, 160);
 
-    
-    
     for (int i = 0; i < j->sof.components_num; i ++) {
         destroy_decoder(d+i);
     }
@@ -591,7 +593,7 @@ read_compressed_image(JPG* j, FILE *f)
         }
     } while( prev != 0xFF || (prev == 0xFF && c == 0));
 
-    JPG_decode_image(j, compressed, l);
+    // JPG_decode_image(j, compressed, l);
     fseek(f, -2, SEEK_CUR);
     free(compressed);
 }
@@ -618,6 +620,7 @@ JPG_load(const char *filename)
 {
     struct pic *p = calloc(1, sizeof(struct pic));
     JPG *j = calloc(1, sizeof(JPG));
+    j->data = NULL;
     p->pic = j;
     FILE *f = fopen(filename, "rb");
     uint16_t soi, m, len;
@@ -630,8 +633,8 @@ JPG_load(const char *filename)
                 j->sof.len = ntohs(j->sof.len);
                 j->sof.height = ntohs(j->sof.height);
                 j->sof.width = ntohs(j->sof.width);
-                j->sof.colors = malloc(j->sof.components_num*3);
-                fread(j->sof.colors, 3, j->sof.components_num, f);
+                j->sof.colors = malloc(j->sof.components_num * sizeof(struct jpg_component));
+                fread(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num, f);
                 break;
             case APP0:
                 fread(&j->app0, 16, 1, f);
@@ -695,7 +698,8 @@ JPG_free(struct pic *p)
             free(j->dqt[i].tdata);
         }
     }
-    free(j->data);
+    if (j->data)
+        free(j->data);
     free(j);
     free(p);
 }

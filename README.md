@@ -28,6 +28,7 @@ supported file formart is:
 | PGM | y | Portable GrayMap image |
 | PPM | y | Portable PixelMap image |
 | PAM | * | Portable Arbitrary image |
+| TGA | * | |
 
 ### display rgb data
 Tips on display:

@@ -6,7 +6,7 @@
 #include "file.h"
 #include "pnm.h"
 
-int 
+static int 
 PNM_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
@@ -285,7 +285,8 @@ read_pam_data(PNM *m, FILE *f)
     }
 }
 
-struct pic* PNM_load(const char *filename)
+static struct pic* 
+PNM_load(const char *filename)
 {
     struct pic * p = calloc(sizeof(struct pic), 1);
     PNM *m = (PNM *)calloc(sizeof(PNM), 1);
@@ -357,7 +358,8 @@ struct pic* PNM_load(const char *filename)
 }
 
 
-void PNM_free(struct pic *p)
+static void 
+PNM_free(struct pic *p)
 {
     PNM *m = (PNM *)p->pic;
     free(m->data);
@@ -366,7 +368,7 @@ void PNM_free(struct pic *p)
 }
 
 
-void 
+static void 
 PNM_info(FILE *f, struct pic* p)
 {
     PNM *m = (PNM *)p->pic;

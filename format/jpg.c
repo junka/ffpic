@@ -354,6 +354,53 @@ idct_float(struct decoder *d, uint8_t *output_buf, int stride)
   }
 }
 
+
+int IDCT2(float* dst, uint16_t * block)
+{
+    float trans_matrix[8][8] = {
+        {0.3536,    0.3536,    0.3536,    0.3536,    0.3536,    0.3536,    0.3536,    0.3536,},
+        {0.4904,    0.4157,    0.2778,    0.0975,   -0.0975,   -0.2778,   -0.4157,   -0.4904,},
+        {0.4619,    0.1913,   -0.1913,   -0.4619,   -0.4619,   -0.1913,    0.1913,    0.4619,},
+        {0.4157,   -0.0975,   -0.4904,   -0.2778,    0.2778,    0.4904,    0.0975,   -0.4157,},
+        {0.3536,   -0.3536,   -0.3536,    0.3536,    0.3536,   -0.3536,   -0.3536,    0.3536,},
+        {0.2778,   -0.4904,    0.0975,    0.4157,   -0.4157,   -0.0975,    0.4904,   -0.2778,},
+        {0.1913,   -0.4619,    0.4619,   -0.1913,   -0.1913,    0.4619,   -0.4619,    0.1913,},
+        {0.0975,   -0.2778,    0.4157,   -0.4904,    0.4904,   -0.4157,    0.2778,   -0.0975,},
+    };
+
+    float tmp[8][8];
+
+    float t=0;
+    int i,j,k;
+    for(i=0;i<8;i++)  //same as A'*I
+	{
+        for(j=0;j<8;j++)
+		{
+            t = 0;
+            for(k=0; k<8; k++)
+			{
+                t += trans_matrix[k][i] * block[k*8 + j]; //trans_matrix's ith column * block's jth column
+			}
+            tmp[i][j] = t;
+        }
+    }
+
+    for(i=0; i<8; i++)  //same as tmp*A
+	{
+        for(j=0; j<8; j++)
+		{
+            t=0;
+            for(k=0; k<8; k++)
+			{
+                t += tmp[i][k] * trans_matrix[k][j];
+			}
+            dst[i*8 + j] = t + 128;
+        }
+    }
+
+    return 0;
+}
+
 void 
 decode_data_unit(struct decoder *d)
 {
@@ -367,6 +414,16 @@ decode_data_unit(struct decoder *d)
         58, 59, 52, 45, 38, 31, 39, 46,
         53, 60, 61, 54, 47, 55, 62, 63
     };
+    // static const uint8_t zigzag[64] = {
+    //     0,  1,  5,  6, 14, 15, 27, 28,
+    //     2,  4,  7, 13, 16, 26, 29, 42,
+    //     3,  8, 12, 17, 25, 30, 41, 43,
+    //     9, 11, 18, 24, 31, 40, 44, 53,
+    //     10, 19, 23, 32, 39, 45, 52, 54,
+    //     20, 22, 33, 38, 46, 51, 55, 60,
+    //     21, 34, 37, 47, 50, 56, 59, 61,
+    //     35, 36, 48, 49, 57, 58, 62, 63
+    // };
     int dc, ac;
     uint16_t *p = d->buf;
     huffman_tree *dc_tree = d->dc;
@@ -550,16 +607,19 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
             // Y
             for (int cy = 0; cy < yn; cy++) {
                 decode_data_unit(d);
-                idct_float(d, Y + cy*64, 8);
+                // idct_float(d, Y + cy*64, 8);
+                IDCT2(Y + cy*64, d->buf);
             }
 
             //Cr
             decode_data_unit(d+1);
-            idct_float(d, Cr, 8);
+            // idct_float(d, Cr, 8);
+            IDCT2(Cr, d->buf);
 
             //Cb
             decode_data_unit(d+2);
-            idct_float(d, Cb, 8);
+            // idct_float(d, Cb, 8);
+            IDCT2(Cb, d->buf);
 
             YCrCB_to_RGB24(j, Y, Cr, Cb, yn);
 

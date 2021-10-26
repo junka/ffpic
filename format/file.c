@@ -7,6 +7,7 @@
 #include "tiff.h"
 #include "pnm.h"
 #include "jpg.h"
+#include "tga.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -58,4 +59,5 @@ file_ops_init(void)
     TIFF_init();
     PNM_init();
     JPG_init();
+    TGA_init();
 }

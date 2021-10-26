@@ -48,6 +48,7 @@ list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/tiff.c"
             "${FFPIC_ROOT}/format/pnm.c"
             "${FFPIC_ROOT}/format/jpg.c"
+            "${FFPIC_ROOT}/format/tga.c"
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)

@@ -44,9 +44,8 @@ TGA_probe(const char *filename)
         extra_size += header.color_map_length * (header.color_map_entry_size >> 3);
     }
     //judge by section size
-    if ((header.bits_depth >> 3) * header.height * header.width
-            + sizeof(struct tga_header) == filesize)
-            return 0;
+    if (header.bits_depth>>3 && header.bits_depth%8 == 0) 
+        return 0;
    
     return -EINVAL;
 }
@@ -54,19 +53,79 @@ TGA_probe(const char *filename)
 static void 
 read_color_map(TGA *t, FILE *f)
 {
-    fseek(f, t->head.color_map_start, SEEK_SET);
-    // fread(t-> t->head.color_map_entry_size, f);
+    int num = t->head.color_map_length;
+    //a non-zero first entry index allows to store only a required part of the color map in the file
+    if (t->head.color_map_first_index) {
+        num -= t->head.color_map_first_index;
+    }
+    t->cmap = malloc(num * t->head.color_map_entry_size>>3);
+    for (int i = 0; i < num; i ++) {
+        fread(t->cmap + i, t->head.color_map_entry_size/8, 1, f);
+    }
 }
 
 static void 
 read_uncompress_data(TGA *t, FILE *f)
 {
+    int pitch = (((((t->head.width + 3) >> 2) << 2) * 32 + 32 - 1) >> 5) << 2;
     if (t->head.image_type == IMAGE_UNCONPRESS_RGB) {
-        int pitch = (((((t->head.width + 3) >> 2) << 2) * 32 + 32 - 1) >> 5) << 2;
         for (int i = t->head.height-1; i >= 0; i --) {
-            // fread(t->data + pitch * i, pitch, 1, f);
+            if (t->head.bits_depth >16) { //24, 32
+                for (int j = 0; j < t->head.width; j ++) {
+                    fread(t->data + pitch * i + j * 4, t->head.bits_depth>>3, 1, f);
+                }
+            } else if (t->head.bits_depth == 16) {
+                //take it as RGB555
+                for (int j = 0; j < t->head.width; j ++) {
+                    uint16_t svalue;
+                    fread(&svalue, 2, 1, f);
+                    t->data[pitch * i + j * 4] = (svalue >> 10) & 0x1F;
+                    t->data[pitch * i + j * 4 + 1] = (svalue >> 5) & 0x1F;
+                    t->data[pitch * i + j * 4 + 2] = (svalue) & 0x1F;
+                }
+            }
+        }
+    } else if (t->head.image_type == IMAGE_UNCOMPRESS_INDEXED) {
+        for (int i = t->head.height-1; i >= 0; i --) {
             for (int j = 0; j < t->head.width; j ++) {
-                fread(t->data + pitch * i + j * 4, t->head.bits_depth>>3, 1, f);
+                int k = fgetc(f);
+                t->data[pitch * i + j * 4] = t->cmap[k].r;
+                t->data[pitch * i + j * 4 + 1] = t->cmap[k].g;
+                t->data[pitch * i + j * 4 + 2] = t->cmap[k].b;
+            }
+        }
+    }
+}
+
+static void 
+read_compress_data(TGA *t, FILE *f)
+{
+    uint32_t vl;
+    int rl = 0;
+    int raw = 0;
+    int pitch = (((((t->head.width + 3) >> 2) << 2) * 32 + 32 - 1) >> 5) << 2;
+    if (t->head.image_type == IMAGE_RLE_RGB) {
+        for (int i = t->head.height - 1; i >= 0; i --) {
+            for (int j = 0; j < t->head.width; j ++) {
+                if (t->head.bits_depth > 16) {
+                    if (rl == 0 && raw == 0) {
+                        vl = fgetc(f);
+                        if (vl & 0x80) { //RLE
+                            rl = (vl & 0x7F) + 1;
+                            fread(&vl, (t->head.bits_depth>>3), 1, f);
+                        } else { //RAW
+                            raw = (vl + 1);
+                        }
+                    }
+                    if (rl == 0 && raw != 0) {
+                        fread(t->data +pitch * i + j * 4, (t->head.bits_depth>>3), 1, f);
+                        raw --;
+                    } else if (rl != 0 && raw == 0) {
+                        *(uint32_t *)(t->data + pitch * i + j * 4) = vl;
+                        rl --;
+                    }
+                
+                }
             }
         }
     }
@@ -92,7 +151,12 @@ TGA_load(const char *filename)
     }
     switch (t->head.image_type) {
         case IMAGE_UNCONPRESS_RGB:
+        case IMAGE_UNCOMPRESS_INDEXED:
+        case IMAGE_UNCONPRESS_GREY:
             read_uncompress_data(t, f);
+            break;
+        case IMAGE_RLE_RGB:
+            read_compress_data(t, f);
             break;
         default:
             break;
@@ -106,6 +170,8 @@ static void
 TGA_free(struct pic *p)
 {
     TGA *t = (TGA *)p->pic;
+    if(t->cmap)
+        free(t->cmap);
     free(t);
     free(p);
 }
@@ -117,7 +183,11 @@ TGA_info(FILE *f, struct pic* p)
     fprintf(f, "TGA file formart:\n");
     fprintf(f, "-------------------------\n");
     fprintf(f, "\twidth %d: height %d\n", t->head.width, t->head.height);
-    fprintf(f, "\tcolor map size %d\n", t->head.color_map_length);
+    fprintf(f, "\tdepth %d format %d\n", t->head.bits_depth, t->head.image_type);
+    if (t->head.color_map_type) {
+        fprintf(f, "\tcolormap size %d, entry bits %d\n", t->head.color_map_length, t->head.color_map_entry_size);
+        fprintf(f, "\tcolormap first index at %u\n", t->head.color_map_first_index);
+    }
 }
 
 static struct file_ops tga_ops = {

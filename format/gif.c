@@ -74,7 +74,7 @@ void read_image(GIF* gif, FILE* f) {
 	int image_data_length = width * image->image_dsc.height;
 	image->data = (uint8_t*)malloc(image_data_length * 4);
 	
-	uint8_t* compressed = NULL;;
+	uint8_t* compressed = NULL;
 	uint8_t lzw_code_size = (uint8_t)fgetc(f);
 	int compressed_length = read_blocks(&compressed, f);
 

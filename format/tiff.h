@@ -30,12 +30,15 @@ enum tiff_compression_type {
     COMPRESSION_BI_LEVEL = 3,   //grey
     COMPRESSION_FAX_ENC = 4,    //grey
     COMPRESSION_LZW = 5,
-    COMPRESSION_JPEG = 6,
-    COMPRESSION_JPEG_NEW = 7,
-    COMPRESSION_DEFLFATE = 8,
+    COMPRESSION_OJPEG = 6,
+    COMPRESSION_JPEG = 7,
+    COMPRESSION_ADOBE_DEFLATE = 8,
     COMPRESSION_JBIG = 9,
     COMPRESSION_JBIG2 = 10,
     COMPRESSION_PACKBITS = 32773,
+    COMPRESSION_DEFLATE = 32946,
+    COMPRESSION_DCS = 32947,
+    COMPRESSION_JP2000 = 34712,
 };
 
 struct tiff_directory_entry {
@@ -57,6 +60,18 @@ enum orientation_dir {
     ORI_LEFT_BOTTOM = 8
 };
 
+enum tiff_metric {
+    METRIC_WhiteIsZero = 0,
+    METRIC_BlackIsZero = 1,
+    METRIC_RGB = 2,
+    METRIC_RGB_Palette = 3,
+    METRIC_Tranparency_Mask = 4,
+    METRIC_CMYK = 5,
+    METRIC_YCbCr = 6,
+    METRIC_CIELab = 8,
+};
+
+#define MAX_DESC_LEN (128)
 struct tiff_file_directory {
     uint16_t num;
     struct tiff_directory_entry * de;
@@ -78,6 +93,8 @@ struct tiff_file_directory {
     uint32_t strips_num;
     uint32_t* strip_offsets;
     uint32_t* strip_byte_counts;
+
+    char description[MAX_DESC_LEN];
 
     unsigned char *data;
 };

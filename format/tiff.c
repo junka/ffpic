@@ -6,7 +6,7 @@
 
 #include "file.h"
 #include "tiff.h"
-#include "deflate.h"
+#include "lzw.h"
 
 static int 
 TIFF_probe(const char *filename)
@@ -95,6 +95,14 @@ read_ifd(TIFF *t, FILE *f)
     return 0;
 }
 
+static void
+read_string_from_de(struct tiff_directory_entry *de, char* str)
+{
+    int l = get_tag_type_size(de->type) * de->num;
+    memcpy(str, de->value, l>MAX_DESC_LEN-1 ? MAX_DESC_LEN-1:l);
+    str[l] = '\0';
+}
+
 static void 
 read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
 {
@@ -156,9 +164,9 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
     } else if (ifd->compression == COMPRESSION_LZW) {
         // if (ifd->predictor == 2)
         decode = malloc(ifd->rows_per_strip * pitch);
-        int a = inflate_decode(raw, ifd->strip_byte_counts[id], decode, &size);
+        printf("raw %d\n", raw[0]);
+        lzw_decode(4, raw, ifd->strip_byte_counts[id], decode);
         free(raw);
-        printf("ret %d, ori %u size %d\n", a, ifd->strip_byte_counts[id], size);
     } else if (ifd->compression == COMPRESSION_PACKBITS) {
         decode = malloc(ifd->rows_per_strip * pitch);
         int i = 0, j =0, rep;
@@ -187,21 +195,30 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
 
     for (int i = 0; i < ifd->rows_per_strip; i ++) {
         for (int j = 0; j < width; j ++) {
-            if (ifd->metric == 2) {
+            if (ifd->metric == METRIC_RGB) {
                 for (int k = 0; k < ifd->depth; k ++) {
                     ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + ifd->depth - k -1] = decode[n++];
                 }
-            } else if (ifd->metric == 1 && ifd->depth == 1) {
+            } else if (ifd->metric == METRIC_BlackIsZero && ifd->depth == 1) {
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4] = decode[n];
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 1] = decode[n];
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 2] = decode[n];
                 n ++;
-            } else if (ifd->metric == 0 && ifd->depth == 1) {
+            } else if (ifd->metric == METRIC_WhiteIsZero && ifd->depth == 1) {
                 //0 as white
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4] = 0xFF - decode[n];
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 1] = 0xFF - decode[n];
                 ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 2] = 0xFF - decode[n];
                 n ++;
+            }
+
+            if (ifd->predictor == 2) {
+                if (j > 0) {
+                    for (int k = 0; k < ifd->depth; k ++) {
+                        ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + k] +=
+                            ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + (j - 1) * 4 + k];
+                    }
+                }
             }
         }
     }
@@ -279,6 +296,9 @@ tiff_compose_image_from_de(TIFF *t)
                     read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].predictor);
                     printf("TID_PREDICTOR %d\n", t->ifd[i].predictor);
                     break;
+                case TID_IMAGEDESCRIPTION:
+                    read_string_from_de(&t->ifd[i].de[j], t->ifd[i].description);
+                    break;
                 default:
                     printf("TAG %d TYPE %d\n", t->ifd[i].de[j].tag, t->ifd[i].de[j].type);
                     break;
@@ -354,6 +374,7 @@ TIFF_info(FILE *f, struct pic* p)
         fprintf(f, "\t%dth IFD: bitpersample %d, %d, %d, rows_per_strip %d\n", n, t->ifd[n].bitpersample[0],
             t->ifd[n].bitpersample[1],t->ifd[n].bitpersample[2], t->ifd[n].rows_per_strip);
         fprintf(f, "\t%dth IFD: predictor %d\n", n, t->ifd[n].predictor);
+        fprintf(f, "\t%dth IFD: %s\n", n, ((t->ifd[n].description[0] == '\0')? "":t->ifd[n].description));
         for(int i = 0; i < t->ifd[n].strips_num; i ++) {
             fprintf(f, "\tstrip offset: %d, bytes %d\n", t->ifd[n].strip_offsets[i], t->ifd[n].strip_byte_counts[i]);
         }

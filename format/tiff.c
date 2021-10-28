@@ -60,10 +60,8 @@ read_de(struct tiff_directory_entry *de, FILE *f)
     int tlen = get_tag_type_size(de->type) * de->num;
 
     if (tlen <= 4 ) {
-        // printf("TAG %d TYPE %d, NUM %d, off %x\n", de->tag, de->type, de->num, de->offset);
         de->value = NULL;
     } else {
-        // printf("TAG %d TYPE %d, NUM %d, off %x\n", de->tag, de->type, de->num, de->offset);
         de->value = malloc(tlen);
         long pos = ftell(f);
         fseek(f, de->offset, SEEK_SET);
@@ -88,7 +86,6 @@ read_ifd(TIFF *t, FILE *f)
     }
     fread(&t->ifd[t->ifd_num-1].next_offset, 4, 1, f);
     if(t->ifd[t->ifd_num-1].next_offset) {
-        printf("next ifd offset %x\n", t->ifd[t->ifd_num-1].next_offset);
         fseek(f, t->ifd[t->ifd_num-1].next_offset, SEEK_SET);
         read_ifd(t, f);
     }
@@ -108,12 +105,12 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
                     break;
                 case TAG_SHORT:
                 case TAG_SSHORT:
-                    *(val +i) = ((uint16_t)(de->value[i*2] << 8) | de->value[i*2 + 1]);
+                    *(val + i) = ((uint16_t)(de->value[i*2 + 1] << 8) | de->value[i*2]);
                     break;
                 case TAG_LONG:
                 case TAG_SLONG:
-                    *(val +i) = ((uint32_t)(de->value[i*4]<<24) | de->value[i*4 + 1] << 16 
-                            | de->value[i*4 + 2] << 8 | de->value[i*4 + 3]);
+                    *(val +i) = ((uint32_t)(de->value[i*4 + 3]<<24) | de->value[i*4 + 2] << 16 
+                            | de->value[i*4 + 1] << 8 | de->value[i*4]);
                     break;
                 default:
                     break;
@@ -132,6 +129,7 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
             case TAG_LONG:
             case TAG_SLONG:
                 *val = (de->offset);
+                // printf("TAG %d TYPE %d NUM %d OFFSET %d\n", de->tag, de->type, de->num, de->offset);
                 break;
             default:
                 break;
@@ -140,7 +138,26 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
 }
 
 static void
-read_image_data(TIFF *t, uint8_t *v)
+read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
+{
+    int width = ((t->ifd[0].width + 3) >> 2) << 2;
+    int height = t->ifd[0].height;
+    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    fseek(f, ifd->strip_offsets[id], SEEK_SET);
+    for (int i = 0; i < ifd->rows_per_strip; i ++) {
+        for (int j = 0; j < width; j ++) {
+            if (ifd->compression == COMPRESSION_NONE) {
+                for (int k = 0; k < ifd->depth; k ++) {
+                    fread(t->data + id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + ifd->depth - k -1, 1, 1, f);
+                }
+            }
+        }
+    }
+}
+
+
+static void
+read_image_data(TIFF *t, FILE *f)
 {
     int width = ((t->ifd[0].width + 3) >> 2) << 2;
     int height = t->ifd[0].height;
@@ -148,8 +165,9 @@ read_image_data(TIFF *t, uint8_t *v)
     if(t->data == NULL) {
         t->data = malloc(pitch * height);
     }
-    if (t->ifd[0].compression == 1) {
-        // memcpy(t->data, v, )
+
+    for (int i = 0; i < t->ifd[0].strips_num; i ++) {
+        read_strip(t, &t->ifd[0], i, f);
     }
 
 }
@@ -185,7 +203,7 @@ tiff_compose_image_from_de(TIFF *t)
                     read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].rows_per_strip);
                     break;
                 case TID_STRIPOFFSETS:
-                    // read_image_data(t, t->ifd[i].de[j].value);
+                    t->ifd[i].strips_num = t->ifd[i].de[j].num;
                     t->ifd[i].strip_offsets = calloc(t->ifd[i].de[j].num, sizeof(uint32_t));
                     read_int_from_de(&t->ifd[i].de[j], t->ifd[i].strip_offsets);
                     break;
@@ -197,7 +215,7 @@ tiff_compose_image_from_de(TIFF *t)
                     read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].pixel_store);
                     break;
                 case TID_PHOTOMETRICINTERPRETATION:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].whiteblack);
+                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].metric);
                     break;
                 default:
                     printf("TAG %d TYPE %d\n", t->ifd[i].de[j].tag, t->ifd[i].de[j].type);
@@ -222,6 +240,9 @@ TIFF_load(const char *filename)
     read_ifd(t, f);
 
     tiff_compose_image_from_de(t);
+
+    read_image_data(t, f);
+    
     fclose(f);
     p->width = ((t->ifd[0].width + 3) >> 2) << 2;
     p->height = t->ifd[0].height;
@@ -266,10 +287,13 @@ TIFF_info(FILE *f, struct pic* p)
     fprintf(f, "\tfirst IFD: DE num %d\n", t->ifd->num);
     fprintf(f, "\tfirst IFD: width %d, height %d, depth %d, compression %d\n",
          t->ifd->width, t->ifd->height, t->ifd->depth, t->ifd->compression);
-    fprintf(f, "\tfirst IFD: orientation %d, bitorder %d, pixel store as %d, white %d\n",
-         t->ifd->orientation, t->ifd->bit_order, t->ifd->pixel_store, t->ifd->whiteblack);
+    fprintf(f, "\tfirst IFD: orientation %d, bitorder %d, pixel store as %d, metric %d\n",
+         t->ifd->orientation, t->ifd->bit_order, t->ifd->pixel_store, t->ifd->metric);
     fprintf(f, "\tfirst IFD: bitpersample %d, %d, %d, rows_per_strip %d\n", t->ifd->bitpersample[0],
          t->ifd->bitpersample[1],t->ifd->bitpersample[2], t->ifd->rows_per_strip);
+    for(int i = 0; i < t->ifd->strips_num; i ++) {
+        fprintf(f, "strip offset: %d, bytes %d\n", t->ifd->strip_offsets[i], t->ifd->strip_byte_counts[i]);
+    }
     fprintf(f, "\n");
 }
 

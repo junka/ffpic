@@ -54,7 +54,7 @@ struct tiff_file_directory {
     struct tiff_directory_entry * de;
     uint32_t next_offset;
 
-    //keep below as uint32
+    //keep below as uint32_t aligned
     uint32_t height;
     uint32_t width;
     uint32_t depth;
@@ -63,8 +63,9 @@ struct tiff_file_directory {
     uint32_t bit_order;
     uint32_t orientation;
     uint32_t pixel_store; // 1 as chunky , 2 as planar; default is 1
-    uint32_t whiteblack; // 0 as white is zero, 1 as black is zero
+    uint32_t metric; // 0 as white is zero, 1 as black is zero, 2 rgb , 3 pallete
     uint32_t rows_per_strip;
+    uint32_t strips_num;
     uint32_t* strip_offsets;
     uint32_t* strip_byte_counts;
 };

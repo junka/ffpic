@@ -1,10 +1,12 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 
 #include "file.h"
 #include "tiff.h"
+#include "deflate.h"
 
 static int 
 TIFF_probe(const char *filename)
@@ -140,36 +142,88 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
 static void
 read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
 {
-    int width = ((t->ifd[0].width + 3) >> 2) << 2;
-    int height = t->ifd[0].height;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    int width = ((ifd->width + 3) >> 2) << 2;
+    int height = ifd->height;
+    int pitch = ((width * 32 + 31) >> 5) << 2;
     fseek(f, ifd->strip_offsets[id], SEEK_SET);
+    uint8_t *raw = malloc(ifd->strip_byte_counts[id]);
+    uint8_t *decode;
+    int size, n = 0;
+    fread(raw, ifd->strip_byte_counts[id], 1, f);
+    if (ifd->compression == COMPRESSION_NONE) {
+        decode = raw;
+        raw = NULL;
+    } else if (ifd->compression == COMPRESSION_LZW) {
+        // if (ifd->predictor == 2)
+        decode = malloc(ifd->rows_per_strip * pitch);
+        int a = inflate_decode(raw, ifd->strip_byte_counts[id], decode, &size);
+        free(raw);
+        printf("ret %d, ori %u size %d\n", a, ifd->strip_byte_counts[id], size);
+    } else if (ifd->compression == COMPRESSION_PACKBITS) {
+        decode = malloc(ifd->rows_per_strip * pitch);
+        int i = 0, j =0, rep;
+        while (i < ifd->strip_byte_counts[id]) {
+            if (raw[i] < 128) {
+                rep = (raw[i] + 1);
+                i ++;
+                memcpy(decode + j, raw + i , rep);
+                j += rep;
+                i += rep;
+            } else if (raw[i] > 128 ) {
+                rep = 257 - raw[i];
+                i ++;
+                while (rep > 0) {
+                    *(decode + j) = raw[i];
+                    rep --;
+                    j ++;
+                }
+                i ++;
+            } else {
+                i ++;
+            }
+        }
+        free(raw);
+    }
+
     for (int i = 0; i < ifd->rows_per_strip; i ++) {
         for (int j = 0; j < width; j ++) {
-            if (ifd->compression == COMPRESSION_NONE) {
+            if (ifd->metric == 2) {
                 for (int k = 0; k < ifd->depth; k ++) {
-                    fread(t->data + id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + ifd->depth - k -1, 1, 1, f);
+                    ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + ifd->depth - k -1] = decode[n++];
                 }
+            } else if (ifd->metric == 1 && ifd->depth == 1) {
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4] = decode[n];
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 1] = decode[n];
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 2] = decode[n];
+                n ++;
+            } else if (ifd->metric == 0 && ifd->depth == 1) {
+                //0 as white
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4] = 0xFF - decode[n];
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 1] = 0xFF - decode[n];
+                ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + 2] = 0xFF - decode[n];
+                n ++;
             }
         }
     }
+    free(decode);
 }
 
 
 static void
 read_image_data(TIFF *t, FILE *f)
 {
-    int width = ((t->ifd[0].width + 3) >> 2) << 2;
-    int height = t->ifd[0].height;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    if(t->data == NULL) {
-        t->data = malloc(pitch * height);
-    }
+    for (int n = 0; n < t->ifd_num; n ++) {
+        int width = ((t->ifd[n].width + 3) >> 2) << 2;
+        int height = t->ifd[n].height;
+        int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+        if(t->ifd[n].data == NULL) {
+            t->ifd[n].data = malloc(pitch * height);
+        }
 
-    for (int i = 0; i < t->ifd[0].strips_num; i ++) {
-        read_strip(t, &t->ifd[0], i, f);
+        for (int i = 0; i < t->ifd[n].strips_num; i ++) {
+            read_strip(t, &t->ifd[n], i, f);
+        }
     }
-
 }
 
 static void 
@@ -217,6 +271,14 @@ tiff_compose_image_from_de(TIFF *t)
                 case TID_PHOTOMETRICINTERPRETATION:
                     read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].metric);
                     break;
+                case TID_NEWSUBFILETYPE:
+                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].subfile);
+                    printf("subfile %d\n", t->ifd[i].subfile);
+                    break;
+                case TID_PREDICTOR:
+                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].predictor);
+                    printf("TID_PREDICTOR %d\n", t->ifd[i].predictor);
+                    break;
                 default:
                     printf("TAG %d TYPE %d\n", t->ifd[i].de[j].tag, t->ifd[i].de[j].type);
                     break;
@@ -242,13 +304,12 @@ TIFF_load(const char *filename)
     tiff_compose_image_from_de(t);
 
     read_image_data(t, f);
-    
+
     fclose(f);
     p->width = ((t->ifd[0].width + 3) >> 2) << 2;
     p->height = t->ifd[0].height;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = t->data;
-
+    p->pixels = t->ifd[0].data;
     return p;
 }
 
@@ -265,11 +326,11 @@ TIFF_free(struct pic * p)
         free(t->ifd[i].de);
         free(t->ifd[i].strip_offsets);
         free(t->ifd[i].strip_byte_counts);
+        if (t->ifd[i].data)
+            free(t->ifd[i].data);
     }
     if (t->ifd)
         free(t->ifd);
-    if (t->data)
-        free(t->data);
 
     free(t);
     free(p);
@@ -283,16 +344,19 @@ TIFF_info(FILE *f, struct pic* p)
     fprintf(f, "\tbyte order: %s\n", t->ifh.byteorder == 0x4D4D ? 
                     "big endian": "little endian");
     fprintf(f, "\tIFD num: %d\n", t->ifd_num);
-    fprintf(f, "----------------------------------\n");
-    fprintf(f, "\tfirst IFD: DE num %d\n", t->ifd->num);
-    fprintf(f, "\tfirst IFD: width %d, height %d, depth %d, compression %d\n",
-         t->ifd->width, t->ifd->height, t->ifd->depth, t->ifd->compression);
-    fprintf(f, "\tfirst IFD: orientation %d, bitorder %d, pixel store as %d, metric %d\n",
-         t->ifd->orientation, t->ifd->bit_order, t->ifd->pixel_store, t->ifd->metric);
-    fprintf(f, "\tfirst IFD: bitpersample %d, %d, %d, rows_per_strip %d\n", t->ifd->bitpersample[0],
-         t->ifd->bitpersample[1],t->ifd->bitpersample[2], t->ifd->rows_per_strip);
-    for(int i = 0; i < t->ifd->strips_num; i ++) {
-        fprintf(f, "strip offset: %d, bytes %d\n", t->ifd->strip_offsets[i], t->ifd->strip_byte_counts[i]);
+    for(int n = 0; n < t->ifd_num; n ++) {
+        fprintf(f, "----------------------------------\n");
+        fprintf(f, "\t%dth IFD: DE num %d\n", n, t->ifd[n].num);
+        fprintf(f, "\t%dth IFD: width %d, height %d, depth %d, compression %d\n",
+            n, t->ifd[n].width, t->ifd[n].height, t->ifd[n].depth, t->ifd[n].compression);
+        fprintf(f, "\t%dth IFD: orientation %d, bitorder %d, pixel store as %d, metric %d\n",
+            n, t->ifd[n].orientation, t->ifd[n].bit_order, t->ifd[n].pixel_store, t->ifd[n].metric);
+        fprintf(f, "\t%dth IFD: bitpersample %d, %d, %d, rows_per_strip %d\n", n, t->ifd[n].bitpersample[0],
+            t->ifd[n].bitpersample[1],t->ifd[n].bitpersample[2], t->ifd[n].rows_per_strip);
+        fprintf(f, "\t%dth IFD: predictor %d\n", n, t->ifd[n].predictor);
+        for(int i = 0; i < t->ifd[n].strips_num; i ++) {
+            fprintf(f, "\tstrip offset: %d, bytes %d\n", t->ifd[n].strip_offsets[i], t->ifd[n].strip_byte_counts[i]);
+        }
     }
     fprintf(f, "\n");
 }

@@ -26,7 +26,15 @@ enum tag_type {
 
 enum tiff_compression_type {
     COMPRESSION_NONE = 1,
-    COMPRESSION_HUFFMAN_RLE = 2,
+    COMPRESSION_HUFFMAN_RLE = 2, //grey
+    COMPRESSION_BI_LEVEL = 3,   //grey
+    COMPRESSION_FAX_ENC = 4,    //grey
+    COMPRESSION_LZW = 5,
+    COMPRESSION_JPEG = 6,
+    COMPRESSION_JPEG_NEW = 7,
+    COMPRESSION_DEFLFATE = 8,
+    COMPRESSION_JBIG = 9,
+    COMPRESSION_JBIG2 = 10,
     COMPRESSION_PACKBITS = 32773,
 };
 
@@ -62,12 +70,16 @@ struct tiff_file_directory {
     uint32_t bitpersample[3];
     uint32_t bit_order;
     uint32_t orientation;
+    uint32_t subfile;
     uint32_t pixel_store; // 1 as chunky , 2 as planar; default is 1
     uint32_t metric; // 0 as white is zero, 1 as black is zero, 2 rgb , 3 pallete
+    uint32_t predictor; // 1 : no prediction;  2: horizontal differencing
     uint32_t rows_per_strip;
     uint32_t strips_num;
     uint32_t* strip_offsets;
     uint32_t* strip_byte_counts;
+
+    unsigned char *data;
 };
 
 struct tiff_file_header {
@@ -115,6 +127,8 @@ struct tiff_file_header {
 #define TID_DATETIME 306
 #define TID_ARTIST 315
 #define TID_HOSTCOMPUTER 316
+
+//LZW can benefit
 #define TID_PREDICTOR 317
 #define TID_COLORMAP 320
 
@@ -140,7 +154,6 @@ typedef struct {
     struct tiff_file_header ifh;
     int ifd_num;
     struct tiff_file_directory *ifd;
-    unsigned char *data;
 } TIFF;
 
 

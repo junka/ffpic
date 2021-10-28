@@ -18,6 +18,7 @@ struct zlib_header {
 
 
 void deflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decompressed, int * dec_len);
+
 int inflate_decode(const uint8_t* compressed, int compressed_length, uint8_t* decompressed, int * dec_len);
 
 #ifdef __cplusplus

@@ -196,9 +196,9 @@ static void
 PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 {
     uint8_t type = *buf;
-    int bpp = calc_png_bits_per_pixel(p);
-    unsigned bytewidth = (bpp + 7) / 8;	/*bytewidth is used for filtering, is 1 when bpp < 8, number of bytes per pixel otherwise */
-	unsigned linebytes = (p->ihdr.width * bpp + 7) / 8;
+    int depth = calc_png_bits_per_pixel(p);
+    unsigned bytewidth = (depth + 7) / 8;	/*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
+	unsigned linebytes = (p->ihdr.width * depth + 7) / 8;
 
 	unsigned char *prevline = 0;
 
@@ -210,9 +210,9 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
         prevline = &p->data[outindex];
     }
 
-    if (bytewidth == 1 && p->ihdr.width * bpp != (linebytes * 8)) {
+    if (bytewidth == 1 && p->ihdr.width * depth != (linebytes * 8)) {
         //means get padding per line
-		remove_padding_bits(p->data, buf, p->ihdr.width * bpp, linebytes * 8, p->ihdr.height);
+		remove_padding_bits(p->data, buf, p->ihdr.width * depth, linebytes * 8, p->ihdr.height);
 	}
 }
 

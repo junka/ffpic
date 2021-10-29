@@ -10,6 +10,17 @@ typedef struct {
 	uint8_t data;
 } Entry;
 
+static Entry* 
+lzw_init(int capa, int clear_code) {
+	Entry* dict = (Entry*)malloc(capa * sizeof(Entry));
+	for (int i = 0; i < clear_code; i++) {
+		dict[i].data = i;
+		dict[i].prev = -1;
+		dict[i].length = 1;
+	}
+	return dict;
+}
+
 void 
 lzw_decode(int lzw_code_size, const uint8_t* compressed, 
             int compressed_length, uint8_t* decompressed)
@@ -23,15 +34,12 @@ lzw_decode(int lzw_code_size, const uint8_t* compressed,
 	int buffer = 0;
 	int buffer_size = 0;
 
-	int dict_index;
+	int dict_index = 0;
 	int dict_capacity = 1 << code_length;
-	Entry* dict = (Entry*)malloc(dict_capacity * sizeof(Entry));
-	for (dict_index = 0; dict_index < clear_code; dict_index++) {
-		dict[dict_index].data = dict_index;
-		dict[dict_index].prev = -1;
-		dict[dict_index].length = 1;
-	}
-	dict_index += 2;
+	
+	Entry* dict = lzw_init(dict_capacity, clear_code);
+
+	dict_index += (clear_code + 2);
 
 	for (int i = 0; i < compressed_length; i++) {
 		buffer |= compressed[i] << buffer_size;
@@ -68,7 +76,7 @@ lzw_decode(int lzw_code_size, const uint8_t* compressed,
 					return;
 				}
 
-				int ptr = code == dict_index ? prev : code;
+				int ptr = (code == dict_index ? prev : code);
 				while (dict[ptr].prev != -1) {
 					ptr = dict[ptr].prev;
 				}
@@ -78,7 +86,7 @@ lzw_decode(int lzw_code_size, const uint8_t* compressed,
 				dict_index++;
 
 				if ((dict_index == dict_capacity) && (code_length < 12)) {
-					code_length++;
+					code_length ++;
 					dict_capacity <<= 1;
 					dict = (Entry*)realloc(dict, dict_capacity * sizeof(Entry));
 				}

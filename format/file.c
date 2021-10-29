@@ -8,6 +8,7 @@
 #include "pnm.h"
 #include "jpg.h"
 #include "tga.h"
+#include "webp.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -60,4 +61,5 @@ file_ops_init(void)
     PNM_init();
     JPG_init();
     TGA_init();
+    WEBP_init();
 }

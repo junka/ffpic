@@ -23,11 +23,13 @@ TIFF_probe(const char *filename)
         return -EBADF;
     }
     fclose(f);
-    if (h.byteorder == 0x4D4D || h.byteorder == 0x4949) {
-        if (h.version == 42) {
-            return 0;
-        }
+    if (h.byteorder == 0x4D4D) {
+        h.version = ntohs(h.version);
     }
+    if (h.version == 42) {
+        if (h.byteorder == 0x4D4D || h.byteorder == 0x4949)
+            return 0;
+    } 
 
     return -EINVAL;
 }
@@ -56,10 +58,15 @@ get_tag_type_size(uint16_t type)
 }
 
 static void
-read_de(struct tiff_directory_entry *de, FILE *f)
+read_de(TIFF *t, struct tiff_directory_entry *de, FILE *f)
 {
     fread(de, 12, 1, f);
+    BYTEORDER(de->tag);
+    BYTEORDER(de->type);
+    BYTEORDER(de->num);
+    BYTEORDER(de->offset);
     int tlen = get_tag_type_size(de->type) * de->num;
+    // printf("TAG %d TYPE %d, NUM %d, offset %x\n", de->tag, de->type, de->num, de->offset);
 
     if (tlen <= 4 ) {
         de->value = NULL;
@@ -82,11 +89,13 @@ read_ifd(TIFF *t, FILE *f)
         t->ifd = realloc(t->ifd, t->ifd_num * sizeof(struct tiff_file_directory));
     }
     fread(&t->ifd[t->ifd_num-1].num, 2, 1, f);
+    BYTEORDER(t->ifd[t->ifd_num-1].num);
     t->ifd[t->ifd_num-1].de = malloc(sizeof(struct tiff_directory_entry) * t->ifd[t->ifd_num-1].num);
     for (int i = 0; i < t->ifd[t->ifd_num-1].num; i++) {
-        read_de(t->ifd[t->ifd_num-1].de + i, f);
+        read_de(t, t->ifd[t->ifd_num-1].de + i, f);
     }
     fread(&t->ifd[t->ifd_num-1].next_offset, 4, 1, f);
+    BYTEORDER(t->ifd[t->ifd_num-1].next_offset);
     if(t->ifd[t->ifd_num-1].next_offset) {
         fseek(f, t->ifd[t->ifd_num-1].next_offset, SEEK_SET);
         read_ifd(t, f);
@@ -99,12 +108,12 @@ static void
 read_string_from_de(struct tiff_directory_entry *de, char* str)
 {
     int l = get_tag_type_size(de->type) * de->num;
-    memcpy(str, de->value, l>MAX_DESC_LEN-1 ? MAX_DESC_LEN-1:l);
+    memcpy(str, de->value, l>MAX_DESC_LEN-1 ? MAX_DESC_LEN-1 : l);
     str[l] = '\0';
 }
 
 static void 
-read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
+read_int_from_de(uint16_t byteorder, struct tiff_directory_entry *de, uint32_t* val)
 {
     if (get_tag_type_size(de->type) * de->num > 4) {
         for (int i = 0; i < de->num; i ++) {
@@ -115,12 +124,21 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
                     break;
                 case TAG_SHORT:
                 case TAG_SSHORT:
-                    *(val + i) = ((uint16_t)(de->value[i*2 + 1] << 8) | de->value[i*2]);
+                    if (byteorder == 0x4D4D) {
+                        *(val + i) = ((uint16_t)(de->value[i*2] << 8) | de->value[i*2 + 1]);
+                    } else {
+                        *(val + i) = ((uint16_t)(de->value[i*2 + 1] << 8) | de->value[i*2]);
+                    }
                     break;
                 case TAG_LONG:
                 case TAG_SLONG:
-                    *(val +i) = ((uint32_t)(de->value[i*4 + 3]<<24) | de->value[i*4 + 2] << 16 
+                    if (byteorder == 0x4D4D) {
+                        *(val +i) = ((uint32_t)(de->value[i*4]<<24) | de->value[i*4 + 1] << 16 
+                            | de->value[i*4 + 2] << 8 | de->value[i*4 + 3]);
+                    } else {
+                        *(val +i) = ((uint32_t)(de->value[i*4 + 3]<<24) | de->value[i*4 + 2] << 16 
                             | de->value[i*4 + 1] << 8 | de->value[i*4]);
+                    }
                     break;
                 default:
                     break;
@@ -130,11 +148,19 @@ read_int_from_de(struct tiff_directory_entry *de, uint32_t* val)
         switch (de->type) {
             case TAG_BYTE:
             case TAG_SBYTE:
-                *val = (de->offset);
+                if (byteorder == 0x4D4D) {
+                    *val = de->offset >> 24;
+                } else {
+                    *val = (de->offset);
+                }
                 break;
             case TAG_SHORT:
             case TAG_SSHORT:
-                *val = (de->offset);
+            if (byteorder == 0x4D4D) {
+                    *val = de->offset >> 16;
+                } else {
+                    *val = (de->offset);
+                }
                 break;
             case TAG_LONG:
             case TAG_SLONG:
@@ -165,7 +191,7 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
         // if (ifd->predictor == 2)
         decode = malloc(ifd->rows_per_strip * pitch);
         printf("raw %d\n", raw[0]);
-        lzw_decode(4, raw, ifd->strip_byte_counts[id], decode);
+        lzw_decode(8, raw, ifd->strip_byte_counts[id], decode);
         free(raw);
     } else if (ifd->compression == COMPRESSION_PACKBITS) {
         decode = malloc(ifd->rows_per_strip * pitch);
@@ -250,50 +276,51 @@ tiff_compose_image_from_de(TIFF *t)
         for(int j = 0; j < t->ifd[i].num; j ++) {
             switch (t->ifd[i].de[j].tag) {
                 case TID_IMAGEWIDTH:
-                    read_int_from_de(&t->ifd[i].de[j], &(t->ifd[i].width));
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &(t->ifd[i].width));
+                    printf("width %d\n", t->ifd[i].width);
                     break;
                 case TID_IMAGEHEIGHT:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].height);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].height);
                     break;
                 case TID_BITSPERSAMPLE:
-                    read_int_from_de(&t->ifd[i].de[j], t->ifd[i].bitpersample);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], t->ifd[i].bitpersample);
                     break;
                 case TID_SAMPLESPERPIXEL:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].depth);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].depth);
                     break;
                 case TID_COMPRESSION:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].compression);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].compression);
                     break;
                 case TID_FILLORDER:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].bit_order);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].bit_order);
                     break;
                 case TID_ORIENTATION:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].orientation);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].orientation);
                     break;
                 case TID_ROWSPERSTRIP:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].rows_per_strip);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].rows_per_strip);
                     break;
                 case TID_STRIPOFFSETS:
                     t->ifd[i].strips_num = t->ifd[i].de[j].num;
                     t->ifd[i].strip_offsets = calloc(t->ifd[i].de[j].num, sizeof(uint32_t));
-                    read_int_from_de(&t->ifd[i].de[j], t->ifd[i].strip_offsets);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], t->ifd[i].strip_offsets);
                     break;
                 case TID_STRIPBYTECOUNTS:
                     t->ifd[i].strip_byte_counts = malloc(t->ifd[i].num * sizeof(uint32_t));
-                    read_int_from_de(&t->ifd[i].de[j], t->ifd[i].strip_byte_counts);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], t->ifd[i].strip_byte_counts);
                     break;
                 case TID_PLANARCONFIGURATION:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].pixel_store);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].pixel_store);
                     break;
                 case TID_PHOTOMETRICINTERPRETATION:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].metric);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].metric);
                     break;
                 case TID_NEWSUBFILETYPE:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].subfile);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].subfile);
                     printf("subfile %d\n", t->ifd[i].subfile);
                     break;
                 case TID_PREDICTOR:
-                    read_int_from_de(&t->ifd[i].de[j], &t->ifd[i].predictor);
+                    read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].predictor);
                     printf("TID_PREDICTOR %d\n", t->ifd[i].predictor);
                     break;
                 case TID_IMAGEDESCRIPTION:
@@ -318,6 +345,8 @@ TIFF_load(const char *filename)
     p->pic = t;
     p->depth = 32;
     fread(&t->ifh, sizeof(struct tiff_file_header), 1, f);
+    BYTEORDER(t->ifh.version);
+    BYTEORDER(t->ifh.start_offset);
     fseek(f, t->ifh.start_offset, SEEK_SET);
     read_ifd(t, f);
 
@@ -382,7 +411,7 @@ TIFF_info(FILE *f, struct pic* p)
     fprintf(f, "\n");
 }
 
-static struct file_ops png_ops = {
+static struct file_ops tiff_ops = {
     .name = "TIFF",
     .probe = TIFF_probe,
     .load = TIFF_load,
@@ -393,5 +422,5 @@ static struct file_ops png_ops = {
 void 
 TIFF_init(void)
 {
-    file_ops_register(&png_ops);
+    file_ops_register(&tiff_ops);
 }

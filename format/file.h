@@ -14,7 +14,7 @@ struct file_ops {
     const char *name;
     int (*probe)(const char *filename);
     struct pic* (*load)(const char *filename);
-    void (*free)(struct pic *);
+    void (*free)(struct pic *p);
     void (*info)(FILE *f, struct pic* p);
     TAILQ_ENTRY(file_ops) next;
 };

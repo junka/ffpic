@@ -266,7 +266,9 @@ read_image_data(TIFF *t, FILE *f)
         if(t->ifd[n].data == NULL) {
             t->ifd[n].data = malloc(pitch * height);
         }
-
+        if (t->ifd[n].strips_num == 1 && t->ifd[n].rows_per_strip == 0) {
+            t->ifd[n].rows_per_strip = t->ifd[n].height;
+        }
         for (int i = 0; i < t->ifd[n].strips_num; i ++) {
             read_strip(t, &t->ifd[n], i, f);
         }

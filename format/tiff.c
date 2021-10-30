@@ -190,8 +190,12 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
     } else if (ifd->compression == COMPRESSION_LZW) {
         // if (ifd->predictor == 2)
         decode = malloc(ifd->rows_per_strip * pitch);
-        printf("raw %d\n", raw[0]);
-        lzw_decode(8, raw, ifd->strip_byte_counts[id], decode);
+
+        int declen = lzw_decode_tiff(0, 8, raw, ifd->strip_byte_counts[id], decode);
+        if (declen > ifd->rows_per_strip * pitch) {
+            printf("must be some error in decoding\n");
+        }
+
         free(raw);
     } else if (ifd->compression == COMPRESSION_PACKBITS) {
         decode = malloc(ifd->rows_per_strip * pitch);

@@ -77,8 +77,9 @@ void read_image(GIF* gif, FILE* f) {
 	uint8_t* compressed = NULL;
 	uint8_t lzw_code_size = (uint8_t)fgetc(f);
 	int compressed_length = read_blocks(&compressed, f);
-
-	lzw_decode(lzw_code_size, compressed, compressed_length, image->data);
+	// lzw_decode
+	// loadlzw
+	lzw_decode_gif(1, lzw_code_size, compressed, compressed_length, image->data);
 	uint8_t *p = image->data;
 	Color *ct = NULL;
 	if (image->local_ct == NULL) {

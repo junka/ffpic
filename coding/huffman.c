@@ -28,10 +28,10 @@ init_bits_vec(uint8_t *buff, int len)
 bool 
 eof_bits(struct bits_vec *v, int n)
 {
-	if (v->ptr + n/8 - v->start >= v->len) {
+	if (v->ptr + n/8 - v->start > v->len) {
 		return true;
-	} else if (v->ptr + n/8 - v->start == v->len - 1) {
-		if (v->offset + n % 8 >= 8) {
+	} else if (v->ptr + n/8 - v->start == v->len) {
+		if (v->offset + n % 8 > 8) {
 			return true;
 		}
 	}
@@ -50,7 +50,7 @@ step_back(struct bits_vec *v, int n)
 		}
 	}
 }
-
+#if 0
 int 
 read_bits(struct bits_vec *v, int n)
 {
@@ -80,18 +80,36 @@ read_bits(struct bits_vec *v, int n)
 	v->offset = ((v->offset + (n%8))%8);
 	return ret;
 }
-
+#endif
 int 
 read_bit(struct bits_vec *v)
 {
-	int ret = (*(v->ptr) >> (7 - v->offset)) & 0x1;
+	if (v->ptr - v->start > v->len)
+		return -1;
+	uint8_t ret = (*(v->ptr) >> (7 - v->offset)) & 0x1;
 	v->offset ++;
-	if (v->offset%8 == 0) {
-		v->offset = 0;
+	if (v->offset == 8) {
 		v->ptr ++;
+		v->offset = 0;
 	}
 	return ret;
 }
+
+#if 1
+int 
+read_bits(struct bits_vec *v, int n)
+{
+	int ret = 0;
+	for (int i = 0; i < n; i++) {
+		int a = read_bit(v);
+		if (a == -1) {
+			return -1;
+		}
+		ret = (ret<<1 | a);
+	}
+	return ret;
+}
+#endif
 
 void
 skip_bits(struct bits_vec *v, int n)
@@ -101,8 +119,18 @@ skip_bits(struct bits_vec *v, int n)
 		v->ptr ++;
 		skip += 8;
 	}
-	v->offset = 8 -(skip - n - v->offset);
+	v->offset = 8 - (skip - n - v->offset);
 }
+
+void
+reset_bits_boundary(struct bits_vec *v)
+{
+	if (v->offset) {
+		v->ptr ++;
+		v->offset = 0;
+	}
+}
+
 
 #define READ_BIT(v) read_bit(v)
 #define READ_BITS(v, n) read_bits(v, n)
@@ -114,6 +142,9 @@ huffman_tree*
 huffman_tree_init()
 {
 	huffman_tree* tree = malloc(sizeof(huffman_tree));
+	memset(tree->fast[0], 0xFF, FAST_HF_SIZE);
+	memset(tree->slow_codec, 0, sizeof(uint16_t*)*(MAX_BIT_LEN - FAST_HF_BITS));
+	memset(tree->slow_symbol, 0, sizeof(uint16_t*)*(MAX_BIT_LEN - FAST_HF_BITS));
 	return tree;
 }
 
@@ -121,10 +152,11 @@ void
 huffman_cleanup(huffman_tree* tree)
 {
 	for (int i = 0; i < MAX_BIT_LEN - 8; i ++) {
-		for (int j = 0; j < 2; j ++) {
-			if (tree->slow[i][j]) {
-				free(tree->slow[i][j]);
-			}
+		if (tree->slow_codec[i]) {
+			free(tree->slow_codec[i]);
+		}
+		if (tree->slow_symbol[i]) {
+			free(tree->slow_symbol[i]);
 		}
 	}
 	free(tree);
@@ -135,13 +167,14 @@ huffman_dump_table(huffman_tree* tree)
 {
 	printf("%p: %s %d\n", tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
 	printf("fast lookup table:\n");
-	for (int i = 0; i < 256; i ++) {
+	for (int i = 0; i < FAST_HF_SIZE; i ++) {
 		printf("\t%d\t%x\t%d\n", i, tree->fast[0][i], tree->fast[1][i]);
 	}
 	printf("slow lookup table:\n");
-	for (int i = 9; i <= 16; i ++) {
-		for (int j = 0; j < tree->slow_cnt[i-9]; j ++) {
-			printf("\t%d\t%x\t%d\n", tree->slow[i-9][0][j], tree->slow[i-9][1][j], i);
+	for (int i = FAST_HF_BITS + 1; i <= MAX_BIT_LEN; i ++) {
+		for (int j = 0; j < tree->slow_cnt[i-FAST_HF_BITS-1]; j ++) {
+			printf("\t%d\t%x\t%d\n", tree->slow_codec[i-FAST_HF_BITS-1][j],
+					 tree->slow_symbol[i-FAST_HF_BITS-1][j], i);
 		}
 	}
 }
@@ -154,84 +187,94 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 	uint16_t coding[MAX_SYMBOLS];
 	uint8_t bitlen[MAX_SYMBOLS];
 	unsigned bits, n = 0, i = 0;
-	int maxbitlen = 0, numofcodes = 0;
+	int maxbitlen = 0, n_codes = 0;
     int k = 0;
 
 	tree->dc_ac = dc;
 	tree->tid = id;
 	/* initialize local vectors */
-	memset(tree->fast[0], 0xFF, FAST_HF_SIZE);
-	memset(tree->slow, 0, sizeof(uint16_t*)*(MAX_BIT_LEN - 8)*2);
 	memset(coding, 0xFFFF, sizeof(coding));
 	memset(bitlen, 0, sizeof(bitlen));
 
-    for (int i = MAX_BIT_LENGTH - 1; i >= 0; i--) {
-        if ( count[i] != 0 ) {
-            maxbitlen = i+1;
+    for (int j = MAX_BIT_LENGTH - 1; j >= 0; j--) {
+        if ( count[j] != 0 ) {
+            maxbitlen = j+1;
             break;
         }
     }
 	tree->maxbitlen = maxbitlen;
 	bits = maxbitlen;
-	if(maxbitlen > 8)
-		maxbitlen = 8;
+	if(maxbitlen > FAST_HF_BITS)
+		maxbitlen = FAST_HF_BITS;
 	//rule 1: start coding from 0
-    coding[0] = 0;
-	while(count[i] == 0) {
-		i ++;
+    // coding[0] = 0;
+	// i = 0;
+	// while (count[i] == 0) {
+	// 	i ++;
+	// }
+
+	//we need slow table when max bits greater than 8
+	for (int j = FAST_HF_BITS + 1; j <= bits; j ++) {
+		tree->slow_cnt[j - FAST_HF_BITS - 1] = count[j-1];
+		tree->slow_codec[j - FAST_HF_BITS - 1] = malloc(count[j-1] * sizeof(uint16_t));
+		tree->slow_symbol[j - FAST_HF_BITS - 1] = malloc(count[j-1] * sizeof(uint16_t));
 	}
+
 	// coding[numofcodes] = 0;
-    for (; i < 16; i ++) {
+	int cod = 0;
+    for (i = 0; i < MAX_BIT_LENGTH; i ++) {
+		for (int k = 0; k < count[i]; k++) {
+			coding[n_codes] = cod;
+			bitlen[n_codes] = i + 1;
+			n_codes ++;
+			cod += 1;
+		}
+		cod <<= 1;
+#if 0
         if (count[i] > 0) {
-            if (numofcodes == 0) {
-                coding[numofcodes] = 0;
+            if (n_codes == 0) {
+                coding[0] = 0;
             } else {
-                coding[numofcodes] = (coding[numofcodes-1] + 1) << k;
+                coding[n_codes] = (coding[n_codes - 1] + 1) << k;
             }
             k = 0;
-			bitlen[numofcodes] = i + 1;
-            numofcodes ++;
+			bitlen[n_codes] = i + 1;
+            n_codes ++;
             for(int j = 1 ; j < count[i]; j++) {
-                coding[numofcodes] = coding[numofcodes - 1] + 1;
-				bitlen[numofcodes] = i + 1;
-                numofcodes ++;
+                coding[n_codes] = coding[n_codes - 1] + 1;
+				bitlen[n_codes] = i + 1;
+                n_codes ++;
             }
         }
         k ++;
+#endif
     }
-	tree->numcodes = numofcodes;
+	tree->n_codes = n_codes;
 
-	for(i = 0; i < numofcodes; i++) {
+	for (i = 0; i < n_codes; i++) {
 		// build fast lookup table
-		if (bitlen[i] <= 8) {
-			for (int j = 0; j < (1 << (8 - bitlen[i])); j ++) {
-				tree->fast[0][((coding[i] << (8 - bitlen[i])) | j)] = syms[i];
-				tree->fast[1][((coding[i] << (8 - bitlen[i])) | j)] = bitlen[i];
+		if (bitlen[i] <= FAST_HF_BITS) {
+			int l = ((int)1 << (FAST_HF_BITS - bitlen[i]));
+			int cd = coding[i] << (FAST_HF_BITS - bitlen[i]);
+			while (l--) {
+				tree->fast[0][cd] = syms[i];
+				tree->fast[1][cd] = bitlen[i];
+				cd += 1;
 #if 0
-				printf("ith %d bitlen %d ,code %x, sym %x, fast %d \n", i, bitlen[i], coding[i], syms[i],
-					 (coding[i] << (8 - bitlen[i]))|j);
+				printf("ith %d bitlen %d ,code %x, sym %x, fast %d \n", i,
+					bitlen[i], coding[i], syms[i], cd);
 #endif
 			}
 		} else {
-			break;
+			//build slow lookup list
+			if (bitlen[i] > bitlen[i - 1]) {
+				n = 0;
+			}
+			tree->slow_codec[bitlen[i] - FAST_HF_BITS - 1][n] = coding[i];
+			tree->slow_symbol[bitlen[i] - FAST_HF_BITS - 1][n] = syms[i];
+			// printf("ith %d, slow bitlen %d, coding %x, sym %x\n", i, bitlen[i], coding[i], syms[i]);
+			n ++;
 		}
-	}
-	//we need slow table when max bits greater than 8
-	for (int j = 9; j <= bits; j ++) {
-		tree->slow_cnt[j-9] = count[j];
-		tree->slow[j-9][0] = malloc(count[j]);
-		tree->slow[j-9][1] = malloc(count[j]);
-	}
-	//build slow lookup list
-	for (; i < numofcodes; i ++) {
-		if (bitlen[i] > bitlen[i-1]) {
-			n = 0;
-		}
-
-		tree->slow[bitlen[i] - 8 - 1][0][n] = coding[i];
-		tree->slow[bitlen[i] - 8 - 1][1][n] = syms[i];
-		// printf("ith %d, slow bitlen %d, coding %x, sym %x\n", i, bitlen[i], coding[i], syms[i]);
-		n ++;
 	}
 }
 
@@ -239,35 +282,41 @@ static int
 decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	unsigned pos = 0, ct;
 	int c, cbits = 0, bl;
-	if (eof_bits(v, 8)) {
+	if (eof_bits(v, FAST_HF_BITS)) {
+		// printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
 		return -1;
 	}
-
-	c = READ_BITS(v, 8);
-	ct = tree->fast[0][c];
-	if (ct != 0xFF) {
-		/* get decoded symbol */
-		// if(tree->fast[1][c] == 0) {
-		// 	printf("decoded bitlen is 0, tree %d %d\n", tree->dc_ac, tree->tid);
-		// 	huffman_dump_table(tree);
-		// }
-		// printf("off %d decode %d, bitlen %d\n", v->offset, ct, tree->fast[1][c]);
-		STEP_BACK(v, 8 - tree->fast[1][c]);
-		// printf("read %x index %ld off %d decode %d, bitlen %d\n", c, v->ptr-v->start, v->offset, ct, tree->fast[1][c]);
-		return ct;
+	c = READ_BITS(v, FAST_HF_BITS);
+	if (c == -1) {
+		printf("invalid bits read\n");
 	}
-	bl = 8;
 
-	while (bl < tree->maxbitlen) {
-		c = ( (c << 1) | READ_BIT(v));
-		for (int i =0; i < tree->slow_cnt[bl-8]; i ++) {
-			if ( c == tree->slow[bl-8][0][i]) {
-				// printf("offset %d decode %d, bitlen %d\n", v->offset, c, bl);
-				return tree->slow[bl-8][1][i];
-			}
+	//looup fast table first
+	if (FAST_HF_BITS) {
+		ct = tree->fast[0][c];
+		if (ct != 0xFF) {
+			/* get decoded symbol */
+			// printf("off %d decode %d, bitlen %d\n", v->offset, ct, tree->fast[1][c]);
+			STEP_BACK(v, FAST_HF_BITS - tree->fast[1][c]);
+			// printf("read %x index %ld off %d decode %d, bitlen %d\n", c, v->ptr-v->start, v->offset, ct, tree->fast[1][c]);
+			return ct;
 		}
-		bl ++;
 	}
+	if (tree->maxbitlen >= FAST_HF_BITS) {
+		//fast table miss, try slow table then
+		bl = FAST_HF_BITS + 1;// which mean bitlen
+		while (bl <= tree->maxbitlen) {
+			c = ((c << 1) | READ_BIT(v));
+			for (int i =0; i < tree->slow_cnt[bl - FAST_HF_BITS -1]; i ++) {
+				if ( c == tree->slow_codec[bl - FAST_HF_BITS -1][i]) {
+					// printf("offset %d decode %d, bitlen %d\n", v->offset, c, bl);
+					return tree->slow_symbol[bl - FAST_HF_BITS -1][i];
+				}
+			}
+			bl ++;
+		}
+	}
+	printf("why here, bl %d , maxbitlen %d, c %x\n", bl, tree->maxbitlen, c);
 	return -1;
 }
 
@@ -288,9 +337,18 @@ huffman_decode_symbol(huffman_tree* tree)
 int 
 huffman_read_symbol(int n)
 {
+	if (eof_bits(vec, n)) {
+		return -1;
+	}
 	int ret = READ_BITS(vec, n);
-	// printf("read %d bits val %d\n", n, ret);
+	// printf("read %d bits val %x\n", n, ret);
 	return ret;
+}
+
+void
+huffman_reset_stream(void)
+{
+	reset_bits_boundary(vec);
 }
 
 void

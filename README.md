@@ -29,6 +29,7 @@ supported file formart is:
 | PPM | y | Portable PixelMap image |
 | PAM | * | Portable Arbitrary image |
 | TGA | * | Truevision raster graphic format|
+| TIFF | y | Tag Image File Format |
 
 ### display rgb data
 Tips on display:

@@ -15,9 +15,11 @@ extern "C" {
 
 #define MARKER(v) _MARKER(0xFF, v)
 
+//baseline DCT-based JPEG
 #define SOF0 MARKER(0xC0)
 #define SOF1 MARKER(0xC1)
 /* usually unsupported below */
+//Progressive DCT-based JPEG
 #define SOF2 MARKER(0xC2)
 #define SOF3 MARKER(0xC3)
 
@@ -47,6 +49,14 @@ extern "C" {
 
 //RSTn for resync, may be ignored
 #define RST0 MARKER(0xD0)
+#define RST1 MARKER(0xD1)
+#define RST2 MARKER(0xD2)
+#define RST3 MARKER(0xD3)
+#define RST4 MARKER(0xD4)
+#define RST5 MARKER(0xD5)
+#define RST6 MARKER(0xD6)
+#define RST7 MARKER(0xD7)
+
 
 #define SOI MARKER(0xD8)
 #define EOI MARKER(0xD9)
@@ -99,35 +109,34 @@ struct jfif {
 };
 
 struct dqt {
-    uint16_t len;
     uint8_t precision:4;   /* 0 means 8bits, 1 means 16bits*/
     uint8_t id:4;       /* 0 - 3 */
-    uint16_t *tdata;
+    uint16_t tdata[64]; // this should work for both precision 0, 1
 };
 
 struct dht {
-    uint16_t len;
-    uint8_t table_class : 4;
-    uint8_t huffman_id: 4;
+    uint8_t huffman_id: 4;   //low 4 bits
+    uint8_t table_class : 4; //high 4 bits
     uint8_t num_codecs[16];
+    uint16_t len;
     uint8_t* data;
 
 };
 
 struct comp_sel {
     uint8_t component_selector;
-    uint8_t DC_entropy:4;
-    uint8_t AC_entropy:4;
+    uint8_t AC_entropy:4; //low 4 bits
+    uint8_t DC_entropy:4; //high 4 bits
 };
 
 struct start_of_scan {
     uint16_t len;
     uint8_t nums; //same with start_frame components_num, 1 for grey, 3 for YCbCr, 4 for CMYK
-    struct comp_sel* comps;
+    struct comp_sel comps[4];
     uint8_t predictor_start;
     uint8_t predictor_end;
-    uint8_t approx_bits_h:4;
     uint8_t approx_bits_l:4;
+    uint8_t approx_bits_h:4;
 
 };
 
@@ -136,11 +145,23 @@ struct comment_segment {
     uint8_t *data;
 };
 
-struct restart_interval {
+struct dri {
     uint16_t len;
     uint16_t interval; /* This is in units of MCU blocks, means that every n MCU
                         blocks a RSTn marker can be found. The first marker will
                         be RST0, then RST1 etc, after RST7 repeating from RST0.*/
+};
+
+//APP1
+struct exif {
+    uint16_t len;
+    uint8_t exif[6]; /*exif ascii*/
+    struct tiff_header {
+        uint16_t byteorder;
+        uint16_t version;
+        uint32_t start_offset;
+    } tiff;
+    //
 };
 
 #pragma pack(pop)
@@ -151,7 +172,10 @@ typedef struct {
     struct dqt dqt[4];
     struct dht dht[2][16];
     struct start_of_scan sos;
+    struct dri dri;
     struct comment_segment comment;
+
+    int data_len; //compressed huffman data len
     uint8_t *data;
 }JPG;
 

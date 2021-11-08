@@ -1,6 +1,10 @@
 #ifndef _GIF_H
 #define _GIF_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -151,5 +155,9 @@ typedef struct {
 
 
 void GIF_init(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

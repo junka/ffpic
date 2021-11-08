@@ -114,6 +114,8 @@ struct last_modification {
     uint8_t sec;
 };
 
+#pragma pack(pop)
+
 enum filter_type {
     FILTER_NONE = 0,
     FILTER_SUB = 1,
@@ -147,7 +149,7 @@ typedef struct {
     struct last_modification last_mod;
 } PNG;
 
-#pragma pack(pop)
+
 
 void PNG_init(void);
 

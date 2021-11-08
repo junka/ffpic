@@ -30,7 +30,9 @@ list(APPEND FFPIC_DIRS
             "${FFPIC_ROOT}/utils")
 
 list(APPEND FFPIC_SOURCES
-            "${FFPIC_ROOT}/display/screen.c")
+            "${FFPIC_ROOT}/display/sdl_screen.c"
+            "${FFPIC_ROOT}/display/bmpwriter.c"
+            "${FFPIC_ROOT}/display/display.c")
 
 list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lzw.c"
@@ -50,6 +52,7 @@ list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/jpg.c"
             "${FFPIC_ROOT}/format/tga.c"
             "${FFPIC_ROOT}/format/webp.c"
+            "${FFPIC_ROOT}/format/heif.c"
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)
@@ -59,24 +62,24 @@ add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_CODING} ${FFPIC_FORMART})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 
 
-add_executable(picshow "${FFPIC_ROOT}/app/picshow.c" $<TARGET_OBJECTS:ffpic>)
+add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" $<TARGET_OBJECTS:ffpic>)
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
 target_link_libraries(picinfo z)
-target_link_libraries(picshow z)
+target_link_libraries(sdlshow z)
 
 add_executable(coding_test "${FFPIC_ROOT}/app/coding_test.c" ${FFPIC_CODING})
 target_link_libraries(coding_test z)
 
-target_link_libraries(picshow ffpic)
-target_include_directories(picshow PRIVATE ${FFPIC_DIRS})
+target_link_libraries(sdlshow ffpic)
+target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 target_include_directories(coding_test PRIVATE ${FFPIC_DIRS})
 
 if(SDL2_FOUND)
   target_include_directories(ffpic PRIVATE ${SDL2_INCLUDE_DIRS})
-  target_include_directories(picshow PRIVATE ${SDL2_INCLUDE_DIRS})
+  target_include_directories(sdlshow PRIVATE ${SDL2_INCLUDE_DIRS})
   message("SDL2 library found ${SDL2_INCLUDE_DIRS}")
-  target_link_libraries(picshow ${SDL2_LIBRARIES})
+  target_link_libraries(sdlshow ${SDL2_LIBRARIES})
 else(SDL2_FOUND)
   message(FATAL_ERROR "SDL2 library not found")
 endif(SDL2_FOUND)

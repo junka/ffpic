@@ -9,6 +9,7 @@
 #include "jpg.h"
 #include "tga.h"
 #include "webp.h"
+#include "heif.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -62,4 +63,5 @@ file_ops_init(void)
     JPG_init();
     TGA_init();
     WEBP_init();
+    HEIF_init();
 }

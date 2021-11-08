@@ -2,23 +2,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "screen.h"
+#include "display.h"
+#include "sdl_screen.h"
 
 #define SCREEN_WIDTH   640
 #define SCREEN_HEIGHT  480
 
-static int pic_screen_init();
-static int pic_screen_uninit();
 
-Screen scrn = {
-    .name = "SDL2",
-    .width = 0,
-    .height = 0,
+static sdl_screen scrn = {
     .w = NULL,
     .r = NULL,
     .t = NULL,
-    .init = pic_screen_init,
-    .uninit = pic_screen_uninit,
 };
 
 static int 
@@ -29,7 +23,7 @@ display_main(void *data)
 
 
 static int 
-pic_screen_init(const char* title, int w, int h)
+sdl_screen_init(const char* title, int w, int h)
 {
     int ret;
 
@@ -38,7 +32,7 @@ pic_screen_init(const char* title, int w, int h)
         return -1;
     }
 
-    scrn.tid = SDL_CreateThread(display_main, "Display Thread", NULL);
+    // scrn.tid = SDL_CreateThread(display_main, "Display Thread", NULL);
     scrn.w = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                 w, h, SDL_WINDOW_SHOWN);
     if (scrn.w == NULL) {
@@ -58,8 +52,8 @@ pic_screen_init(const char* title, int w, int h)
     //     return -1;
     // }
     
-    scrn.width = w;
-    scrn.height = h;
+    // scrn.width = w;
+    // scrn.height = h;
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     
     // SDL_SetRenderTarget(scrn.r, scrn.t);
@@ -71,7 +65,7 @@ pic_screen_init(const char* title, int w, int h)
 }
 
 static int 
-pic_screen_uninit()
+sdl_screen_uninit()
 {
     SDL_Surface * ws = SDL_GetWindowSurface(scrn.w);
     SDL_FreeSurface(ws);
@@ -82,7 +76,7 @@ pic_screen_uninit()
     return 0;
 }
 
-int pic_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch,
+int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch,
             uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
 {
     SDL_Rect rect;
@@ -115,10 +109,6 @@ int pic_draw(void *pixels, int left, int top, int width, int height, int depth, 
     return 0;
 }
 
-void pic_keep_first()
-{
-}
-
 void pic_poll_block(bool q)
 {
     // int status;
@@ -142,7 +132,17 @@ void pic_poll_block(bool q)
     }
 }
 
+display_t sdl_display = {
+    .name = "SDL2",
+    .private = &scrn,
+    .width = 0,
+    .height = 0,
+    .init = sdl_screen_init,
+    .uninit = sdl_screen_uninit,
+    .draw_pixels = sdl_draw,
+};
+
 void
-pic_register_screens() {
-    // pic_register_screen(&scrn);
+sdl_screen_register(void) {
+    display_register(&sdl_display);
 }

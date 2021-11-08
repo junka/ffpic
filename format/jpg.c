@@ -20,6 +20,16 @@ struct decoder {
     uint8_t last_rst_marker_seen;
 };
 
+static const uint8_t zigzag[64] = {
+        0,  1,  8,  16, 9,  2,  3,  10,
+        17, 24, 32, 25, 18, 11, 4,  5,
+        12, 19, 26, 33, 40, 48, 41, 34,
+        27, 20, 13, 6,  7,  14, 21, 28,
+        35, 42, 49, 56, 57, 50, 43, 36,
+        29, 22, 15, 23, 30, 37, 44, 51,
+        58, 59, 52, 45, 38, 31, 39, 46,
+        53, 60, 61, 54, 47, 55, 62, 63
+    };
 
 int JPG_probe(const char *filename)
 {
@@ -81,9 +91,9 @@ read_dqt(JPG *j, FILE *f)
         j->dqt[id].id = id;
         j->dqt[id].precision = precision;
         for (int i = 0; i < 64; i ++) {
-            fread(&j->dqt[id].tdata[i], precision + 1, 1, f);
+            fread(&j->dqt[id].tdata[zigzag[i]], precision + 1, 1, f);
             if (precision == 1) {
-                j->dqt[id].tdata[i] = ntohs(j->dqt[id].tdata[i]);
+                j->dqt[id].tdata[zigzag[i]] = ntohs(j->dqt[id].tdata[zigzag[i]]);
             }
         }
         tlen -= ((precision + 1) << 6);
@@ -167,6 +177,7 @@ clamp(int i)
 		return i;
 }
 
+#if 1
 static inline unsigned char 
 descale_and_clamp(int x, int shift)
 {
@@ -183,177 +194,12 @@ descale_and_clamp(int x, int shift)
   else
     return x;
 }
-
-/*
- * Perform inverse DCT on one block of coefficients.
- */
-#if 1
-void
-idct_float(struct decoder *d, uint8_t *output_buf, int stride)
-{
-    FAST_FLOAT tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
-    FAST_FLOAT tmp10, tmp11, tmp12, tmp13;
-    FAST_FLOAT z5, z10, z11, z12, z13;
-    int *inptr;
-    //   uint16_t *quantptr;
-    FAST_FLOAT *wsptr;
-    uint8_t *outptr;
-    int ctr;
-    FAST_FLOAT workspace[64]; /* buffers data between passes */
-
-    /* Pass 1: process columns from input, store into work array. */
-    inptr = d->buf;
-    //   quantptr = d->quant;
-    wsptr = workspace;
-    for (ctr = 8; ctr > 0; ctr--) {
-        /* Due to quantization, we will usually find that many of the input
-        * coefficients are zero, especially the AC terms.  We can exploit this
-        * by short-circuiting the IDCT calculation for any column in which all
-        * the AC terms are zero.  In that case each output is equal to the
-        * DC coefficient (with scale factor as needed).
-        * With typical images and quantization tables, half or more of the
-        * column DCT calculations can be simplified this way.
-        */
-    
-        if (inptr[8*1] == 0 && inptr[8*2] == 0 &&
-        inptr[8*3] == 0 && inptr[8*4] == 0 &&
-        inptr[8*5] == 0 && inptr[8*6] == 0 &&
-        inptr[8*7] == 0) {
-            /* AC terms all zero */
-            FAST_FLOAT dcval = inptr[8*0];
-            
-            wsptr[8*0] = dcval;
-            wsptr[8*1] = dcval;
-            wsptr[8*2] = dcval;
-            wsptr[8*3] = dcval;
-            wsptr[8*4] = dcval;
-            wsptr[8*5] = dcval;
-            wsptr[8*6] = dcval;
-            wsptr[8*7] = dcval;
-            
-            inptr++;			/* advance pointers to next column */
-            wsptr++;
-            continue;
-        }
-    
-        /* Even part */
-
-        tmp0 = inptr[8*0];
-        tmp1 = inptr[8*2];
-        tmp2 = inptr[8*4];
-        tmp3 = inptr[8*6];
-
-        tmp10 = tmp0 + tmp2;	/* phase 3 */
-        tmp11 = tmp0 - tmp2;
-
-        tmp13 = tmp1 + tmp3;	/* phases 5-3 */
-        tmp12 = (tmp1 - tmp3) * ((FAST_FLOAT) 1.414213562) - tmp13; /* 2*c4 */
-
-        tmp0 = tmp10 + tmp13;	/* phase 2 */
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
-        
-        /* Odd part */
-
-        tmp4 = inptr[8*1];
-        tmp5 = inptr[8*3];
-        tmp6 = inptr[8*5];
-        tmp7 = inptr[8*7];
-
-        z13 = tmp6 + tmp5;		/* phase 6 */
-        z10 = tmp6 - tmp5;
-        z11 = tmp4 + tmp7;
-        z12 = tmp4 - tmp7;
-
-        tmp7 = z11 + z13;		/* phase 5 */
-        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562); /* 2*c4 */
-
-        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
-        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
-        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
-
-        tmp6 = tmp12 - tmp7;	/* phase 2 */
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 + tmp5;
-
-        wsptr[8*0] = tmp0 + tmp7;
-        wsptr[8*7] = tmp0 - tmp7;
-        wsptr[8*1] = tmp1 + tmp6;
-        wsptr[8*6] = tmp1 - tmp6;
-        wsptr[8*2] = tmp2 + tmp5;
-        wsptr[8*5] = tmp2 - tmp5;
-        wsptr[8*4] = tmp3 + tmp4;
-        wsptr[8*3] = tmp3 - tmp4;
-
-        inptr++;			/* advance pointers to next column */
-        wsptr++;
-    }
-    
-    /* Pass 2: process rows from work array, store into output array. */
-    /* Note that we must descale the results by a factor of 8 == 2**3. */
-
-    wsptr = workspace;
-    outptr = output_buf;
-    for (ctr = 0; ctr < 8; ctr++) {
-        /* Rows of zeroes can be exploited in the same way as we did with columns.
-        * However, the column calculation has created many nonzero AC terms, so
-        * the simplification applies less often (typically 5% to 10% of the time).
-        * And testing floats for zero is relatively expensive, so we don't bother.
-        */
-        
-        /* Even part */
-
-        tmp10 = wsptr[0] + wsptr[4];
-        tmp11 = wsptr[0] - wsptr[4];
-
-        tmp13 = wsptr[2] + wsptr[6];
-        tmp12 = (wsptr[2] - wsptr[6]) * ((FAST_FLOAT) 1.414213562) - tmp13;
-
-        tmp0 = tmp10 + tmp13;
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
-
-        /* Odd part */
-
-        z13 = wsptr[5] + wsptr[3];
-        z10 = wsptr[5] - wsptr[3];
-        z11 = wsptr[1] + wsptr[7];
-        z12 = wsptr[1] - wsptr[7];
-
-        tmp7 = z11 + z13;
-        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562);
-
-        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
-        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
-        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
-
-        tmp6 = tmp12 - tmp7;
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 + tmp5;
-
-        /* Final output stage: scale down by a factor of 8 and range-limit */
-
-        outptr[0] = descale_and_clamp((int)(tmp0 + tmp7), 3);
-        outptr[7] = descale_and_clamp((int)(tmp0 - tmp7), 3);
-        outptr[1] = descale_and_clamp((int)(tmp1 + tmp6), 3);
-        outptr[6] = descale_and_clamp((int)(tmp1 - tmp6), 3);
-        outptr[2] = descale_and_clamp((int)(tmp2 + tmp5), 3);
-        outptr[5] = descale_and_clamp((int)(tmp2 - tmp5), 3);
-        outptr[4] = descale_and_clamp((int)(tmp3 + tmp4), 3);
-        outptr[3] = descale_and_clamp((int)(tmp3 - tmp4), 3);
-
-        
-        wsptr += 8;		/* advance pointer to next row */
-        outptr += stride;
-    }
-}
 #endif
-#if 0 
+
+#if 0
 #include <math.h>
 void 
-idct_float(struct decoder *d, uint8_t *output_buf, int stride) {
+idct_float(struct decoder *d, int *output_buf, int stride) {
     int* component = d->buf;
     const float m0 = 2.0 * cos(1.0 / 16.0 * 2.0 * M_PI);
     const float m1 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
@@ -505,30 +351,178 @@ idct_float(struct decoder *d, uint8_t *output_buf, int stride) {
     }
 }
 #endif
+
+#if 1
+void
+idct_float(struct decoder *d, int *output_buf, int stride)
+{
+    FAST_FLOAT tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
+    FAST_FLOAT tmp10, tmp11, tmp12, tmp13;
+    FAST_FLOAT z5, z10, z11, z12, z13;
+    int *inptr;
+    //   uint16_t *quantptr;
+    FAST_FLOAT *wsptr;
+    int *outptr;
+    int ctr;
+    FAST_FLOAT workspace[64]; /* buffers data between passes */
+
+    /* Pass 1: process columns from input, store into work array. */
+    inptr = d->buf;
+    //   quantptr = d->quant;
+    wsptr = workspace;
+    for (ctr = 8; ctr > 0; ctr--) {
+        /* Due to quantization, we will usually find that many of the input
+        * coefficients are zero, especially the AC terms.  We can exploit this
+        * by short-circuiting the IDCT calculation for any column in which all
+        * the AC terms are zero.  In that case each output is equal to the
+        * DC coefficient (with scale factor as needed).
+        * With typical images and quantization tables, half or more of the
+        * column DCT calculations can be simplified this way.
+        */
+    
+        if (inptr[8*1] == 0 && inptr[8*2] == 0 &&
+        inptr[8*3] == 0 && inptr[8*4] == 0 &&
+        inptr[8*5] == 0 && inptr[8*6] == 0 &&
+        inptr[8*7] == 0) {
+            /* AC terms all zero */
+            FAST_FLOAT dcval = inptr[8*0];
+            
+            wsptr[8*0] = dcval;
+            wsptr[8*1] = dcval;
+            wsptr[8*2] = dcval;
+            wsptr[8*3] = dcval;
+            wsptr[8*4] = dcval;
+            wsptr[8*5] = dcval;
+            wsptr[8*6] = dcval;
+            wsptr[8*7] = dcval;
+            
+            inptr++;			/* advance pointers to next column */
+            wsptr++;
+            continue;
+        }
+    
+        /* Even part */
+
+        tmp0 = inptr[8*0];
+        tmp1 = inptr[8*2];
+        tmp2 = inptr[8*4];
+        tmp3 = inptr[8*6];
+
+        tmp10 = tmp0 + tmp2;	/* phase 3 */
+        tmp11 = tmp0 - tmp2;
+
+        tmp13 = tmp1 + tmp3;	/* phases 5-3 */
+        tmp12 = (tmp1 - tmp3) * ((FAST_FLOAT) 1.414213562) - tmp13; /* 2*c4 */
+
+        tmp0 = tmp10 + tmp13;	/* phase 2 */
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+        
+        /* Odd part */
+
+        tmp4 = inptr[8*1];
+        tmp5 = inptr[8*3];
+        tmp6 = inptr[8*5];
+        tmp7 = inptr[8*7];
+
+        z13 = tmp6 + tmp5;		/* phase 6 */
+        z10 = tmp6 - tmp5;
+        z11 = tmp4 + tmp7;
+        z12 = tmp4 - tmp7;
+
+        tmp7 = z11 + z13;		/* phase 5 */
+        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562); /* 2*c4 */
+
+        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
+        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
+        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
+
+        tmp6 = tmp12 - tmp7;	/* phase 2 */
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 + tmp5;
+
+        wsptr[8*0] = tmp0 + tmp7;
+        wsptr[8*7] = tmp0 - tmp7;
+        wsptr[8*1] = tmp1 + tmp6;
+        wsptr[8*6] = tmp1 - tmp6;
+        wsptr[8*2] = tmp2 + tmp5;
+        wsptr[8*5] = tmp2 - tmp5;
+        wsptr[8*4] = tmp3 + tmp4;
+        wsptr[8*3] = tmp3 - tmp4;
+
+        inptr++;			/* advance pointers to next column */
+        wsptr++;
+    }
+    
+    /* Pass 2: process rows from work array, store into output array. */
+    /* Note that we must descale the results by a factor of 8 == 2**3. */
+
+    wsptr = workspace;
+    outptr = output_buf;
+    for (ctr = 0; ctr < 8; ctr++) {
+        /* Rows of zeroes can be exploited in the same way as we did with columns.
+        * However, the column calculation has created many nonzero AC terms, so
+        * the simplification applies less often (typically 5% to 10% of the time).
+        * And testing floats for zero is relatively expensive, so we don't bother.
+        */
+        
+        /* Even part */
+
+        tmp10 = wsptr[0] + wsptr[4];
+        tmp11 = wsptr[0] - wsptr[4];
+
+        tmp13 = wsptr[2] + wsptr[6];
+        tmp12 = (wsptr[2] - wsptr[6]) * ((FAST_FLOAT) 1.414213562) - tmp13;
+
+        tmp0 = tmp10 + tmp13;
+        tmp3 = tmp10 - tmp13;
+        tmp1 = tmp11 + tmp12;
+        tmp2 = tmp11 - tmp12;
+
+        /* Odd part */
+
+        z13 = wsptr[5] + wsptr[3];
+        z10 = wsptr[5] - wsptr[3];
+        z11 = wsptr[1] + wsptr[7];
+        z12 = wsptr[1] - wsptr[7];
+
+        tmp7 = z11 + z13;
+        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562);
+
+        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
+        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
+        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
+
+        tmp6 = tmp12 - tmp7;
+        tmp5 = tmp11 - tmp6;
+        tmp4 = tmp10 + tmp5;
+
+        /* Final output stage: scale down by a factor of 8 and range-limit */
+
+        outptr[0] = descale_and_clamp((int)(tmp0 + tmp7), 3);
+        outptr[7] = descale_and_clamp((int)(tmp0 - tmp7), 3);
+        outptr[1] = descale_and_clamp((int)(tmp1 + tmp6), 3);
+        outptr[6] = descale_and_clamp((int)(tmp1 - tmp6), 3);
+        outptr[2] = descale_and_clamp((int)(tmp2 + tmp5), 3);
+        outptr[5] = descale_and_clamp((int)(tmp2 - tmp5), 3);
+        outptr[4] = descale_and_clamp((int)(tmp3 + tmp4), 3);
+        outptr[3] = descale_and_clamp((int)(tmp3 - tmp4), 3);
+        
+        wsptr += 8;		/* advance pointer to next row */
+        outptr += stride;
+    }
+    for (int i =0 ; i < 64; i++) {
+        printf("%x ", outptr[i]);
+    }
+    printf("\n");
+}
+#endif
+
 //decode vec to decoder buf
 bool 
 decode_data_unit(struct decoder *d)
 {
-    static const uint8_t zigzag[64] = {
-        0,  1,  8,  16, 9,  2,  3,  10,
-        17, 24, 32, 25, 18, 11, 4,  5,
-        12, 19, 26, 33, 40, 48, 41, 34,
-        27, 20, 13, 6,  7,  14, 21, 28,
-        35, 42, 49, 56, 57, 50, 43, 36,
-        29, 22, 15, 23, 30, 37, 44, 51,
-        58, 59, 52, 45, 38, 31, 39, 46,
-        53, 60, 61, 54, 47, 55, 62, 63
-    };
-    static const uint8_t zigzag_i[64] = {
-        0,  1,  5,  6, 14, 15, 27, 28,
-        2,  4,  7, 13, 16, 26, 29, 42,
-        3,  8, 12, 17, 25, 30, 41, 43,
-        9, 11, 18, 24, 31, 40, 44, 53,
-        10, 19, 23, 32, 39, 45, 52, 54,
-        20, 22, 33, 38, 46, 51, 55, 60,
-        21, 34, 37, 47, 50, 56, 59, 61,
-        35, 36, 48, 49, 57, 58, 62, 63
-    };
     int dc, ac;
     int *p = d->buf;
     huffman_tree *dc_tree = d->dc;
@@ -574,7 +568,7 @@ decode_data_unit(struct decoder *d)
 
     for (int i = 0; i < 64; i++)
 	{
-		p[i] = p[i] * ((int)d->quant[zigzag_i[i]]); 
+		p[i] = p[i] * (d->quant[i]); 
         //or quantation should be izigzag while reading in
         // printf("%x ", p[i]);
 	}
@@ -622,8 +616,10 @@ destroy_decoder(struct decoder *d)
 
 
 //v = H*V
+// static void 
+// YCrCB_to_RGBA32(JPG *j, uint8_t* Y, uint8_t* Cr, uint8_t* Cb, uint8_t* ptr)
 static void 
-YCrCB_to_RGBA32(JPG *j, uint8_t* Y, uint8_t* Cr, uint8_t* Cb, uint8_t* ptr)
+YCrCB_to_RGBA32(JPG *j, int* Y, int* Cr, int* Cb, uint8_t* ptr)
 {
 	uint8_t *p, *p2;
 	int offset_to_next_row;
@@ -739,12 +735,12 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
         d[i] = malloc(sizeof(struct decoder));
         init_decoder(j, d[i], i);
     }
-    int cr, cb;
+    int cr_id, cb_id;
     if (j->sof.components_num == 1) {
-        cb = cr = 0;
+        cb_id = cr_id = 0;
     } else if (j->sof.components_num == 3) {
-        cr = 1;
-        cb = 2;
+        cr_id = 1;
+        cb_id = 2;
     }
     // huffman_dump_table(d[0]->dc);
     // huffman_dump_table(d[0]->ac);
@@ -772,7 +768,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     hexdump(stdout, "jpg raw data", data, 166);
 #endif
     huffman_decode_start(data, len);
-    uint8_t Y[64*4], Cr[64], Cb[64];
+    // uint8_t Y[64*4], Cr[64], Cb[64];
+    int Y[64*4], Cr[64], Cb[64];
 
     for (int y = 0; y < height / ystride; y++) {
         //block start
@@ -787,12 +784,12 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
             }
 
             //Cr
-            decode_data_unit(d[cr]);
-            idct_float(d[cr], Cr, 8);
+            decode_data_unit(d[cr_id]);
+            idct_float(d[cr_id], Cr, 8);
 
             //Cb
-            decode_data_unit(d[cb]);
-            idct_float(d[cb], Cb, 8);
+            decode_data_unit(d[cb_id]);
+            idct_float(d[cb_id], Cb, 8);
 
             YCrCB_to_RGBA32(j, Y, Cr, Cb, ptr);
             if (restarts > 0) {
@@ -995,16 +992,7 @@ JPG_info(FILE *f, struct pic* p)
     fprintf(f, "\tAPP0: xdensity %d, ydensity %d %s\n", j->app0.xdensity, j->app0.ydensity,
         j->app0.unit == 0 ? "pixel aspect ratio" : 
         ( j->app0.unit == 1 ? "dots per inch": (j->app0.unit == 2 ? "dots per cm":"")));
-    static const uint8_t zigzag_i[64] = {
-        0,  1,  5,  6, 14, 15, 27, 28,
-        2,  4,  7, 13, 16, 26, 29, 42,
-        3,  8, 12, 17, 25, 30, 41, 43,
-        9, 11, 18, 24, 31, 40, 44, 53,
-        10, 19, 23, 32, 39, 45, 52, 54,
-        20, 22, 33, 38, 46, 51, 55, 60,
-        21, 34, 37, 47, 50, 56, 59, 61,
-        35, 36, 48, 49, 57, 58, 62, 63
-    };
+
     fprintf(f, "-----------------------\n");
     for (uint8_t i = 0; i < 4; i++) {
         if (j->dqt[i].id == i) {
@@ -1013,7 +1001,7 @@ JPG_info(FILE *f, struct pic* p)
                 if ((k % 8) == 0) {
                     printf("\t\t");
                 }
-                fprintf(f, "%d ", j->dqt[i].tdata[zigzag_i[k]]);
+                fprintf(f, "%d ", j->dqt[i].tdata[k]);
                 if (((k + 1) % 8) == 0) {
                     printf("\n");
                 }

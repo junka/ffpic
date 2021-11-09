@@ -57,7 +57,7 @@ sdl_screen_init(const char* title, int w, int h)
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     
     // SDL_SetRenderTarget(scrn.r, scrn.t);
-    SDL_SetRenderDrawBlendMode(scrn.r, SDL_BLENDMODE_BLEND);
+    // SDL_SetRenderDrawBlendMode(scrn.r, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(scrn.r, 0xFF, 0xFF, 0xFF, 0xFF);
     SDL_RenderClear(scrn.r);
     SDL_RenderPresent(scrn.r);

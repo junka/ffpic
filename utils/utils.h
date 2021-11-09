@@ -7,6 +7,8 @@ extern "C" {
 
 void hexdump(FILE *f, const char *title, const void *buf, unsigned int len);
 
+void mcu_dump(FILE *f, const char *title, const int *buf);
+
 #ifdef __cplusplus
 }
 #endif

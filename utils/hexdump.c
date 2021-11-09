@@ -43,3 +43,14 @@ hexdump(FILE *f, const char *title, const void *buf, unsigned int len)
 	}
 	fflush(f);
 }
+
+void mcu_dump(FILE *f, const char *title, const int *buf)
+{
+	fprintf(f, "%s:\n", title);
+	for (int i = 0; i < 8; i ++) {
+		for (int j = 0; j < 8; j ++) {
+			fprintf(f, "%04x ", buf[i*8 + j]);
+		}
+		fprintf(f, "\n");
+	}
+}

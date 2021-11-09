@@ -76,9 +76,9 @@ bmp_writer_puts(void *buff, int left, int top, int width, int height, int depth,
 
     file_p_tmp = file_p;
     file_p_tmp += 54;
-    for( i = 54; i < width*height*4; i++)
+    for( i = 54; i < width * height * 4; i++)
     {
-        byte_copy = *(b+(i-54)/4);
+        byte_copy = *(b + (i-54)/4);
         if((i-54)%4==0)
             *file_p_tmp = byte_copy;
         else if((i-54)%4==1)

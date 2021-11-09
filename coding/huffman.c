@@ -283,7 +283,7 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	unsigned pos = 0, ct;
 	int c, cbits = 0, bl;
 	if (eof_bits(v, FAST_HF_BITS)) {
-		// printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
+		printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
 		return -1;
 	}
 	c = READ_BITS(v, FAST_HF_BITS);
@@ -354,6 +354,7 @@ huffman_reset_stream(void)
 void
 huffman_decode_end(void)
 {
+    printf("len %ld, now consume %ld\n", vec->len, vec->ptr-vec->start);
 	free(vec);
 }
 

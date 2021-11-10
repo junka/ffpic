@@ -1,0 +1,13 @@
+*.a
+*.d
+*.gcno
+*.ko
+*.la
+*.o
+*.obj
+*.exe
+*.so
+.*.cmd
+.*.swp
+/.vscode
+/build

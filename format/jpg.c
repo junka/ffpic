@@ -1,15 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <math.h>
 #include <errno.h>
 #include <arpa/inet.h>
 
 #include "file.h"
 #include "jpg.h"
+#include "utils.h"
 
 #include "huffman.h"
-
-
 
 struct decoder {
     int prev_dc;
@@ -131,30 +131,12 @@ read_dht(JPG* j, FILE *f)
 
 }
 
-void
-convert_YCbCr_to_RGB(uint8_t src[3], uint8_t dst[3])
-{
-    uint8_t Y, Cr, Cb, r, g, b;
-    Y = src[0];
-    Cb = src[1];
-    Cr = src[2];
-    Cr = Cr - 128 ;
-    Cb = Cb - 128 ;
-    r = Y + ((Cr >> 2) + (Cr >> 3) + (Cr >> 5)) ;
-    g = Y - ((Cb >> 2) + (Cb >> 4) + (Cb >> 5)) - ((Cr >> 1) + (Cr >> 3) + (Cr >> 4) + (Cr >> 5));
-    b = Y + (Cb + (Cb >> 1) + (Cb >> 2) + (Cb >> 6)) ;
-    dst[0] = b;
-    dst[1] = g;
-    dst[2] = r;
-}
-
 
 static int 
-get_vli(int code, int bitlen)
+get_vlc(int code, int bitlen)
 {
 	if (bitlen == 0)
         return 0;
-
     // if msb is not 0, a negtiva value
 	if ((code << 1) < (1 << bitlen))
 		return code + 1 - (1 << bitlen);
@@ -163,10 +145,7 @@ get_vli(int code, int bitlen)
 }
 
 
-#define FAST_FLOAT float
-
-
-static unsigned char 
+static uint8_t
 clamp(int i)
 {
 	if (i < 0)
@@ -177,30 +156,27 @@ clamp(int i)
 		return i;
 }
 
-#if 1
-static inline unsigned char 
+static inline uint8_t
 descale_and_clamp(int x, int shift)
 {
-  x += (1UL << (shift - 1));
-  if (x < 0)
-    x = (x >> shift) | ((~(0UL)) << (32 - (shift)));
-  else
-    x >>= shift;
-  x += 128;
-  if (x > 255)
-    return 255;
-  else if (x < 0)
-    return 0;
-  else
-    return x;
+    x += (1UL << (shift - 1));
+    if (x < 0)
+        x = (x >> shift) | ((~(0UL)) << (32 - (shift)));
+    else
+        x >>= shift;
+    x += 128;
+    if (x > 255)
+        return 255;
+    else if (x < 0)
+        return 0;
+    else
+        return x;
 }
-#endif
 
-#if 0
-#include <math.h>
-void 
-idct_float(struct decoder *d, int *output_buf, int stride) {
-    int* component = d->buf;
+/* keep it slow, but high quality */
+void
+idct_float(struct decoder *d, int *output, int stride)
+{
     const float m0 = 2.0 * cos(1.0 / 16.0 * 2.0 * M_PI);
     const float m1 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
     const float m3 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
@@ -215,241 +191,84 @@ idct_float(struct decoder *d, int *output_buf, int stride) {
     const float s5 = cos(5.0 / 16.0 * M_PI) / 2.0;
     const float s6 = cos(6.0 / 16.0 * M_PI) / 2.0;
     const float s7 = cos(7.0 / 16.0 * M_PI) / 2.0;
-    for (uint i = 0; i < 8; ++i) {
-        const float g0 = component[0 * 8 + i] * s0;
-        const float g1 = component[4 * 8 + i] * s4;
-        const float g2 = component[2 * 8 + i] * s2;
-        const float g3 = component[6 * 8 + i] * s6;
-        const float g4 = component[5 * 8 + i] * s5;
-        const float g5 = component[1 * 8 + i] * s1;
-        const float g6 = component[7 * 8 + i] * s7;
-        const float g7 = component[3 * 8 + i] * s3;
-
-        const float f0 = g0;
-        const float f1 = g1;
-        const float f2 = g2;
-        const float f3 = g3;
-        const float f4 = g4 - g7;
-        const float f5 = g5 + g6;
-        const float f6 = g5 - g6;
-        const float f7 = g4 + g7;
-
-        const float e0 = f0;
-        const float e1 = f1;
-        const float e2 = f2 - f3;
-        const float e3 = f2 + f3;
-        const float e4 = f4;
-        const float e5 = f5 - f7;
-        const float e6 = f6;
-        const float e7 = f5 + f7;
-        const float e8 = f4 + f6;
-
-        const float d0 = e0;
-        const float d1 = e1;
-        const float d2 = e2 * m1;
-        const float d3 = e3;
-        const float d4 = e4 * m2;
-        const float d5 = e5 * m3;
-        const float d6 = e6 * m4;
-        const float d7 = e7;
-        const float d8 = e8 * m5;
-
-        const float c0 = d0 + d1;
-        const float c1 = d0 - d1;
-        const float c2 = d2 - d3;
-        const float c3 = d3;
-        const float c4 = d4 + d8;
-        const float c5 = d5 + d7;
-        const float c6 = d6 - d8;
-        const float c7 = d7;
-        const float c8 = c5 - c6;
-
-        const float b0 = c0 + c3;
-        const float b1 = c1 + c2;
-        const float b2 = c1 - c2;
-        const float b3 = c0 - c3;
-        const float b4 = c4 - c8;
-        const float b5 = c8;
-        const float b6 = c6 - c7;
-        const float b7 = c7;
-
-        output_buf[0 * 8 + i] = b0 + b7;
-        output_buf[1 * 8 + i] = b1 + b6;
-        output_buf[2 * 8 + i] = b2 + b5;
-        output_buf[3 * 8 + i] = b3 + b4;
-        output_buf[4 * 8 + i] = b3 - b4;
-        output_buf[5 * 8 + i] = b2 - b5;
-        output_buf[6 * 8 + i] = b1 - b6;
-        output_buf[7 * 8 + i] = b0 - b7;
-    }
-    for (uint i = 0; i < 8; ++i) {
-        const float g0 = component[i * 8 + 0] * s0;
-        const float g1 = component[i * 8 + 4] * s4;
-        const float g2 = component[i * 8 + 2] * s2;
-        const float g3 = component[i * 8 + 6] * s6;
-        const float g4 = component[i * 8 + 5] * s5;
-        const float g5 = component[i * 8 + 1] * s1;
-        const float g6 = component[i * 8 + 7] * s7;
-        const float g7 = component[i * 8 + 3] * s3;
-
-        const float f0 = g0;
-        const float f1 = g1;
-        const float f2 = g2;
-        const float f3 = g3;
-        const float f4 = g4 - g7;
-        const float f5 = g5 + g6;
-        const float f6 = g5 - g6;
-        const float f7 = g4 + g7;
-
-        const float e0 = f0;
-        const float e1 = f1;
-        const float e2 = f2 - f3;
-        const float e3 = f2 + f3;
-        const float e4 = f4;
-        const float e5 = f5 - f7;
-        const float e6 = f6;
-        const float e7 = f5 + f7;
-        const float e8 = f4 + f6;
-
-        const float d0 = e0;
-        const float d1 = e1;
-        const float d2 = e2 * m1;
-        const float d3 = e3;
-        const float d4 = e4 * m2;
-        const float d5 = e5 * m3;
-        const float d6 = e6 * m4;
-        const float d7 = e7;
-        const float d8 = e8 * m5;
-
-        const float c0 = d0 + d1;
-        const float c1 = d0 - d1;
-        const float c2 = d2 - d3;
-        const float c3 = d3;
-        const float c4 = d4 + d8;
-        const float c5 = d5 + d7;
-        const float c6 = d6 - d8;
-        const float c7 = d7;
-        const float c8 = c5 - c6;
-
-        const float b0 = c0 + c3;
-        const float b1 = c1 + c2;
-        const float b2 = c1 - c2;
-        const float b3 = c0 - c3;
-        const float b4 = c4 - c8;
-        const float b5 = c8;
-        const float b6 = c6 - c7;
-        const float b7 = c7;
-
-        output_buf[i * 8 + 0] = b0 + b7;
-        output_buf[i * 8 + 1] = b1 + b6;
-        output_buf[i * 8 + 2] = b2 + b5;
-        output_buf[i * 8 + 3] = b3 + b4;
-        output_buf[i * 8 + 4] = b3 - b4;
-        output_buf[i * 8 + 5] = b2 - b5;
-        output_buf[i * 8 + 6] = b1 - b6;
-        output_buf[i * 8 + 7] = b0 - b7;
-    }
-}
-#endif
-
-#if 1
-void
-idct_float(struct decoder *d, int *output_buf, int stride)
-{
-    FAST_FLOAT tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
-    FAST_FLOAT tmp10, tmp11, tmp12, tmp13;
-    FAST_FLOAT z5, z10, z11, z12, z13;
+    
     int *inptr;
-    //   uint16_t *quantptr;
-    FAST_FLOAT *wsptr;
+    float *wsptr;
     int *outptr;
     int ctr;
-    FAST_FLOAT workspace[64]; /* buffers data between passes */
+    float workspace[64]; /* buffers data between passes */
 
     /* Pass 1: process columns from input, store into work array. */
     inptr = d->buf;
-    //   quantptr = d->quant;
+
     wsptr = workspace;
     for (ctr = 8; ctr > 0; ctr--) {
-        /* Due to quantization, we will usually find that many of the input
-        * coefficients are zero, especially the AC terms.  We can exploit this
-        * by short-circuiting the IDCT calculation for any column in which all
-        * the AC terms are zero.  In that case each output is equal to the
-        * DC coefficient (with scale factor as needed).
-        * With typical images and quantization tables, half or more of the
-        * column DCT calculations can be simplified this way.
-        */
-    
-        if (inptr[8*1] == 0 && inptr[8*2] == 0 &&
-        inptr[8*3] == 0 && inptr[8*4] == 0 &&
-        inptr[8*5] == 0 && inptr[8*6] == 0 &&
-        inptr[8*7] == 0) {
-            /* AC terms all zero */
-            FAST_FLOAT dcval = inptr[8*0];
-            
-            wsptr[8*0] = dcval;
-            wsptr[8*1] = dcval;
-            wsptr[8*2] = dcval;
-            wsptr[8*3] = dcval;
-            wsptr[8*4] = dcval;
-            wsptr[8*5] = dcval;
-            wsptr[8*6] = dcval;
-            wsptr[8*7] = dcval;
-            
-            inptr++;			/* advance pointers to next column */
-            wsptr++;
-            continue;
-        }
-    
+        const float g0 = inptr[0 * 8] * s0;
+        const float g1 = inptr[4 * 8] * s4;
+        const float g2 = inptr[2 * 8] * s2;
+        const float g3 = inptr[6 * 8] * s6;
+        const float g4 = inptr[5 * 8] * s5;
+        const float g5 = inptr[1 * 8] * s1;
+        const float g6 = inptr[7 * 8] * s7;
+        const float g7 = inptr[3 * 8] * s3;
+
         /* Even part */
+        const float f0 = g0;
+        const float f1 = g1;
+        const float f2 = g2;
+        const float f3 = g3;
+        const float f4 = g4 - g7;
+        const float f5 = g5 + g6;
+        const float f6 = g5 - g6;
+        const float f7 = g4 + g7;
 
-        tmp0 = inptr[8*0];
-        tmp1 = inptr[8*2];
-        tmp2 = inptr[8*4];
-        tmp3 = inptr[8*6];
+        const float e0 = f0;
+        const float e1 = f1;
+        const float e2 = f2 - f3;
+        const float e3 = f2 + f3;
+        const float e4 = f4;
+        const float e5 = f5 - f7;
+        const float e6 = f6;
+        const float e7 = f5 + f7;
+        const float e8 = f4 + f6;
 
-        tmp10 = tmp0 + tmp2;	/* phase 3 */
-        tmp11 = tmp0 - tmp2;
+        const float d0 = e0;
+        const float d1 = e1;
+        const float d2 = e2 * m1;
+        const float d3 = e3;
+        const float d4 = e4 * m2;
+        const float d5 = e5 * m3;
+        const float d6 = e6 * m4;
+        const float d7 = e7;
+        const float d8 = e8 * m5;
 
-        tmp13 = tmp1 + tmp3;	/* phases 5-3 */
-        tmp12 = (tmp1 - tmp3) * ((FAST_FLOAT) 1.414213562) - tmp13; /* 2*c4 */
+        const float c0 = d0 + d1;
+        const float c1 = d0 - d1;
+        const float c2 = d2 - d3;
+        const float c3 = d3;
+        const float c4 = d4 + d8;
+        const float c5 = d5 + d7;
+        const float c6 = d6 - d8;
+        const float c7 = d7;
+        const float c8 = c5 - c6;
 
-        tmp0 = tmp10 + tmp13;	/* phase 2 */
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
-        
-        /* Odd part */
+        const float b0 = c0 + c3;
+        const float b1 = c1 + c2;
+        const float b2 = c1 - c2;
+        const float b3 = c0 - c3;
+        const float b4 = c4 - c8;
+        const float b5 = c8;
+        const float b6 = c6 - c7;
+        const float b7 = c7;
 
-        tmp4 = inptr[8*1];
-        tmp5 = inptr[8*3];
-        tmp6 = inptr[8*5];
-        tmp7 = inptr[8*7];
-
-        z13 = tmp6 + tmp5;		/* phase 6 */
-        z10 = tmp6 - tmp5;
-        z11 = tmp4 + tmp7;
-        z12 = tmp4 - tmp7;
-
-        tmp7 = z11 + z13;		/* phase 5 */
-        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562); /* 2*c4 */
-
-        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
-        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
-        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
-
-        tmp6 = tmp12 - tmp7;	/* phase 2 */
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 + tmp5;
-
-        wsptr[8*0] = tmp0 + tmp7;
-        wsptr[8*7] = tmp0 - tmp7;
-        wsptr[8*1] = tmp1 + tmp6;
-        wsptr[8*6] = tmp1 - tmp6;
-        wsptr[8*2] = tmp2 + tmp5;
-        wsptr[8*5] = tmp2 - tmp5;
-        wsptr[8*4] = tmp3 + tmp4;
-        wsptr[8*3] = tmp3 - tmp4;
+        wsptr[0 * 8] = b0 + b7;
+        wsptr[1 * 8] = b1 + b6;
+        wsptr[2 * 8] = b2 + b5;
+        wsptr[3 * 8] = b3 + b4;
+        wsptr[4 * 8] = b3 - b4;
+        wsptr[5 * 8] = b2 - b5;
+        wsptr[6 * 8] = b1 - b6;
+        wsptr[7 * 8] = b0 - b7;
 
         inptr++;			/* advance pointers to next column */
         wsptr++;
@@ -459,65 +278,88 @@ idct_float(struct decoder *d, int *output_buf, int stride)
     /* Note that we must descale the results by a factor of 8 == 2**3. */
 
     wsptr = workspace;
-    outptr = output_buf;
+    outptr = output;
     for (ctr = 0; ctr < 8; ctr++) {
         /* Rows of zeroes can be exploited in the same way as we did with columns.
         * However, the column calculation has created many nonzero AC terms, so
         * the simplification applies less often (typically 5% to 10% of the time).
         * And testing floats for zero is relatively expensive, so we don't bother.
         */
-        
+
         /* Even part */
+        const float g0 = wsptr[0] * s0;
+        const float g1 = wsptr[4] * s4;
+        const float g2 = wsptr[2] * s2;
+        const float g3 = wsptr[6] * s6;
+        const float g4 = wsptr[5] * s5;
+        const float g5 = wsptr[1] * s1;
+        const float g6 = wsptr[7] * s7;
+        const float g7 = wsptr[3] * s3;
 
-        tmp10 = wsptr[0] + wsptr[4];
-        tmp11 = wsptr[0] - wsptr[4];
+        const float f0 = g0;
+        const float f1 = g1;
+        const float f2 = g2;
+        const float f3 = g3;
+        const float f4 = g4 - g7;
+        const float f5 = g5 + g6;
+        const float f6 = g5 - g6;
+        const float f7 = g4 + g7;
 
-        tmp13 = wsptr[2] + wsptr[6];
-        tmp12 = (wsptr[2] - wsptr[6]) * ((FAST_FLOAT) 1.414213562) - tmp13;
+        const float e0 = f0;
+        const float e1 = f1;
+        const float e2 = f2 - f3;
+        const float e3 = f2 + f3;
+        const float e4 = f4;
+        const float e5 = f5 - f7;
+        const float e6 = f6;
+        const float e7 = f5 + f7;
+        const float e8 = f4 + f6;
 
-        tmp0 = tmp10 + tmp13;
-        tmp3 = tmp10 - tmp13;
-        tmp1 = tmp11 + tmp12;
-        tmp2 = tmp11 - tmp12;
+        const float d0 = e0;
+        const float d1 = e1;
+        const float d2 = e2 * m1;
+        const float d3 = e3;
+        const float d4 = e4 * m2;
+        const float d5 = e5 * m3;
+        const float d6 = e6 * m4;
+        const float d7 = e7;
+        const float d8 = e8 * m5;
 
-        /* Odd part */
+        const float c0 = d0 + d1;
+        const float c1 = d0 - d1;
+        const float c2 = d2 - d3;
+        const float c3 = d3;
+        const float c4 = d4 + d8;
+        const float c5 = d5 + d7;
+        const float c6 = d6 - d8;
+        const float c7 = d7;
+        const float c8 = c5 - c6;
 
-        z13 = wsptr[5] + wsptr[3];
-        z10 = wsptr[5] - wsptr[3];
-        z11 = wsptr[1] + wsptr[7];
-        z12 = wsptr[1] - wsptr[7];
+        const float b0 = c0 + c3;
+        const float b1 = c1 + c2;
+        const float b2 = c1 - c2;
+        const float b3 = c0 - c3;
+        const float b4 = c4 - c8;
+        const float b5 = c8;
+        const float b6 = c6 - c7;
+        const float b7 = c7;
 
-        tmp7 = z11 + z13;
-        tmp11 = (z11 - z13) * ((FAST_FLOAT) 1.414213562);
-
-        z5 = (z10 + z12) * ((FAST_FLOAT) 1.847759065); /* 2*c2 */
-        tmp10 = ((FAST_FLOAT) 1.082392200) * z12 - z5; /* 2*(c2-c6) */
-        tmp12 = ((FAST_FLOAT) -2.613125930) * z10 + z5; /* -2*(c2+c6) */
-
-        tmp6 = tmp12 - tmp7;
-        tmp5 = tmp11 - tmp6;
-        tmp4 = tmp10 + tmp5;
-
-        /* Final output stage: scale down by a factor of 8 and range-limit */
-
-        outptr[0] = descale_and_clamp((int)(tmp0 + tmp7), 3);
-        outptr[7] = descale_and_clamp((int)(tmp0 - tmp7), 3);
-        outptr[1] = descale_and_clamp((int)(tmp1 + tmp6), 3);
-        outptr[6] = descale_and_clamp((int)(tmp1 - tmp6), 3);
-        outptr[2] = descale_and_clamp((int)(tmp2 + tmp5), 3);
-        outptr[5] = descale_and_clamp((int)(tmp2 - tmp5), 3);
-        outptr[4] = descale_and_clamp((int)(tmp3 + tmp4), 3);
-        outptr[3] = descale_and_clamp((int)(tmp3 - tmp4), 3);
+        /* Final output stage:
+         No scale down for quality
+         and range-limit */
+        outptr[0] = descale_and_clamp((int)(b0 + b7), 0);
+        outptr[7] = descale_and_clamp((int)(b0 - b7), 0);
+        outptr[1] = descale_and_clamp((int)(b1 + b6), 0);
+        outptr[6] = descale_and_clamp((int)(b1 - b6), 0);
+        outptr[2] = descale_and_clamp((int)(b2 + b5), 0);
+        outptr[5] = descale_and_clamp((int)(b2 - b5), 0);
+        outptr[4] = descale_and_clamp((int)(b3 + b4), 0);
+        outptr[3] = descale_and_clamp((int)(b3 - b4), 0);
         
         wsptr += 8;		/* advance pointer to next row */
         outptr += stride;
     }
-    for (int i =0 ; i < 64; i++) {
-        printf("%x ", outptr[i]);
-    }
-    printf("\n");
 }
-#endif
 
 //decode vec to decoder buf
 bool 
@@ -529,20 +371,19 @@ decode_data_unit(struct decoder *d)
     huffman_tree *ac_tree = d->ac;
 
     dc = huffman_decode_symbol(dc_tree);
-    dc = get_vli(huffman_read_symbol(dc), dc);
-    // printf("prev dc %d\n", d->prev_dc);
+    dc = get_vlc(huffman_read_symbol(dc), dc);
     dc += d->prev_dc;
-    p[0] = d->prev_dc = dc;
+    d->prev_dc = dc;
+    p[0] = dc;
 
     // read AC coff
     for (int i = 1; i < 64;) {
         ac = huffman_decode_symbol(ac_tree);
         if (ac == -1) {
-            // printf("invalid ac value\n");
+            printf("invalid ac value\n");
             return false;
         }
         int lead_zero = (ac >> 4) & 0xF;
-        // printf("leading zero %d, %x\n", lead_zero, ac);
         ac = (ac & 0xF);
 
         if (ac == EOB) {
@@ -553,7 +394,6 @@ decode_data_unit(struct decoder *d)
             else if (lead_zero == 0) 
                 lead_zero = 64 - i;
         }
-        // printf("i %d, lead_zero %d\n", i, lead_zero);
 
         while (lead_zero > 0) {
             p[zigzag[i++]] = 0;
@@ -561,18 +401,14 @@ decode_data_unit(struct decoder *d)
         }
 
         if (ac) {
-            ac = get_vli(huffman_read_symbol(ac), ac);
+            ac = get_vlc(huffman_read_symbol(ac), ac);
             p[zigzag[i++]] = ac;
         }
     }
 
-    for (int i = 0; i < 64; i++)
-	{
-		p[i] = p[i] * (d->quant[i]); 
-        //or quantation should be izigzag while reading in
-        // printf("%x ", p[i]);
+    for (int i = 0; i < 64; i++) {
+		p[i] *= d->quant[i];
 	}
-    // printf("\n");
     return true;
 }
 
@@ -581,8 +417,8 @@ init_decoder(JPG* j, struct decoder *d, uint8_t comp_id)
 {
     if (comp_id >= j->sof.components_num)
         return -1;
-    huffman_tree * dc_tree= huffman_tree_init();
-    huffman_tree * ac_tree= huffman_tree_init();
+    huffman_tree * dc_tree = huffman_tree_init();
+    huffman_tree * ac_tree = huffman_tree_init();
     int dc_ht_id = j->sos.comps[comp_id].DC_entropy;
     int ac_ht_id = j->sos.comps[comp_id].AC_entropy;
     huffman_build_lookup_table(dc_tree, 0, dc_ht_id, j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
@@ -613,20 +449,24 @@ destroy_decoder(struct decoder *d)
 }
 
 
-
-
-//v = H*V
-// static void 
-// YCrCB_to_RGBA32(JPG *j, uint8_t* Y, uint8_t* Cr, uint8_t* Cb, uint8_t* ptr)
-static void 
-YCrCB_to_RGBA32(JPG *j, int* Y, int* Cr, int* Cb, uint8_t* ptr)
-{
-	uint8_t *p, *p2;
-	int offset_to_next_row;
-
 #define SCALEBITS       10
 #define ONE_HALF        (1UL << (SCALEBITS - 1))
 #define FIX(x)          ((int)((x) * (1UL<<SCALEBITS) + 0.5))
+
+static void
+YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
+{
+#if 0
+    fprintf(stdout, "YCbCr :\n");
+    for (int i = 0; i < 16; i ++) {
+        for (int j = 0; j < 16; j ++) {
+            fprintf(stdout, "%04x ", Y[i*16 + j]);
+        }
+        fprintf(stdout, "\n");
+    }
+#endif
+    uint8_t *p, *p2;
+    int offset_to_next_row;
     int width = ((j->sof.width + 7) >> 3) << 3;
     int pitch = width * 4;
 
@@ -638,51 +478,48 @@ YCrCB_to_RGBA32(JPG *j, int* Y, int* Cr, int* Cb, uint8_t* ptr)
     offset_to_next_row = pitch * v - 8 * h * 4;
 
     for (int i = 0; i < 8; i++) {
-		for (int k = 0; k < 8; k++) {
+        for (int k = 0; k < 8; k++) {
             int y, cb, cr;
             int add_r, add_g, add_b;
             int r, g , b;
-
+            
+            //all YCbCr have been added by 128 in idct
             cb = *Cb++ - 128;
             cr = *Cr++ - 128;
-            add_r =                      FIX(1.40200) * cr + ONE_HALF;
-            add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr + ONE_HALF;
+            add_r =                      FIX(1.40200) * cr  + ONE_HALF;
+            add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr  + ONE_HALF;
             add_b = FIX(1.77200) * cb + ONE_HALF;
             for (int i = 0; i < h; i ++) {
                 y = (*Y++) << SCALEBITS;
                 b = (y + add_b) >> SCALEBITS;
                 g = (y + add_g) >> SCALEBITS;
                 r = (y + add_r) >> SCALEBITS;
-                *p++ = clamp(r);
-                *p++ = clamp(g);
                 *p++ = clamp(b);
-                *p++ = 0x0;    //alpha
+                *p++ = clamp(g);
+                *p++ = clamp(r);
+                *p++ = 0xff;    //alpha
             }
             if (v == 2) {
                 for (int j = 0; j < h; j ++) {
-                    y = (Y[8 * h - 2 + j]) << SCALEBITS;
+                    y = (Y[8 * h - 1*h + j]) << SCALEBITS;
                     b = (y + add_b) >> SCALEBITS;
                     g = (y + add_g) >> SCALEBITS;
                     r = (y + add_r) >> SCALEBITS;
-                    *p2++ = clamp(r);
-                    *p2++ = clamp(g);
                     *p2++ = clamp(b);
-                    *p2++ = 0x0;
+                    *p2++ = clamp(g);
+                    *p2++ = clamp(r);
+                    *p2++ = 0xff;
                 }
             }
-		}
+        }
         if (v == 2)
-    		Y += 8 * h;
-		p += offset_to_next_row;
+            Y += 8 * h;
+        p += offset_to_next_row;
         if (v == 2)
-    		p2 += offset_to_next_row;
-	}
-
-#undef SCALEBITS
-#undef ONE_HALF
-#undef FIX
-
+            p2 += offset_to_next_row;
+    }
 }
+
 
 static int 
 read_next_rst_marker(struct decoder *d)
@@ -716,7 +553,6 @@ read_next_rst_marker(struct decoder *d)
             return 0;
     }
 
-    // priv->stream = stream;
     d->last_rst_marker_seen++;
     d->last_rst_marker_seen &= 7;
 
@@ -735,63 +571,57 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
         d[i] = malloc(sizeof(struct decoder));
         init_decoder(j, d[i], i);
     }
-    int cr_id, cb_id;
-    if (j->sof.components_num == 1) {
-        cb_id = cr_id = 0;
-    } else if (j->sof.components_num == 3) {
-        cr_id = 1;
-        cb_id = 2;
-    }
+
     // huffman_dump_table(d[0]->dc);
     // huffman_dump_table(d[0]->ac);
 
     //stride value from dc
-    int v = j->sof.colors[0].vertical;
-    int h = j->sof.colors[0].horizontal;
-    int ystride = v * 8;  //means lines per mcu
-    int xstride = h * 8;  //means rows per mcu
+    int ystride = j->sof.colors[0].vertical * 8;  //means lines per mcu
+    int xstride = j->sof.colors[0].horizontal * 8;  //means rows per mcu
 
     uint8_t *ptr;
     int width = ((j->sof.width + 7) >> 3) << 3; //algin to 8
     int height = ((j->sof.height + 7) >> 3) << 3;
     int pitch = width * 4;
     int bytes_blockline = pitch * ystride;
-    int bytes_mcu = 32; //depth
-    bytes_mcu *= (xstride >> 3);
+    int bytes_mcu = xstride * 4;
 
     int restarts = j->dri.interval;
-    // printf("w %d h %d pitch %d\n", width, height, pitch);
+
     j->data = malloc(pitch * height);
-    // printf("bytes per block %d, bytes per mcu %d\n", bytes_blockline, bytes_mcu);
 #if 0
-    #include "utils.h"
     hexdump(stdout, "jpg raw data", data, 166);
 #endif
     huffman_decode_start(data, len);
-    // uint8_t Y[64*4], Cr[64], Cb[64];
-    int Y[64*4], Cr[64], Cb[64];
+
+    int Y[3][64*4], *Cr, *Cb;
+    int dummy[64] = {0};
 
     for (int y = 0; y < height / ystride; y++) {
         //block start
-        ptr = j->data + y * bytes_blockline; 
+        ptr = j->data + y * bytes_blockline;
         for (int x = 0; x < width; x += xstride) {
-            // Y
-            for (int vi = 0; vi < v; vi ++) {
-                for (int hi = 0; hi < h; hi ++) {
-                    decode_data_unit(d[0]);
-                    idct_float(d[0], Y + 64 * vi * h + 8 * hi, h * 8);
+            for (uint i = 0; i < j->sof.components_num; ++i) {
+                int v = j->sof.colors[i].vertical;
+                int h = j->sof.colors[i].horizontal;
+                for (int vi = 0; vi < v; vi ++) {
+                    for (int hi = 0; hi < h; hi ++) {
+                        decode_data_unit(d[i]);
+                        idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
+                    }
                 }
             }
 
-            //Cr
-            decode_data_unit(d[cr_id]);
-            idct_float(d[cr_id], Cr, 8);
+            if (j->sof.components_num == 1) {
+                Cr = dummy;
+                Cb = dummy;
+            } else {
+                Cb = Y[1];
+                Cr = Y[2];
+            }
 
-            //Cb
-            decode_data_unit(d[cb_id]);
-            idct_float(d[cb_id], Cb, 8);
+            YCbCr_to_BGRA32(j, Y[0], Cb, Cr, ptr);
 
-            YCrCB_to_RGBA32(j, Y, Cr, Cb, ptr);
             if (restarts > 0) {
                 restarts --;
                 if (restarts == 0) {
@@ -803,12 +633,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                     //read_next_rst_marker(d[0]);
                 }
             }
-
             ptr += bytes_mcu; //skip to next 
-            
         }
     }
-    // #include "utils.h"
     // hexdump(stdout, "jpg decode data", j->data, 160);
 
     for (int i = 0; i < j->sof.components_num; i ++) {
@@ -816,7 +643,25 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     }
 
     huffman_decode_end();
-
+#if 1
+    //clear padding color or to background
+    for (int i = 0; i < height; i++) {
+        for (int k = j->sof.width; k < width; k++) {
+            j->data[i *pitch + k * 4] = 0xFF;
+            j->data[i *pitch + k * 4 + 1] = 0xFF;
+            j->data[i *pitch + k * 4 + 2] = 0xFF;
+            j->data[i *pitch + k * 4 + 3] = 0xFF;
+        }
+    }
+    for (int i = j->sof.height; i < height; i++) {
+        for (int k = 0; k < j->sof.width; k++) {
+            j->data[i *pitch + k * 4] = 0xFF;
+            j->data[i *pitch + k * 4 + 1] = 0xFF;
+            j->data[i *pitch + k * 4 + 2] = 0xFF;
+            j->data[i *pitch + k * 4 + 3] = 0xFF;
+        }
+    }
+#endif
 }
 
 void 
@@ -858,7 +703,6 @@ read_compressed_image(JPG* j, FILE *f)
     j->data = compressed;
     j->data_len = l;
     fseek(f, -2, SEEK_CUR);
-    // free(compressed);
 }
 
 

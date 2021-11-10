@@ -50,7 +50,7 @@ step_back(struct bits_vec *v, int n)
 		}
 	}
 }
-#if 0
+
 int 
 read_bits(struct bits_vec *v, int n)
 {
@@ -73,14 +73,13 @@ read_bits(struct bits_vec *v, int n)
 	else 
 		ret >>= ((read - n) % 8);
 	ret &= ((1 << n) -1);
-	// printf("ret %d, read %d\n", ret, read);
 	if((n + v->offset) % 8) {
 		v->ptr --;
 	}
 	v->offset = ((v->offset + (n%8))%8);
 	return ret;
 }
-#endif
+
 int 
 read_bit(struct bits_vec *v)
 {
@@ -95,7 +94,7 @@ read_bit(struct bits_vec *v)
 	return ret;
 }
 
-#if 1
+#if 0
 int 
 read_bits(struct bits_vec *v, int n)
 {
@@ -206,12 +205,6 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 	bits = maxbitlen;
 	if(maxbitlen > FAST_HF_BITS)
 		maxbitlen = FAST_HF_BITS;
-	//rule 1: start coding from 0
-    // coding[0] = 0;
-	// i = 0;
-	// while (count[i] == 0) {
-	// 	i ++;
-	// }
 
 	//we need slow table when max bits greater than 8
 	for (int j = FAST_HF_BITS + 1; j <= bits; j ++) {
@@ -220,39 +213,23 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 		tree->slow_symbol[j - FAST_HF_BITS - 1] = malloc(count[j-1] * sizeof(uint16_t));
 	}
 
-	// coding[numofcodes] = 0;
+	/* rule 1: start coding from 0 */
 	int cod = 0;
     for (i = 0; i < MAX_BIT_LENGTH; i ++) {
+		/* rule 2: same bit len codecs are continuous */
 		for (int k = 0; k < count[i]; k++) {
 			coding[n_codes] = cod;
 			bitlen[n_codes] = i + 1;
 			n_codes ++;
 			cod += 1;
 		}
+		/* rule 3: codec for len+1 should start from 2 * (codec + 1) */
 		cod <<= 1;
-#if 0
-        if (count[i] > 0) {
-            if (n_codes == 0) {
-                coding[0] = 0;
-            } else {
-                coding[n_codes] = (coding[n_codes - 1] + 1) << k;
-            }
-            k = 0;
-			bitlen[n_codes] = i + 1;
-            n_codes ++;
-            for(int j = 1 ; j < count[i]; j++) {
-                coding[n_codes] = coding[n_codes - 1] + 1;
-				bitlen[n_codes] = i + 1;
-                n_codes ++;
-            }
-        }
-        k ++;
-#endif
     }
 	tree->n_codes = n_codes;
 
 	for (i = 0; i < n_codes; i++) {
-		// build fast lookup table
+		/* build fast lookup table */
 		if (bitlen[i] <= FAST_HF_BITS) {
 			int l = ((int)1 << (FAST_HF_BITS - bitlen[i]));
 			int cd = coding[i] << (FAST_HF_BITS - bitlen[i]);
@@ -260,19 +237,14 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 				tree->fast[0][cd] = syms[i];
 				tree->fast[1][cd] = bitlen[i];
 				cd += 1;
-#if 0
-				printf("ith %d bitlen %d ,code %x, sym %x, fast %d \n", i,
-					bitlen[i], coding[i], syms[i], cd);
-#endif
 			}
 		} else {
-			//build slow lookup list
+			/* build slow lookup list */
 			if (bitlen[i] > bitlen[i - 1]) {
 				n = 0;
 			}
 			tree->slow_codec[bitlen[i] - FAST_HF_BITS - 1][n] = coding[i];
 			tree->slow_symbol[bitlen[i] - FAST_HF_BITS - 1][n] = syms[i];
-			// printf("ith %d, slow bitlen %d, coding %x, sym %x\n", i, bitlen[i], coding[i], syms[i]);
 			n ++;
 		}
 	}
@@ -280,8 +252,8 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 
 static int 
 decode_symbol(struct bits_vec * v, huffman_tree* tree) {
-	unsigned pos = 0, ct;
-	int c, cbits = 0, bl;
+	int pos = 0, ct = 0xFF;
+	int c = -1, cbits = 0, bl = 0;
 	if (eof_bits(v, FAST_HF_BITS)) {
 		printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
 		return -1;
@@ -291,14 +263,12 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 		printf("invalid bits read\n");
 	}
 
-	//looup fast table first
+	/* looup fast table first */
 	if (FAST_HF_BITS) {
 		ct = tree->fast[0][c];
 		if (ct != 0xFF) {
-			/* get decoded symbol */
-			// printf("off %d decode %d, bitlen %d\n", v->offset, ct, tree->fast[1][c]);
+			/* step back n bits if decoded symbol bit len less than we read*/
 			STEP_BACK(v, FAST_HF_BITS - tree->fast[1][c]);
-			// printf("read %x index %ld off %d decode %d, bitlen %d\n", c, v->ptr-v->start, v->offset, ct, tree->fast[1][c]);
 			return ct;
 		}
 	}
@@ -320,7 +290,7 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	return -1;
 }
 
-static struct bits_vec *vec;
+static struct bits_vec *vec = NULL;
 
 void
 huffman_decode_start(uint8_t *in, int inbytelen)
@@ -341,7 +311,6 @@ huffman_read_symbol(int n)
 		return -1;
 	}
 	int ret = READ_BITS(vec, n);
-	// printf("read %d bits val %x\n", n, ret);
 	return ret;
 }
 
@@ -357,32 +326,3 @@ huffman_decode_end(void)
     printf("len %ld, now consume %ld\n", vec->len, vec->ptr-vec->start);
 	free(vec);
 }
-
-#if 0
-	unsigned treepos = 0, ct;
-	uint8_t bit;
-	for (;;) {
-		/* error: end of input memory reached without endcode */
-		// if (((*bp) & 0x07) == 0 && ((*bp) >> 3) > inbitlength) {
-		// 	return 0;
-		// }
-		if (*bp >= inbitlength) {
-			return -1;
-		}
-
-		bit = READ_BIT(in, *bp);
-		(*bp)++;
-
-		ct = codetree->tree2d[(treepos << 1) | bit];
-		if (ct < codetree->numcodes) {
-			/* get decoded symbol */
-			return ct;
-		}
-
-		treepos = ct - codetree->numcodes;
-		if (treepos >= codetree->numcodes) {
-			return -1;
-		}
-	}
-}
-#endif

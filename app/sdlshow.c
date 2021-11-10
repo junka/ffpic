@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h> 
+#include <fcntl.h>
 
 #include "display.h"
 #include "sdl_screen.h"
@@ -19,10 +20,14 @@ main(int argc, const char *argv[])
         return -1;
     }
     const char *filename = argv[1];
+    if (0 != access(filename, F_OK|R_OK)) {
+        printf("File not exist or can not read\n");
+        return -1;
+    }
     char title[128];
 
     file_ops_init();
-    display_init_all();
+    sdl_screen_register();
     struct file_ops *ops = file_probe(filename);
     if (ops == NULL) {
         printf("file format is not support\n");

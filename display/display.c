@@ -1,9 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "display.h"
-#include "bmpwriter.h"
-#include "sdl_screen.h"
 
 TAILQ_HEAD(device_list, display);
 
@@ -53,9 +52,9 @@ display_register(struct display* d)
     TAILQ_INSERT_TAIL(&display_list, d, next);
 }
 
-void 
-display_init_all(void)
-{
-    bmp_writer_register();
-    sdl_screen_register();
-}
+// void 
+// display_init_all(void)
+// {
+//     bmp_writer_register();
+//     sdl_screen_register();
+// }

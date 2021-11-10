@@ -29,10 +29,11 @@ list(APPEND FFPIC_DIRS
             "${FFPIC_ROOT}/coding"
             "${FFPIC_ROOT}/utils")
 
-list(APPEND FFPIC_SOURCES
-            "${FFPIC_ROOT}/display/sdl_screen.c"
+list(APPEND FFPIC_DISPLAY
             "${FFPIC_ROOT}/display/bmpwriter.c"
             "${FFPIC_ROOT}/display/display.c")
+list(APPEND FFPIC_SDL
+            "${FFPIC_ROOT}/display/sdl_screen.c")
 
 list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lzw.c"
@@ -56,9 +57,8 @@ list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)
-find_package(SDL2_IMAGE)
 
-add_library(ffpic ${FFPIC_SOURCES} ${FFPIC_CODING} ${FFPIC_FORMART})
+add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_CODING} ${FFPIC_FORMART} ${FFPIC_SDL})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 
 
@@ -67,13 +67,13 @@ add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CO
 target_link_libraries(picinfo z)
 target_link_libraries(sdlshow z)
 
-add_executable(coding_test "${FFPIC_ROOT}/app/coding_test.c" ${FFPIC_CODING})
-target_link_libraries(coding_test z)
+add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING})
+target_link_libraries(transbmp z)
 
 target_link_libraries(sdlshow ffpic)
 target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
-target_include_directories(coding_test PRIVATE ${FFPIC_DIRS})
+target_include_directories(transbmp PRIVATE ${FFPIC_DIRS})
 
 if(SDL2_FOUND)
   target_include_directories(ffpic PRIVATE ${SDL2_INCLUDE_DIRS})

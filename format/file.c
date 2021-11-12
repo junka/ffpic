@@ -10,6 +10,7 @@
 #include "tga.h"
 #include "webp.h"
 #include "heif.h"
+#include "ico.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -64,4 +65,5 @@ file_ops_init(void)
     TGA_init();
     WEBP_init();
     HEIF_init();
+    ICO_init();
 }

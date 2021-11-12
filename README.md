@@ -30,6 +30,9 @@ supported file formart is:
 | PAM | * | Portable Arbitrary image |
 | TGA | * | Truevision raster graphic format|
 | TIFF | y | Tag Image File Format |
+| JPG | y | jpeg lossy image |
+| ICO | y | icon bitmap image |
+
 
 ### display rgb data
 Tips on display:

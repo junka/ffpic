@@ -70,13 +70,10 @@ extern "C" {
 #define APP3 MARKER(0xE3)
 #define APP4 MARKER(0xE4)
 
-
 #define COM MARKER(0xFE)
-
 
 #define EOB (0x00)
 
- 
 #pragma pack(push, 1)
 
 struct jpg_component {

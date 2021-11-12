@@ -54,6 +54,7 @@ list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/tga.c"
             "${FFPIC_ROOT}/format/webp.c"
             "${FFPIC_ROOT}/format/heif.c"
+            "${FFPIC_ROOT}/format/ico.c"
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)

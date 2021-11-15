@@ -11,6 +11,7 @@
 #include "webp.h"
 #include "heif.h"
 #include "ico.h"
+#include "jp2.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -66,4 +67,5 @@ file_ops_init(void)
     WEBP_init();
     HEIF_init();
     ICO_init();
+    JP2_init();
 }

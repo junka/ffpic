@@ -188,23 +188,28 @@ int
 read_siz(JP2* j, FILE *f)
 {
     int l = 0;
-    fread(&j->siz, 38, 1, f);
-    j->siz.length = ntohs(j->siz.length);
-    j->siz.cap = ntohs(j->siz.cap);
-    j->siz.width = ntohl(j->siz.width);
-    j->siz.height = ntohl(j->siz.height);
-    j->siz.left = ntohl(j->siz.left);
-    j->siz.top = ntohl(j->siz.top);
-    j->siz.tile_width = ntohl(j->siz.tile_width);
-    j->siz.tile_height = ntohl(j->siz.tile_height);
-    j->siz.tile_left = ntohl(j->siz.tile_left);
-    j->siz.tile_top = ntohl(j->siz.tile_top);
-    j->siz.component_num = ntohs(j->siz.component_num);
+    struct siz *s = &j->main_h.siz;
+    fread(s, 38, 1, f);
+    s->length = ntohs(s->length);
+    s->cap = ntohs(s->cap);
+    s->width = ntohl(s->width);
+    s->height = ntohl(s->height);
+    s->left = ntohl(s->left);
+    s->top = ntohl(s->top);
+    s->tile_width = ntohl(s->tile_width);
+    s->tile_height = ntohl(s->tile_height);
+    s->tile_left = ntohl(s->tile_left);
+    s->tile_top = ntohl(s->tile_top);
+    s->component_num = ntohs(s->component_num);
 
     l += 38;
-    j->siz.comps = malloc(sizeof(struct scomponent)*j->siz.component_num);
-    fread(j->siz.comps, sizeof(struct scomponent), j->siz.component_num, f);
-    l += sizeof(struct scomponent)*j->siz.component_num;
+    s->comps = malloc(sizeof(struct scomponent)*s->component_num);
+    fread(s->comps, sizeof(struct scomponent), s->component_num, f);
+    l += sizeof(struct scomponent)*s->component_num;
+
+    int width = ((s->width + 7) >> 3) << 3;
+    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    j->data = malloc(pitch * s->height);
     return l;
 }
 
@@ -212,7 +217,141 @@ int
 read_cod(JP2 *j, FILE *f)
 {
     int l = 0;
-    fread();
+    fread(&j->main_h.cod, 7, 1, f);
+    j->main_h.cod.length = ntohs(j->main_h.cod.length);
+    j->main_h.cod.layers_num = ntohs(j->main_h.cod.layers_num);
+    l += 7;
+    fread(&j->main_h.cod.p, 5, 1, f);
+    l += 5;
+
+    if (j->main_h.cod.entropy) {
+        j->main_h.cod.p.precinct_size = malloc(j->main_h.cod.p.decomp_level_num + 1);
+        fread(j->main_h.cod.p.precinct_size, j->main_h.cod.p.decomp_level_num + 1, 1, f);
+        l += (j->main_h.cod.p.decomp_level_num + 1);
+    }
+    return l;
+}
+
+int
+read_cap(JP2 *j, FILE *f)
+{
+    int l = 0;
+    fread(&j->main_h.cap, 6, 1, f);
+    l += 6;
+    j->main_h.cap.length = ntohs(j->main_h.cap.length);
+    j->main_h.cap.bitmap = ntohl(j->main_h.cap.bitmap);
+    j->main_h.cap.extensions = malloc(j->main_h.cap.length - 6);
+    fread(j->main_h.cap.extensions, 2, j->main_h.cap.length - 6/2, f);
+    l += j->main_h.cap.length - 6;
+    return l;
+}
+
+int
+read_cme(JP2 *j, FILE *f)
+{
+    int l = 0;
+    fread(&j->main_h.cme, 4, 1, f);
+    j->main_h.cme.length = ntohs(j->main_h.cme.length);
+    j->main_h.cme.use = ntohs(j->main_h.cme.use);
+    j->main_h.cme.str = malloc(j->main_h.cme.length - 4);
+    fread(&j->main_h.cme.str, j->main_h.cme.length - 4, 1, f);
+    l += j->main_h.cme.length;
+    return l;
+}
+
+int
+read_qcd(JP2 *j, FILE *f)
+{
+    int l = 0;
+    fread(&j->main_h.qcd, 3, 1, f);
+    l += 3;
+    j->main_h.qcd.length = ntohs(j->main_h.qcd.length);
+    if (j->main_h.qcd.guard_num == 0) {
+        j->main_h.qcd.table = malloc(3*j->main_h.cod.p.decomp_level_num + 1);
+        fread(j->main_h.qcd.table, 3*j->main_h.cod.p.decomp_level_num + 1, 1, f);
+        l += 3*j->main_h.cod.p.decomp_level_num + 1;
+    } else if (j->main_h.qcd.guard_num == 1) {  //scalar
+        j->main_h.qcd.table = malloc(2);
+        fread(j->main_h.qcd.table, 2, 1, f);
+        l += 2;
+    } else if (j->main_h.qcd.guard_num == 2) {
+        j->main_h.qcd.table = malloc(6*j->main_h.cod.p.decomp_level_num + 2);
+        fread(j->main_h.qcd.table, 6*j->main_h.cod.p.decomp_level_num + 2, 1, f);
+        l += 6*j->main_h.cod.p.decomp_level_num + 2;
+    }
+    return l;
+}
+
+
+int
+read_sot(JP2 *j, FILE *f)
+{
+    int l = 0;
+    struct tile_header * t;
+
+    if (j->tile_nums == 0) {
+        j->tiles = malloc(sizeof(struct tile_header));
+        t = j->tiles;
+    } else {
+        j->tiles = realloc(j->tiles, sizeof(struct tile_header) * (1 + j->tile_nums));
+        t = &j->tiles[j->tile_nums];
+    }
+    j->tile_nums ++;
+
+    /* record tile starting point to calc len in cod */
+    t->sot.offset_start = ftell(f);
+    fread(&t->sot, 10, 1, f);
+    l += 10;
+    t->sot.length = ntohs(t->sot.length);
+    t->sot.tile_id = ntohs(t->sot.tile_id);
+    t->sot.tile_size = ntohl(t->sot.tile_size);
+    return l;
+}
+
+int
+read_sop(JP2 *j, FILE *f)
+{
+    int l = 0;
+    int ti = j->tile_nums - 1;
+    fread(&j->tiles[ti].sop, 4, 1, f);
+    l += 4;
+    j->tiles[ti].sop.length = ntohs(j->tiles[ti].sop.length);
+    j->tiles[ti].sop.seq_num = ntohs(j->tiles[ti].sop.seq_num);
+    return l;
+}
+
+int
+read_data(JP2 *j, FILE *f) {
+    /* read till eoc */
+    uint8_t *p = j->data;
+    int start = ftell(f);
+    int len;
+    len = j->tiles[j->tile_nums-1].sot.tile_size -
+        (start - j->tiles[j->tile_nums-1].sot.offset_start);
+
+    int prev = 0, cur = 0;
+    while (len && prev != 0xFF && !feof(f)) {
+        cur = fgetc(f);
+        len --;
+        if (cur == 0xFF) {
+            prev = cur;
+            if (feof(f)) {
+                break;
+            }
+            cur = fgetc(f);
+            len --;
+            printf("len %d, %02x %02x\n", len, prev, cur);
+            if (cur == 0xD9) {
+                break;
+            }
+            *p ++ = prev;
+        }
+        *p ++ = cur;
+        prev = cur;
+    }
+
+    int l = ftell(f) - start;
+    return l;
 }
 
 void 
@@ -230,12 +369,29 @@ read_stream(JP2 *j, FILE *f, int l)
         l -= 2;
         switch (mark) {
             case SOD:
+                l -= read_data(j, f);
                 break;
             case SIZ:
                 l -= read_siz(j, f);
                 break;
+            case CAP:
+                l -= read_cap(j, f);
+                break;
             case COD:
-                l -= read_cod();
+                l -= read_cod(j, f);
+                break;
+            case QCD:
+                l -= read_qcd(j, f);
+                break;
+            case CME:
+                l -= read_cme(j, f);
+                break;
+            case SOT:
+                l -= read_sot(j, f);
+                break;
+            case SOP:
+                l -= read_sop(j, f);
+                break;
             default:
                 printf("marker %x\n", ntohs(mark));
                 fseek(f, 0, SEEK_END);
@@ -347,8 +503,8 @@ JP2_info(FILE *f, struct pic* p)
         fprintf(f, "\turl %s\n", j->uuid_info[i].url.location);
     }
     fprintf(f, "---------------------------\n");
-    fprintf(f, "\tSIZ height %d, width %d, num_comp %d\n", j->siz.height, 
-                j->siz.width, j->siz.component_num);
+    fprintf(f, "\tSIZ height %d, width %d, num_comp %d\n", j->main_h.siz.height, 
+                j->main_h.siz.width, j->main_h.siz.component_num);
 
 }
 

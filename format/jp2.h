@@ -52,15 +52,19 @@ extern "C" {
 #define SOD MARK(0x93)
 #define EOC MARK(0xD9)
 
+#define CAP MARK(0x50)
+
 #define SIZ MARK(0x51)
 
 #define COD MARK(0x52)
 #define COC MARK(0x53)
 
+#define PRF MARK(0x56)
+
 #define QCD MARK(0x5C)
 #define QCC MARK(0x5D)
 #define RGN MARK(0x5E)
-#define POD MARK(0x5F)
+#define POC MARK(0x5F)
 
 #define TLM MARK(0x55)
 #define PLM MARK(0x57)
@@ -68,7 +72,10 @@ extern "C" {
 #define PPM MARK(0x60)
 #define PPT MARK(0x61)
 
-#define CME MARK(0x64)
+#define CRG MARK(0x63)
+
+//COM in 2019
+#define CME MARK(0x64) 
 
 #define SOP MARK(0x91)
 #define EPH MARK(0x92)
@@ -145,7 +152,6 @@ struct jp2_pclr {
     uint8_t num_channel;
     struct pclr_chan * channels;
     uint32_t *entries;
-    // struct 
     // struct jp2_cmap_component * cmap;
 };
 
@@ -200,13 +206,19 @@ struct jp2_uinf {
     struct jp2_url url;
 };
 
+struct sop {
+    uint16_t length;
+    uint16_t seq_num;
+};
 
 struct sot {
     uint16_t length;
     uint16_t tile_id;
     uint32_t tile_size;
-    uint8_t tile_instance;
-    uint8_t tile_nums;
+    uint8_t tile_part_index;
+    uint8_t tile_part_nums;
+
+    uint32_t offset_start;
 };
 
 struct scomponent {
@@ -230,9 +242,143 @@ struct siz {
     struct scomponent *comps;
 };
 
+struct cap {
+    uint16_t length;
+    uint32_t bitmap;
+    uint16_t* extensions;
+};
+
+struct prf {
+    uint16_t length;
+    uint16_t *profile;
+};
+
+
+enum PROGRESSION {
+    PROGRESSION_LV_R_LV_COMP_POS = 0,
+    PROGRESSION_R_LV_LAYER_COMP_POS = 1,
+    PROGRESSION_R_LV_POS_COMP_LAYER = 2,
+    PROGRESSION_POS_COMP_R_LV_LAYER = 3,
+    PROGRESSION_COMP_POS_R_LV_LAYER = 4,
+};
+
+struct coding_para {
+    uint8_t decomp_level_num;
+    uint8_t code_block_width;
+    uint8_t code_block_height;
+#ifdef __LITTLE_ENDIAN__
+    uint8_t selctive_arithmetic:1;
+    uint8_t reset_on_boundary:1;
+    uint8_t termination:1;
+    uint8_t vertical_context:1;
+    uint8_t predictable_termination:1;
+    uint8_t segmentation_symbol:1;
+    uint8_t rsd:2;
+#else
+    uint8_t rsd:2;
+    uint8_t segmentation_symbol:1;
+    uint8_t predictable_termination:1;
+    uint8_t vertical_context:1;
+    uint8_t termination:1;
+    uint8_t reset_on_boundary:1;
+    uint8_t selctive_arithmetic:1;
+#endif
+    uint8_t transform;
+
+    uint8_t* precinct_size;
+};
+struct cod {
+    uint16_t length;
+
+#ifdef __LITTLE_ENDIAN__
+    uint8_t entropy: 1;
+    uint8_t sop: 1;
+    uint8_t eph: 1;
+    uint8_t resv: 5;
+#else
+    uint8_t resv: 5;
+    uint8_t eph: 1;
+    uint8_t sop: 1;
+    uint8_t entropy: 1;
+#endif
+    uint8_t progression_order;  /* see enum PROGRESSION */
+    uint16_t layers_num;
+    uint8_t multiple_transform; /* last bit valid */
+
+    struct coding_para p;
+};
+
+
+struct coc {
+    uint16_t length;
+    uint16_t comp_num; //8 bits or 16 bis depends on depth
+    uint8_t resv: 7;
+    uint8_t entropy: 1;
+    struct coding_para p;
+};
+
+struct rgn {
+    uint16_t length;
+    uint16_t comp_num; //8 bits or 16 bis depends on depth
+    uint8_t roi_style;
+    uint8_t* roi_shift;
+};
+
+//Quantization default
+struct qcd {
+    uint16_t length;
+#if __LITTLE_ENDIAN__
+    uint8_t guard_num:3;
+    uint8_t quant_type:5;
+#else
+    uint8_t quant_type:5;
+    uint8_t guard_num:3;
+#endif
+    uint8_t *table;
+};
+
+//Quantization component
+struct qcc {
+    uint16_t length;
+    uint16_t comp_id; //8 bits or 16 bis depth
+    uint8_t quant_style;
+    uint8_t *table;
+};
+
+//progression order change
+struct poc {
+    uint16_t length;
+
+};
+
+struct cme {
+    uint16_t length;
+    uint16_t use;
+    uint8_t *str;
+};
+
+
+
+
 
 #pragma pack(pop)
 
+struct main_header {
+    struct siz siz;
+    struct cap cap;
+    struct prf prf;
+    struct cod cod;
+    struct coc coc;
+    struct qcd qcd;
+    struct qcc qcc;
+    struct rgn rgn;
+    struct cme cme;
+};
+
+struct tile_header {
+    struct sot sot;
+    struct sop sop;
+};
 
 typedef struct {
     struct ftyp_box ftyp;
@@ -244,8 +390,12 @@ typedef struct {
     int uinf_num;
     struct jp2_uinf* uuid_info;
 
-    struct siz siz;
+    struct main_header main_h;
+    // struct tile_header tile_h;
+    int tile_nums;
+    struct tile_header* tiles;
 
+    uint8_t *data;
 } JP2;
 
 

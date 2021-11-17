@@ -299,7 +299,7 @@ read_sot(JP2 *j, FILE *f)
     j->tile_nums ++;
 
     /* record tile starting point to calc len in cod */
-    t->sot.offset_start = ftell(f);
+    t->sot.offset_start = ftell(f) - 2;
     fread(&t->sot, 10, 1, f);
     l += 10;
     t->sot.length = ntohs(t->sot.length);
@@ -323,34 +323,51 @@ read_sop(JP2 *j, FILE *f)
 int
 read_data(JP2 *j, FILE *f) {
     /* read till eoc */
+    struct sop sop;
     uint8_t *p = j->data;
     int start = ftell(f);
-    int len;
-    len = j->tiles[j->tile_nums-1].sot.tile_size -
+    int len = j->tiles[j->tile_nums-1].sot.tile_size -
         (start - j->tiles[j->tile_nums-1].sot.offset_start);
 
-    int prev = 0, cur = 0;
-    while (len && prev != 0xFF && !feof(f)) {
+    // printf("total len %d\n", len);
+    int prev = -1, cur = 0;
+    while (len > 0) {
         cur = fgetc(f);
         len --;
-        if (cur == 0xFF) {
-            prev = cur;
-            if (feof(f)) {
-                break;
-            }
-            cur = fgetc(f);
-            len --;
-            printf("len %d, %02x %02x\n", len, prev, cur);
+        if (prev == 0xFF) {
             if (cur == 0xD9) {
+                printf("0xFF 0xD9\n");
                 break;
+            } else if (cur == 0x91) {
+                /* SOP */
+                fread(&sop, sizeof(struct sop), 1, f);
+                len -= sizeof(struct sop);
+                sop.length = ntohs(sop.length);
+                sop.seq_num = ntohs(sop.seq_num);
+                // printf("SOP SEQ %d\n", sop.seq_num);
+                prev = fgetc(f);
+                len --;
+                continue;
+            } else if (cur == 0x92) {
+                /* EPH */
+                // printf("EPH SEQ %d\n", sop.seq_num);
+                prev = fgetc(f);
+                len --;
+                continue;
             }
-            *p ++ = prev;
+            // printf("len %d, %02x %02x\n", len, prev, cur);
         }
-        *p ++ = cur;
+        if (prev > 0) {
+            *p++ = prev;
+        }
         prev = cur;
     }
-
+    if (prev != 0xFF)
+        *p++ = prev;
+    else
+        fseek(f, -1, SEEK_CUR);
     int l = ftell(f) - start;
+    // printf("a tile %d\n", l);
     return l;
 }
 
@@ -363,40 +380,40 @@ read_stream(JP2 *j, FILE *f, int l)
         printf("not a valid start of codestream\n");
         return;
     }
-    l -= 2;
-    while(l) {
+    while(1) {
         mark = read_marker(f);
-        l -= 2;
+
+        // printf("marker %x\n", ntohs(mark));
         switch (mark) {
             case SOD:
-                l -= read_data(j, f);
+                read_data(j, f);
                 break;
             case SIZ:
-                l -= read_siz(j, f);
+                read_siz(j, f);
                 break;
             case CAP:
-                l -= read_cap(j, f);
+                read_cap(j, f);
                 break;
             case COD:
-                l -= read_cod(j, f);
+                read_cod(j, f);
                 break;
             case QCD:
-                l -= read_qcd(j, f);
+                read_qcd(j, f);
                 break;
             case CME:
-                l -= read_cme(j, f);
+                read_cme(j, f);
                 break;
             case SOT:
-                l -= read_sot(j, f);
+                read_sot(j, f);
                 break;
-            case SOP:
-                l -= read_sop(j, f);
-                break;
+            case EOC:
+                //may be absent in case corrupt
+                printf("end of code stream %d, %ld\n", l, ftell(f));
+                return;
             default:
                 printf("marker %x\n", ntohs(mark));
                 fseek(f, 0, SEEK_END);
                 fgetc(f);
-                l = 0;
                 break;
         }
     }
@@ -460,6 +477,9 @@ JP2_load(const char *filename) {
     p->pic = j;
     struct jp2_signature_box h;
     FILE * f = fopen(filename, "rb");
+    fseek(f, 0 , SEEK_END);
+    int size = ftell(f);
+    fseek(f, 0, SEEK_SET);
 
     //first box, JP box
     fread(&h, sizeof(h), 1, f);
@@ -468,7 +488,7 @@ JP2_load(const char *filename) {
     read_ftyp(f, (void *)&(j->ftyp));
 
     // common process for other boxes
-    while(!feof(f)) {
+    while(ftell(f) < size) {
         read_next_box(j, f, -1);
     }
     fclose(f);

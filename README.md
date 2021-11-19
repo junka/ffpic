@@ -27,11 +27,12 @@ supported file formart is:
 | PBM | y | Portable BitMap image |
 | PGM | y | Portable GrayMap image |
 | PPM | y | Portable PixelMap image |
-| PAM | * | Portable Arbitrary image |
-| TGA | * | Truevision raster graphic format|
+| PAM | y | Portable Arbitrary image |
+| TGA | y | Truevision raster graphic format|
 | TIFF | y | Tag Image File Format |
 | JPG | y | jpeg lossy image |
 | ICO | y | icon bitmap image |
+| EXR | y | OpenEXR image |
 
 
 ### display rgb data
@@ -43,4 +44,4 @@ So, a reorder is need for display.
 
 ### Samples
 
-take bmp/gif samples from [https://filesamples.com/formats/$formt] format is bmp/png etc
+take bmp, gif, etc samples from [https://filesamples.com/categories/image]

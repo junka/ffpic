@@ -12,6 +12,7 @@
 #include "heif.h"
 #include "ico.h"
 #include "jp2.h"
+#include "exr.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -68,4 +69,5 @@ file_ops_init(void)
     HEIF_init();
     ICO_init();
     JP2_init();
+    EXR_init();
 }

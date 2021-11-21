@@ -13,6 +13,7 @@
 #include "ico.h"
 #include "jp2.h"
 #include "exr.h"
+#include "psd.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -70,4 +71,5 @@ file_ops_init(void)
     ICO_init();
     JP2_init();
     EXR_init();
+    PSD_init();
 }

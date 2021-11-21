@@ -58,6 +58,7 @@ list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/jp2.c"
             "${FFPIC_ROOT}/format/basemedia.c"
             "${FFPIC_ROOT}/format/exr.c"
+            "${FFPIC_ROOT}/format/psd.c"
             "${FFPIC_ROOT}/format/file.c")
 
 find_package(SDL2)

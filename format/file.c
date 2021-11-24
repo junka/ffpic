@@ -14,6 +14,7 @@
 #include "jp2.h"
 #include "exr.h"
 #include "psd.h"
+#include "svg.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -72,4 +73,5 @@ file_ops_init(void)
     JP2_init();
     EXR_init();
     PSD_init();
+    SVG_init();
 }

@@ -277,7 +277,7 @@ read_qcd(JP2 *j, FILE *f)
     } else if (j->main_h.qcd.guard_num == 2) {
         j->main_h.qcd.table = malloc(6*j->main_h.cod.p.decomp_level_num + 2);
         fread(j->main_h.qcd.table, 6*j->main_h.cod.p.decomp_level_num + 2, 1, f);
-        l += 6*j->main_h.cod.p.decomp_level_num + 2;
+        l += 6 * j->main_h.cod.p.decomp_level_num + 2;
     }
     return l;
 }
@@ -471,7 +471,8 @@ read_next_box(JP2 *j, FILE *f, int len)
 }
 
 static struct pic* 
-JP2_load(const char *filename) {
+JP2_load(const char *filename)
+{
     struct pic *p = malloc(sizeof(struct pic));
     JP2 *j = malloc(sizeof(JP2));
     p->pic = j;
@@ -525,6 +526,7 @@ JP2_info(FILE *f, struct pic* p)
     fprintf(f, "---------------------------\n");
     fprintf(f, "\tSIZ height %d, width %d, num_comp %d\n", j->main_h.siz.height, 
                 j->main_h.siz.width, j->main_h.siz.component_num);
+    fprintf(f, "\ttile num %d\n", j->tile_nums);
 
 }
 

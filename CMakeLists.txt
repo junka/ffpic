@@ -40,9 +40,11 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lz77.c"
             "${FFPIC_ROOT}/coding/huffman.c"
             "${FFPIC_ROOT}/coding/deflate.c"
+            "${FFPIC_ROOT}/coding/arithmetic.c"
             "${FFPIC_ROOT}/utils/crc.c"
             "${FFPIC_ROOT}/utils/alder.c"
-            "${FFPIC_ROOT}/utils/hexdump.c")
+            "${FFPIC_ROOT}/utils/hexdump.c"
+            "${FFPIC_ROOT}/utils/bitstream.c")
 
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/png.c"

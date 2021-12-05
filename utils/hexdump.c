@@ -44,6 +44,8 @@ hexdump(FILE *f, const char *title, const void *buf, unsigned int len)
 	fflush(f);
 }
 
+
+// for macro block size 8 * 8
 void mcu_dump(FILE *f, const char *title, const int *buf)
 {
 	fprintf(f, "%s:\n", title);

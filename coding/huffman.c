@@ -4,138 +4,10 @@
 #include <stdbool.h>
 
 #include "huffman.h"
+#include "bitstream.h"
 
 #define MAX_BIT_LENGTH 16 /* largest bitlen used by any tree type */
 #define MAX_SYMBOLS 256   /* largest number of symbols used by any tree type */
-
-struct bits_vec {
-	uint8_t *start;
-	uint8_t *ptr;
-	uint8_t offset;
-	size_t len;
-};
-
-static struct bits_vec * 
-init_bits_vec(uint8_t *buff, int len)
-{
-	struct bits_vec *vec = malloc(sizeof(struct bits_vec));
-	vec->start = vec->ptr = buff;
-	vec->offset = 0;
-	vec->len = len;
-	return vec;
-}
-
-bool 
-eof_bits(struct bits_vec *v, int n)
-{
-	if (v->ptr + n/8 - v->start > v->len) {
-		return true;
-	} else if (v->ptr + n/8 - v->start == v->len) {
-		if (v->offset + n % 8 > 8) {
-			return true;
-		}
-	}
-	return false;
-}
-
-void 
-step_back(struct bits_vec *v, int n)
-{
-	while(n --) {
-		if (v->offset == 0) {
-			v->ptr --;
-			v->offset = 7;
-		} else {
-			v->offset --;
-		}
-	}
-}
-
-int 
-read_bits(struct bits_vec *v, int n)
-{
-	uint8_t read = 0;
-	int ret = 0;
-	if (v->offset > 0)
-	{
-		ret = *(v->ptr);
-		ret &= ((1 << (8 - v->offset)) - 1);
-		read = 8 - v->offset;
-		v->ptr ++;
-	}
-	while (read < n) {
-		ret = (ret << 8) | *(v->ptr);
-		v->ptr ++;
-		read += 8;
-	}
-	if (read > 8)
-		ret >>= ((read - n) % 8);
-	else 
-		ret >>= ((read - n) % 8);
-	ret &= ((1 << n) -1);
-	if((n + v->offset) % 8) {
-		v->ptr --;
-	}
-	v->offset = ((v->offset + (n%8))%8);
-	return ret;
-}
-
-int 
-read_bit(struct bits_vec *v)
-{
-	if (v->ptr - v->start > v->len)
-		return -1;
-	uint8_t ret = (*(v->ptr) >> (7 - v->offset)) & 0x1;
-	v->offset ++;
-	if (v->offset == 8) {
-		v->ptr ++;
-		v->offset = 0;
-	}
-	return ret;
-}
-
-#if 0
-int 
-read_bits(struct bits_vec *v, int n)
-{
-	int ret = 0;
-	for (int i = 0; i < n; i++) {
-		int a = read_bit(v);
-		if (a == -1) {
-			return -1;
-		}
-		ret = (ret<<1 | a);
-	}
-	return ret;
-}
-#endif
-
-void
-skip_bits(struct bits_vec *v, int n)
-{
-	uint8_t skip  = 0;
-	while (skip < n) {
-		v->ptr ++;
-		skip += 8;
-	}
-	v->offset = 8 - (skip - n - v->offset);
-}
-
-void
-reset_bits_boundary(struct bits_vec *v)
-{
-	if (v->offset) {
-		v->ptr ++;
-		v->offset = 0;
-	}
-}
-
-
-#define READ_BIT(v) read_bit(v)
-#define READ_BITS(v, n) read_bits(v, n)
-#define SKIP_BITS(v, n) skip_bits(v, n)
-#define STEP_BACK(v, n) step_back(v, n)
-
 
 huffman_tree* 
 huffman_tree_init()
@@ -254,7 +126,7 @@ static int
 decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	int pos = 0, ct = 0xFF;
 	int c = -1, cbits = 0, bl = 0;
-	if (eof_bits(v, FAST_HF_BITS)) {
+	if (EOF_BITS(v, FAST_HF_BITS)) {
 		printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
 		return -1;
 	}
@@ -295,6 +167,9 @@ static struct bits_vec *vec = NULL;
 void
 huffman_decode_start(uint8_t *in, int inbytelen)
 {
+	if (vec) {
+		free(vec);
+	}
 	vec = init_bits_vec(in, inbytelen);
 }
 
@@ -307,7 +182,7 @@ huffman_decode_symbol(huffman_tree* tree)
 int 
 huffman_read_symbol(int n)
 {
-	if (eof_bits(vec, n)) {
+	if (EOF_BITS(vec, n)) {
 		return -1;
 	}
 	int ret = READ_BITS(vec, n);
@@ -317,12 +192,13 @@ huffman_read_symbol(int n)
 void
 huffman_reset_stream(void)
 {
-	reset_bits_boundary(vec);
+	RESET_BOUNDARY(vec);
 }
 
 void
 huffman_decode_end(void)
 {
-    printf("len %ld, now consume %ld\n", vec->len, vec->ptr-vec->start);
+    printf("len %ld, now consume %ld\n", vec->len, vec->ptr - vec->start);
 	free(vec);
+	vec = NULL;
 }

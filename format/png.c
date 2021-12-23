@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 #include <assert.h>
 #include <arpa/inet.h>
@@ -470,17 +471,17 @@ PNG_load(const char* filename)
     printf("compressed size %d, pre allocate %d\n", compressed_size, b->size);
     
     uint8_t* udata = malloc(b->size);
-    // b->size = 8192;
-    int a = inflate_decode(compressed, compressed_size, udata, &b->size);
-    free(compressed);
-    b->data = (uint8_t*)malloc(b->size);
-    printf("ret %d, size %d\n", a, b->size);
-
-    PNG_unfilter(b, udata, b->size);
+    int a = deflate_decode(compressed, compressed_size, udata, &b->size);
 #if 0
     #include "utils.h"
-    hexdump(stdout, "png raw data", b->data, 512);
+    hexdump(stdout, "png raw data", compressed, 32);
+    hexdump(stdout, "png decompress data", udata, 32);
 #endif
+    free(compressed);
+    b->data = (uint8_t*)malloc(b->size);
+    // printf("ret %d, size %d\n", a, b->size);
+
+    PNG_unfilter(b, udata, b->size);
     free(udata);
     p->pic = b;
     p->width = b->ihdr.width;

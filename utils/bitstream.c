@@ -5,14 +5,22 @@
 #include "bitstream.h"
 
 struct bits_vec * 
-init_bits_vec(uint8_t *buff, int len)
+bits_vec_alloc(uint8_t *buff, int len, uint8_t msb)
 {
 	struct bits_vec *vec = (struct bits_vec *)malloc(sizeof(struct bits_vec));
 	vec->start = vec->ptr = buff;
 	vec->offset = 0;
 	vec->len = len;
+    vec->msb = msb;
 	return vec;
 }
+
+void
+bit_vec_free(struct bits_vec *v)
+{
+    free(v);
+}
+
 
 int 
 eof_bits(struct bits_vec *v, int n)
@@ -39,16 +47,19 @@ step_back(struct bits_vec *v, int n)
 		}
 	}
 }
-
+#if 0
 int 
 read_bits(struct bits_vec *v, int n)
 {
 	uint8_t read = 0;
-	int ret = 0;
+	int ret = 0, shift;
 	if (v->offset > 0)
 	{
 		ret = *(v->ptr);
-		ret &= ((1 << (8 - v->offset)) - 1);
+        if (v->msb)
+    		ret &= ((1 << (8 - v->offset)) - 1);
+        else
+            ret >>= v->offset;
 		read = 8 - v->offset;
 		v->ptr ++;
 	}
@@ -57,24 +68,38 @@ read_bits(struct bits_vec *v, int n)
 		v->ptr ++;
 		read += 8;
 	}
-	if (read > 8)
-		ret >>= ((read - n) % 8);
-	else 
-		ret >>= ((read - n) % 8);
-	ret &= ((1 << n) -1);
+	if (read > 8) {
+        if (v->msb) {
+    		ret >>= ((read - n) % 8);
+        } else {
+            ret &= (((1 << read) - 1) - ((1 << 8) - 1));
+    		ret >>= ((read - n) % 8);
+            ret |= (*(v->ptr - 1) & ((1 << ((read - n) % 8)) -1));
+        }
+
+    }
+    if (v->msb)
+	    ret &= ((1 << n) -1);
+
 	if((n + v->offset) % 8) {
 		v->ptr --;
 	}
-	v->offset = ((v->offset + (n%8))%8);
+	v->offset = ((v->offset + (n % 8)) % 8);
 	return ret;
 }
+#endif
 
 int 
 read_bit(struct bits_vec *v)
 {
 	if (v->ptr - v->start > v->len)
 		return -1;
-	uint8_t ret = (*(v->ptr) >> (7 - v->offset)) & 0x1;
+	int ret, shift;
+    if (v->msb)
+        shift = 7 - v->offset;
+    else
+        shift = v->offset;
+    ret = (*(v->ptr) >> shift) & 0x1;
 	v->offset ++;
 	if (v->offset == 8) {
 		v->ptr ++;
@@ -83,7 +108,7 @@ read_bit(struct bits_vec *v)
 	return ret;
 }
 
-#if 0
+#if 1
 int 
 read_bits(struct bits_vec *v, int n)
 {
@@ -93,7 +118,10 @@ read_bits(struct bits_vec *v, int n)
 		if (a == -1) {
 			return -1;
 		}
-		ret = (ret<<1 | a);
+        if (v->msb)
+    		ret = ((ret << 1) | a);
+        else
+            ret |= (a << i);
 	}
 	return ret;
 }
@@ -111,7 +139,7 @@ skip_bits(struct bits_vec *v, int n)
 }
 
 void
-reset_bits_boundary(struct bits_vec *v)
+reset_bits_border(struct bits_vec *v)
 {
 	if (v->offset) {
 		v->ptr ++;
@@ -119,5 +147,9 @@ reset_bits_boundary(struct bits_vec *v)
 	}
 }
 
-
-
+/* Read a num bit value from stream and add base */
+int
+read_bits_base(struct bits_vec *v, int n, int base)
+{
+	return base + (n ? read_bits(v, n) : 0);
+}

@@ -40,7 +40,7 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lz77.c"
             "${FFPIC_ROOT}/coding/huffman.c"
             "${FFPIC_ROOT}/coding/deflate.c"
-            "${FFPIC_ROOT}/coding/arithmetic.c"
+            "${FFPIC_ROOT}/coding/boolentropy.c"
             "${FFPIC_ROOT}/utils/crc.c"
             "${FFPIC_ROOT}/utils/alder.c"
             "${FFPIC_ROOT}/utils/hexdump.c"
@@ -72,11 +72,8 @@ target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 
 add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" $<TARGET_OBJECTS:ffpic>)
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
-target_link_libraries(picinfo z)
-target_link_libraries(sdlshow z)
 
 add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING})
-target_link_libraries(transbmp z)
 
 target_link_libraries(sdlshow ffpic)
 target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})

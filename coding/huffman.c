@@ -170,7 +170,7 @@ huffman_decode_start(uint8_t *in, int inbytelen)
 	if (vec) {
 		free(vec);
 	}
-	vec = init_bits_vec(in, inbytelen);
+	vec = bits_vec_alloc(in, inbytelen, BITS_MSB);
 }
 
 int
@@ -192,7 +192,7 @@ huffman_read_symbol(int n)
 void
 huffman_reset_stream(void)
 {
-	RESET_BOUNDARY(vec);
+	RESET_BORDER(vec);
 }
 
 void

@@ -77,9 +77,14 @@ enum vp8_version {
     VP8_NONE,
 };
 
+typedef enum { KEY_FRAME = 0, INTER_FRAME = 1 } FRAME_TYPE;
+
 struct vp8_frame_tag {
     uint8_t frame_type : 1;
-    uint8_t version : 3;
+    uint8_t version : 3;    /* reconstruction, loop filter */
+                            /* 0: bicubic, normal */
+                            /* 1: bilinear, simple */
+                            /* 2: bilinear, none */
     uint8_t show_frame : 1;
     uint8_t size_h:3;
     uint16_t size;
@@ -96,27 +101,25 @@ struct vp8_key_frame_extra {
     uint8_t start1;
     uint8_t start2;
     uint8_t start3;
-    uint16_t horizontal : 2;
+    uint16_t horizontal : 2;    /* see enum scale_type */
     uint16_t width : 14;
-    uint16_t vertical : 2;
+    uint16_t vertical : 2;      /* see enum scale_type */
     uint16_t height : 14;
 };
 
 struct vp8_key_cs {
-    uint8_t color_space:1;
-    uint8_t clamp:1;
+    uint8_t color_space:1;   /* 0 for YUV */
+    uint8_t clamp:1;    /*0 clamp the reconstructed pixel values to between 0 and 255 (inclusive). */
 };
 
 struct vp8_quantizer_update {
     uint8_t quantizer_update:1;
-    uint8_t quantizer_update_value: 7;
-    uint8_t quantizer_update_sign: 1;
+    uint8_t quantizer_update_value;
 };
 
 struct vp8_loop_filter_update {
     uint8_t loop_filter_update: 1;
-    uint8_t lf_update_value : 6;
-    uint8_t lf_update_sign : 1;
+    uint8_t lf_update_value : 7;
 };
 
 struct vp8_segment_prob_update {
@@ -138,47 +141,21 @@ struct vp8_update_segmentation {
 
 };
 
-struct mode_ref_lf_delta_update {
-    uint8_t ref_frame_delta_update_flag:1;
-    uint8_t delta_magnitude:6;
-    uint8_t delta_sign:1;
-};
-
-struct mb_mode_delta_update {
-    uint8_t mb_mode_delta_update_flag:1;
-    uint8_t delta_magnitude:6;
-    uint8_t delta_sign:1;
-};
-
 struct vp8_mb_lf_adjustments {
     uint8_t loop_filter_adj_enable:1;
     uint8_t mode_ref_lf_delta_update_flag:1;
-    struct mode_ref_lf_delta_update mode_ref_lf_delta_update[4];
-    struct mb_mode_delta_update mb_mode_delta_update[4];
+    int8_t mode_ref_lf_delta_update[4];
+    int8_t mb_mode_delta_update[4];
 };
 
 struct vp8_quant_indice {
-    uint8_t y_ac_qi :7;
-    
-    uint8_t y_dc_delta_present :1;
-    uint8_t y_dc_delta_magnitude :4;
-    uint8_t y_dc_delta_sign:1;
-    
-    uint8_t y2_dc_delta_present:1;
-    uint8_t y2_dc_delta_magnitude: 4;
-    uint8_t y2_dc_delta_sign:1;
+    uint8_t y_ac_qi;
 
-    uint8_t y2_ac_delta_present:1;
-    uint8_t y2_ac_delta_magnitude:4;
-    uint8_t y2_ac_delta_sign:1;
-
-    uint8_t uv_dc_delta_present:1;
-    uint8_t uv_dc_delta_magnitude: 4;
-    uint8_t uv_dc_delta_sign:1;
-
-    uint8_t uv_ac_delta_present:1;
-    uint8_t uv_ac_delta_magnitude:4;
-    uint8_t uv_ac_delta_sign:1;
+    int8_t y_dc_delta;
+    int8_t y2_dc_delta;
+    int8_t y2_ac_delta;
+    int8_t uv_dc_delta;
+    int8_t uv_ac_delta;
 };
 
 struct vp8_key_frame_header {
@@ -189,7 +166,10 @@ struct vp8_key_frame_header {
     uint8_t loop_filter_level : 6;
     uint8_t sharpness_level : 3;
     struct vp8_mb_lf_adjustments mb_lf_adjustments;
-    uint8_t log2_nbr_of_dct_partitions: 2;
+
+    // uint8_t log2_nbr_of_dct_partitions: 2;
+    uint8_t nbr_partitions;
+
     struct vp8_quant_indice quant_indice;
 
     uint8_t refresh_entropy_probs:1;
@@ -200,8 +180,76 @@ struct vp8_key_frame_header {
 
 };
 
+struct macro_block {
+    int16_t coeffs[384];   // 384 coeffs = (16+4+4) * 4*4
+    uint8_t is_i4x4;       // true if intra4x4
+    uint8_t imodes[16];    // one 16x16 mode (#0) or sixteen 4x4 modes
+    uint8_t uvmode;        // chroma prediction mode
+    // bit-wise info about the content of each sub-4x4 blocks (in decoding order).
+    // Each of the 4x4 blocks for y/u/v is associated with a 2b code according to:
+    //   code=0 -> no coefficient
+    //   code=1 -> only DC
+    //   code=2 -> first three coefficients are non-zero
+    //   code=3 -> more than three coefficients are non-zero
+    // This allows to call specialized transform functions.
+    uint32_t non_zero_y;
+    uint32_t non_zero_uv;
+    uint8_t dither;      // local dithering strength (deduced from non_zero_*)
+    uint8_t skip;
+    uint8_t segment;
+};
+
 
 #pragma pack(pop)
+
+
+// intra prediction modes
+enum {
+    B_DC_PRED = 0,   // 4x4 modes
+    B_TM_PRED = 1,
+    B_VE_PRED = 2,
+    B_HE_PRED = 3,
+    B_RD_PRED = 4,
+    B_VR_PRED = 5,
+    B_LD_PRED = 6,
+    B_VL_PRED = 7,
+    B_HD_PRED = 8,
+    B_HU_PRED = 9,
+    NUM_BMODES = B_HU_PRED + 1 - B_DC_PRED,  // = 10
+
+    // Luma16 or UV modes
+    DC_PRED = B_DC_PRED, V_PRED = B_VE_PRED,
+    H_PRED = B_HE_PRED, TM_PRED = B_TM_PRED,
+    B_PRED = NUM_BMODES,   // refined I4x4 mode
+    NUM_PRED_MODES = 4,
+
+    // special modes
+    B_DC_PRED_NOTOP = 4,
+    B_DC_PRED_NOLEFT = 5,
+    B_DC_PRED_NOTOPLEFT = 6,
+    NUM_B_DC_MODES = 7 
+};
+
+enum { 
+    MB_FEATURE_TREE_PROBS = 3,
+    NUM_MB_SEGMENTS = 4,
+    NUM_REF_LF_DELTAS = 4,
+    NUM_MODE_LF_DELTAS = 4,    // I4x4, ZERO, *, SPLIT
+    MAX_NUM_PARTITIONS = 8,
+    // Probabilities
+    NUM_TYPES = 4,   // 0: i16-AC,  1: i16-DC,  2:chroma-AC,  3:i4-AC
+    NUM_BANDS = 8,
+    NUM_CTX = 3,
+    NUM_PROBAS = 11
+};
+
+
+#define MAX_PARTITION (8)
+
+struct partition {
+    uint8_t* start;
+    uint32_t len;
+};
 
 typedef struct {
     struct webp_header header;
@@ -209,6 +257,7 @@ typedef struct {
     struct vp8_frame_tag fh;
     struct vp8_key_frame_extra fi;
     struct vp8_key_frame_header k;
+    struct partition p[MAX_PARTITION];
 } WEBP;
 
 void WEBP_init(void);

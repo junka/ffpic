@@ -5,6 +5,9 @@
 
 #include "huffman.h"
 #include "bitstream.h"
+#include "vlog.h"
+
+VLOG_REGISTER(huffman, INFO);
 
 #define MAX_BIT_LENGTH 16 /* largest bitlen used by any tree type */
 #define MAX_SYMBOLS 256   /* largest number of symbols used by any tree type */
@@ -34,17 +37,17 @@ huffman_cleanup(huffman_tree* tree)
 }
 
 void
-huffman_dump_table(huffman_tree* tree)
+huffman_dump_table(FILE *f, huffman_tree* tree)
 {
-	printf("%p: %s %d\n", tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
-	printf("fast lookup table:\n");
+	fprintf(f, "%p: %s %d\n", tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
+	fprintf(f, "fast lookup table:\n");
 	for (int i = 0; i < FAST_HF_SIZE; i ++) {
-		printf("\t%d\t%x\t%d\n", i, tree->fast[0][i], tree->fast[1][i]);
+		fprintf(f, "\t%d\t%x\t%d\n", i, tree->fast[0][i], tree->fast[1][i]);
 	}
-	printf("slow lookup table:\n");
+	fprintf(f, "slow lookup table:\n");
 	for (int i = FAST_HF_BITS + 1; i <= MAX_BIT_LEN; i ++) {
 		for (int j = 0; j < tree->slow_cnt[i-FAST_HF_BITS-1]; j ++) {
-			printf("\t%d\t%x\t%d\n", tree->slow_codec[i-FAST_HF_BITS-1][j],
+			fprintf(f, "\t%d\t%x\t%d\n", tree->slow_codec[i-FAST_HF_BITS-1][j],
 					 tree->slow_symbol[i-FAST_HF_BITS-1][j], i);
 		}
 	}
@@ -127,12 +130,12 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 	int pos = 0, ct = 0xFF;
 	int c = -1, cbits = 0, bl = 0;
 	if (EOF_BITS(v, FAST_HF_BITS)) {
-		printf("end of stream %ld, %ld\n", v->ptr - v->start, v->len);
+		VERR(huffman, "end of stream %ld, %ld\n", v->ptr - v->start, v->len);
 		return -1;
 	}
 	c = READ_BITS(v, FAST_HF_BITS);
 	if (c == -1) {
-		printf("invalid bits read\n");
+		VERR(huffman, "invalid bits read\n");
 	}
 
 	/* looup fast table first */
@@ -145,20 +148,20 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
 		}
 	}
 	if (tree->maxbitlen >= FAST_HF_BITS) {
-		//fast table miss, try slow table then
-		bl = FAST_HF_BITS + 1;// which mean bitlen
+		/* fast table miss, try slow table then */
+		bl = FAST_HF_BITS + 1; /* which mean bitlen */
 		while (bl <= tree->maxbitlen) {
 			c = ((c << 1) | READ_BIT(v));
 			for (int i =0; i < tree->slow_cnt[bl - FAST_HF_BITS -1]; i ++) {
 				if ( c == tree->slow_codec[bl - FAST_HF_BITS -1][i]) {
-					// printf("offset %d decode %d, bitlen %d\n", v->offset, c, bl);
+					VERR(huffman, "offset %d decode %d, bitlen %d", v->offset, c, bl);
 					return tree->slow_symbol[bl - FAST_HF_BITS -1][i];
 				}
 			}
 			bl ++;
 		}
 	}
-	printf("why here, bl %d , maxbitlen %d, c %x\n", bl, tree->maxbitlen, c);
+	VERR(huffman, "why here, bl %d , maxbitlen %d, c %x", bl, tree->maxbitlen, c);
 	return -1;
 }
 
@@ -198,7 +201,7 @@ huffman_reset_stream(void)
 void
 huffman_decode_end(void)
 {
-    printf("len %ld, now consume %ld\n", vec->len, vec->ptr - vec->start);
+    VDBG(huffman, "len %ld, now consume %ld", vec->len, vec->ptr - vec->start);
 	free(vec);
 	vec = NULL;
 }

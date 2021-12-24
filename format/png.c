@@ -10,6 +10,9 @@
 #include "file.h"
 #include "deflate.h"
 #include "crc.h"
+#include "vlog.h"
+
+VLOG_REGISTER(png, INFO);
 
 #define CRC_ASSER(a, b) b = ntohl(b);  assert(a == b);
 
@@ -18,7 +21,7 @@ PNG_probe(const char* filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(png, "fail to open %s", filename);
         return -ENOENT;
     }
     struct png_file_header sig;
@@ -468,7 +471,7 @@ PNG_load(const char* filename)
     CRC_ASSER(crc32, crc);
     fclose(f);
     b->size = calc_image_raw_size(b);
-    printf("compressed size %d, pre allocate %d\n", compressed_size, b->size);
+    VDBG(png, "compressed size %d, pre allocate %d\n", compressed_size, b->size);
     
     uint8_t* udata = malloc(b->size);
     int a = deflate_decode(compressed, compressed_size, udata, &b->size);
@@ -479,7 +482,7 @@ PNG_load(const char* filename)
 #endif
     free(compressed);
     b->data = (uint8_t*)malloc(b->size);
-    // printf("ret %d, size %d\n", a, b->size);
+    VDBG(png, "ret %d, size %d\n", a, b->size);
 
     PNG_unfilter(b, udata, b->size);
     free(udata);

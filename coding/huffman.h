@@ -28,7 +28,7 @@ void huffman_cleanup(huffman_tree *t);
 
 void huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uint8_t count[16], const uint8_t syms[]);
 
-void huffman_dump_table(huffman_tree *tree);
+void huffman_dump_table(FILE *f, huffman_tree *tree);
 
 void huffman_decode_start(uint8_t *in, int inbytelen);
 

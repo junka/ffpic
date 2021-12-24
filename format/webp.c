@@ -7,20 +7,24 @@
 #include "file.h"
 #include "bitstream.h"
 #include "boolentropy.h"
+#include "utils.h"
+#include "vlog.h"
 
+VLOG_REGISTER(webp, DEBUG);
 
 static int
 WEBP_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VCRIT(webp, "fail to open %s", filename);
         return -ENOENT;
     }
     struct webp_header h;
     int len = fread(&h, sizeof(h), 1, f);
     if (len < 1) {
         fclose(f);
+        VCRIT(webp, "read %s file webp header error", filename);
         return -EBADF;
     }
     fclose(f);
@@ -28,6 +32,7 @@ WEBP_probe(const char *filename)
         return 0;
     }
 
+    VDBG(webp, "%s is not a valid webp file", filename);
     return -EINVAL;
 }
 
@@ -400,7 +405,6 @@ read_vp8_ctl_partition(WEBP *w, struct bits_vec *v, FILE *f)
     } else {
         w->k.prob_skip_false = 0;
     }
-    // printf("%d\n", v->offset);
 }
 
 /* Residual decoding (Paragraph 13.2 / 13.3) */
@@ -649,8 +653,8 @@ vp8_decode(WEBP *w, bool_tree **btree)
             // from libwebp we don't save the segment map
             if (w->k.segmentation.update_mb_segmentation_map) {
                 mb->segment = !bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) ?
-                    bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) :
-                    bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) + 2;
+                    bool_decode(bt, w->k.segmentation.segment_prob[1].segment_prob) :
+                    bool_decode(bt, w->k.segmentation.segment_prob[2].segment_prob) + 2;
             } else {
                 mb->segment = 0;
             }
@@ -729,7 +733,7 @@ WEBP_load(const char *filename)
         
     } else if (chead == CHUNCK_HEADER("VP8L")) {
         //VP8 lossless chuck
-        printf("VP8L\n");
+        VINFO(webp, "VP8L\n");
         return NULL;
     }
     fread(&chunk_size, 4, 1, f);
@@ -741,7 +745,7 @@ WEBP_load(const char *filename)
     w->fh.size_h = (b[0] >> 5) & 0x7;
     w->fh.size = b[2] << 8 | b[1];
     if (w->fh.frame_type != KEY_FRAME) {
-        printf("not a key frame for vp8\n");
+        VERR(webp, "not a key frame for vp8\n");
         free(w);
         free(p);
         fclose(f);
@@ -752,7 +756,7 @@ WEBP_load(const char *filename)
     uint8_t keyfb[7];
     fread(keyfb, 7, 1, f);
     if (keyfb[0] != 0x9d || keyfb[1] != 0x01 || keyfb[2] != 0x2a) {
-        printf("not a valid start code for vp8\n");
+        VERR(webp, "not a valid start code for vp8\n");
     }
     w->fi.start1 = keyfb[0];
     w->fi.start2 = keyfb[1];
@@ -765,7 +769,7 @@ WEBP_load(const char *filename)
     int partition0_size = (((int)w->fh.size << 3) | w->fh.size_h);
     uint8_t *buf = malloc(partition0_size);
     fread(buf, partition0_size, 1, f);
-    printf("partion0_size %d\n", partition0_size);
+    VDBG(webp, "partion0_size %d", partition0_size);
     struct bits_vec * first_part = bits_vec_alloc(buf, partition0_size, BITS_MSB);
 
     read_vp8_ctl_partition(w, first_part, f);
@@ -777,7 +781,8 @@ WEBP_load(const char *filename)
         uint8_t *parts = malloc(w->p[i].len);
         fseek(f, w->p[i].start, SEEK_SET);
         fread(parts, 1, w->p[i].len, f);
-        printf("part %d: len %d\n", i, w->p[i].len);
+        VDBG(webp, "part %d: len %d", i, w->p[i].len);
+        // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_tree_init(parts, w->p[i].len);
     }
     fclose(f);

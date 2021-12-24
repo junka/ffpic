@@ -6,7 +6,9 @@
 #include "gif.h"
 #include "file.h"
 #include "lzw.h"
+#include "vlog.h"
 
+VLOG_REGISTER(gif, INFO);
 
 #define GRAPHIC_PLAINTEXT      0x01
 #define GRAPHIC_IMAGE          0x2C
@@ -199,7 +201,7 @@ void read_contents(GIF* gif, FILE* file) {
 			return;
 
 		default:
-			printf("invalid block code [%x]\n", block_code);
+			VERR(gif, "invalid block code [%x]", block_code);
 			return;
 		}
 	}
@@ -250,7 +252,7 @@ GIF_probe(const char* filename)
     struct gif_file_header head;
     FILE* f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(gif, "fail to open %s", filename);
         return -ENOENT;
     }
     int len = fread(&head, 1, GIF_FILE_HEADER_LEN, f);

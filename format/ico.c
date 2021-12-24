@@ -6,13 +6,16 @@
 
 #include "ico.h"
 #include "file.h"
+#include "vlog.h"
+
+VLOG_REGISTER(ico, INFO);
 
 static int
 ICO_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(ico, "fail to open %s\n", filename);
         return -ENOENT;
     }
     struct ico_header head;
@@ -79,7 +82,7 @@ ICO_load(const char *filename)
                         c->images[i].data[pitch * j + k * 4 + 2] = c->images[i].color[a & 0xF].red;
                         c->images[i].data[pitch * j + k * 4 + 3] = c->images[i].color[a & 0xF].alpha;
                     } else if (c->images[i].bmpinfo.bit_count == 1) {
-                        printf("do we really get this?\n");
+                        VERR(ico, "do we really get this?\n");
                     }
                 }
             }
@@ -128,7 +131,7 @@ ICO_load(const char *filename)
                 }
             }
         }
-        printf("multiple images, select %dth image\n", select + 1);
+        VINFO(ico, "multiple images, select %dth image", select + 1);
     }
     p->width = ((c->dir[select].width + 3) >> 2) << 2;
     p->height = c->dir[select].height;

@@ -5,6 +5,9 @@
 
 #include "bmp.h"
 #include "file.h"
+#include "vlog.h"
+
+VLOG_REGISTER(bmp, INFO);
 
 static int 
 BMP_probe(const char* filename)
@@ -19,7 +22,7 @@ BMP_probe(const char* filename)
     };
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(bmp, "fail to open %s\n", filename);
         return -ENOENT;
     }
     struct bmp_file_header file_h;
@@ -46,7 +49,7 @@ BMP_load(const char* filename)
     struct pic *p = calloc(sizeof(struct pic), 1);
     fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);
     fread(&b->dib, sizeof(struct bmp_info_header), 1, f);
-    //FIXME: header length and later struct
+    /* FIXME: header length and later struct */
     if (!memcmp(&b->file_header.file_type, "BM", 2)) {
         if (b->dib.compression == BI_BITFIELDS) {
             fread(&b->color, 12, 1, f);
@@ -73,7 +76,7 @@ BMP_load(const char* filename)
 
     fseek(f, b->file_header.offset_data, SEEK_SET);
 
-    // width must be multiple of four bytes
+    /* width must be multiple of four bytes */
     p->width = ((b->dib.width + 3) >> 2) << 2;
     p->height = b->dib.height;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
@@ -84,7 +87,7 @@ BMP_load(const char* filename)
     int bottom = b->dib.height > 0 ? 0 : 1 - b->dib.height;
     int delta = b->dib.height > 0 ? -1 : 1;
     if (b->dib.bit_count > 8) {
-        //For read bmp pic data from bottom to up
+        /* For read bmp pic data from bottom to up */
         for (int i = upper; i >= bottom; i += delta) {
             fread(b->data + p->pitch * i, p->pitch, 1, f);
         }

@@ -11,6 +11,8 @@ void mcu_dump(FILE *f, const char *title, const int *buf);
 
 int log2floor(uint32_t n);
 
+#define HEXDUMP(f, t, b, l) hexdump(f, t, b, l)
+
 #ifdef __cplusplus
 }
 #endif

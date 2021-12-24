@@ -8,13 +8,16 @@
 
 #include "exr.h"
 #include "file.h"
+#include "vlog.h"
+
+VLOG_REGISTER(exr, INFO);
 
 static int 
 EXR_probe(const char* filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(exr, "fail to open %s", filename);
         return -ENOENT;
     }
     uint32_t magic;
@@ -105,7 +108,7 @@ read_attribute(EXR *e, FILE *f)
     read_str_till_null(f, name);
     read_str_till_null(f, type);
     fread(&size, 4, 1, f);
-    printf("%s: %s: %d\n",name, type, size);
+    VINFO(exr, "%s: %s: %d", name, type, size);
     read_attribute_value(e, f, name, type, size);
 }
 

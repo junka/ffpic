@@ -6,6 +6,9 @@
 #include "utils.h"
 #include "boolentropy.h"
 #include "bitstream.h"
+#include "vlog.h"
+
+VLOG_REGISTER(boolentroy, DEBUG);
 
 const uint8_t 
 vp8_norm[256] __attribute__((aligned(16))) =
@@ -38,7 +41,7 @@ bool_tree_init(uint8_t* start, int len)
     br->range = 255;
     br->count = 0;
     br->bits = bits_vec_alloc(start, len, BITS_LSB);;
-
+    VDBG(boolentroy, "init a bool tree %p, %d", start, len);
     return br;
 }
 

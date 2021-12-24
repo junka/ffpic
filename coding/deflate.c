@@ -6,6 +6,9 @@
 
 #include "bitstream.h"
 #include "deflate.h"
+#include "vlog.h"
+
+VLOG_REGISTER(deflate, INFO);
 
 struct deflate_tree {
     uint16_t counts[16]; /* Number of codes with a given length */
@@ -156,7 +159,7 @@ deflate_nocompression_block(struct deflate_decoder *d)
 	/* Get one's complement of length */
 	invlength = READ_BITS(d->v, 16);
 
-    printf("no compression %d, %d\n", length, invlength);
+    VDBG(deflate, "no compression %d, %d", length, invlength);
 	/* Check length */
 	if (length != (~invlength & 0x0000FFFF)) {
 		return -2;
@@ -270,7 +273,7 @@ deflate_block_data(struct deflate_decoder *d, struct deflate_tree *lt,
 
 			/* Check sym is within range and distance tree is not empty */
 			if (sym > lt->max_sym || sym - 257 > 28 || dt->max_sym == -1) {
-				printf("error for sym\n");
+				VERR(deflate, "error for sym");
 				return -1;
 			}
 
@@ -283,7 +286,7 @@ deflate_block_data(struct deflate_decoder *d, struct deflate_tree *lt,
 
 			/* Check dist is within range */
 			if (dist > dt->max_sym || dist > 29) {
-				printf("error for dist\n");
+				VERR(deflate, "error for dist");
 				return -1;
 			}
 
@@ -334,7 +337,7 @@ deflate_decode_trees(struct deflate_decoder *d, struct deflate_tree *lt,
 	/* Get 4 bits HCLEN (4-19) */
 	hclen = READ_BITS_BASE(d->v, 4, 4);
 
-    // printf("hlit %d, hdist %d, hclen %d\n", hlit, hdist, hclen);
+    VDBG(deflate, "hlit %d, hdist %d, hclen %d", hlit, hdist, hclen);
 
 	/*
 	 * The RFC limits the range of HLIT to 286, but lists HDIST as range
@@ -452,7 +455,7 @@ deflate_dynamic_block(struct deflate_decoder *d)
 	/* Decode trees from stream */
 	int res = deflate_decode_trees(d, &d->ltree, &d->dtree);
 	if (res != 0) {
-		printf("aaa\n");
+		VERR(deflate, "decode trees error");
 		return res;
 	}
 
@@ -472,18 +475,18 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
 
     memcpy(&h, compressed, 2);
     if (h.compress_method != 8) {
-        printf("not deflate, cm %d\n", h.compress_method);
+        VERR(deflate, "not deflate, cm %d", h.compress_method);
     }
     memcpy(&check, &h, 2);
     if( ntohl(check) % 31) {
-        printf("fcheck zlib error, fcheck %x\n", h.FCHECK);
+        VERR(deflate, "fcheck zlib error, fcheck %x", h.FCHECK);
     }
     if (h.compression_info > 7) {
-        printf("too big window for lz77 not allowed %d\n", h.compression_info);
+        VERR(deflate, "too big window for lz77 not allowed %d", h.compression_info);
     }
     //PNG does not have a preset dict, so 
     if (h.preset_dict) {
-        printf("for png preset dict should not be set\n");
+        VERR(deflate, "for png preset dict should not be set");
     }
 	compressed += 2;
 
@@ -507,7 +510,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
 		/* Read block type (2 bits) */
 		btype = READ_BITS(d.v, 2);
 
-        // printf("btype %d\n", btype);
+        VDBG(deflate, "btype %d", btype);
 		/* Decompress block */
 		switch (btype) {
 		case BTYPE_NOCOMPRESSION:
@@ -528,7 +531,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
 		}
 
         if (res != 0) {
-            printf("deflate error %d\n", res);
+            VERR(deflate, "deflate error %d", res);
         }
 	}
 	*decomp_len = d.dest - d.dest_start;

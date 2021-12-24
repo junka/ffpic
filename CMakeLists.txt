@@ -45,7 +45,8 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/utils/alder.c"
             "${FFPIC_ROOT}/utils/hexdump.c"
             "${FFPIC_ROOT}/utils/bitstream.c"
-            "${FFPIC_ROOT}/utils/utils.c")
+            "${FFPIC_ROOT}/utils/utils.c"
+            "${FFPIC_ROOT}/utils/vlog.c")
 
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/png.c"

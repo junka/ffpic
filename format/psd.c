@@ -7,14 +7,16 @@
 
 #include "file.h"
 #include "psd.h"
+#include "vlog.h"
 
+VLOG_REGISTER(psd, INFO);
 
 static int
 PSD_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(psd, "fail to open %s", filename);
         return -ENOENT;
     }
     struct psd_file_header h;
@@ -80,18 +82,13 @@ read_image_resource_block(PSD *s, FILE *f)
         l += 1;
     }
     l += 6;
-    // fread(&s->res.block[s->res.num-1].size, 4, 1, f);
     fread(&size, 4, 1, f);
-    // s->res.block[s->res.num-1].size = ntohl(s->res.block[s->res.num-1].size);
     size = ntohl(size);
-    // printf("size %d\n",size);
     l += 4;
     uint8_t *d;
 
-    // switch (s->res.block[s->res.num-1].id) {
     switch (id) {
         case RESOLUTION_INFO:
-            // fread(s->res.block[s->res.num-1].data, sizeof(struct resolution_info), 1, f);
             fread(&s->res.resolution, sizeof(struct resolution_info), 1, f);
             break;
         default:
@@ -148,7 +145,7 @@ read_layer_record(struct channel_record *r, FILE *f)
         r->mask_data.left = ntohl(r->mask_data.left);
         r->mask_data.bottom = ntohl(r->mask_data.bottom);
         r->mask_data.right = ntohl(r->mask_data.right);
-        printf("reserv %x\n", r->mask_data.reserv);
+        VDBG(psd, "reserv %x\n", r->mask_data.reserv);
         if (r->mask_data.applied == 1) {
             r->mask_data.mask_parameter = fgetc(f);
         }
@@ -180,7 +177,7 @@ read_layer_record(struct channel_record *r, FILE *f)
     fread(&r->blend_data, 4, 1, f);
     r->blend_data.length = ntohl(r->blend_data.length);
 
-    // printf("extra_len %d , %d\n", r->extra_len, r->blend_data.length);
+    VDBG(psd, "extra_len %d , %d\n", r->extra_len, r->blend_data.length);
     if (r->blend_data.length) {
         fread(&r->blend_data.source, 8, 1, f);
         r->blend_data.ranges = malloc(8 * r->num);
@@ -189,7 +186,7 @@ read_layer_record(struct channel_record *r, FILE *f)
     int len_left = r->extra_len - r->mask_data.size - 4 - r->blend_data.length - 4;
     r->name = malloc(len_left);
     fread(r->name, len_left, 1, f);
-    // printf("%d name %s\n",len_left , r->name);
+    VDBG(psd, "%d name %s\n",len_left , r->name);
 }
 
 static void
@@ -204,10 +201,10 @@ read_channel_image(struct channel_record *r, struct channel_image *c, FILE *f)
         }
         c->data = malloc(tsize);
         for (int i = 0; i < r->num; i ++) {
-            // printf("tsize %d, %d\n", tsize, ntohl(r->info[i].len));
+            VDBG(psd, "tsize %d, %d\n", tsize, ntohl(r->info[i].len));
             fread(c->data + offset, r->info[i].len, 1, f);
             offset += r->info[i].len;
-            // printf("offset %lx\n", ftell(f));
+            VDBG(psd, "offset %lx\n", ftell(f));
         }
     } else {
         //TBD
@@ -228,7 +225,7 @@ read_extra_layer_info(PSD *s, FILE *f)
         }
         fread(&s->layer.extra + s->layer.extra_num, 12, 1, f);
         s->layer.extra[s->layer.extra_num].length = ntohl(s->layer.extra[s->layer.extra_num].length);
-        printf("left %d\n", s->layer.mask.length);
+        VDBG(psd, "left %d", s->layer.mask.length);
         if (s->layer.extra[s->layer.extra_num].length) {
             s->layer.extra[s->layer.extra_num].data = malloc(s->layer.extra[s->layer.extra_num].length);
             fread(s->layer.extra[s->layer.extra_num].data, s->layer.extra[s->layer.extra_num].length, 1, f);
@@ -257,12 +254,12 @@ read_layer_and_mask(PSD *s, FILE *f)
         read_channel_image(&s->layer.info.records[i], &s->layer.info.chan_data[i], f);
     }
 
-    //TO BE FIX
+    /* FIXME */
     fseek(f, -2, SEEK_CUR);
     //read mask info
     fread(&s->layer.mask, 4, 1, f);
     s->layer.mask.length = ntohl(s->layer.mask.length);
-    printf("left %d, offset 0x%lx\n", s->layer.mask.length, ftell(f));
+    VDBG(psd, "left %d, offset 0x%lx", s->layer.mask.length, ftell(f));
     if (s->layer.mask.length) {
         fread(&s->layer.mask.overlay_cs, 13, 1, f);
         fgetc(f);

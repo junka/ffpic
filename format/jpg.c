@@ -8,10 +8,12 @@
 #include "file.h"
 #include "jpg.h"
 #include "utils.h"
-
 #include "huffman.h"
+#include "vlog.h"
 
-struct decoder {
+VLOG_REGISTER(jpg, INFO);
+
+struct jpg_decoder {
     int prev_dc;
     huffman_tree *dc;
     huffman_tree *ac;
@@ -36,7 +38,7 @@ JPG_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(jpg, "fail to open %s", filename);
         return -ENOENT;
     }
     uint16_t soi, eoi;
@@ -63,7 +65,7 @@ read_marker_skip_null(FILE *f)
 {
     uint8_t c = fgetc(f);
     if (c != 0xFF) {
-        printf("marker 0x%x\n", c);
+        VDBG(jpg, "marker 0x%x", c);
         return 0;
     }
     while (c == 0xFF && !feof(f)) {
@@ -87,7 +89,7 @@ read_dqt(JPG *j, FILE *f)
         uint8_t id = (c & 0xF);
         uint8_t precision = (c >> 4) & 0xF;
         if (id > 3) {
-            printf("invalid dqt id\n");
+            VERR(jpg, "invalid dqt id");
         }
         j->dqt[id].id = id;
         j->dqt[id].precision = precision;
@@ -114,7 +116,7 @@ read_dht(JPG* j, FILE *f)
         fread(&d, 1, 1, f);
         uint8_t ac = d.table_class;
         uint8_t id = d.huffman_id;
-        // printf("ac %d, id %d, %02x\n", ac, id, *(uint8_t *)&d);
+        VDBG(jpg, "ac %d, id %d, %02x\n", ac, id, *(uint8_t *)&d);
         j->dht[ac][id].table_class = d.table_class;
         j->dht[ac][id].huffman_id = d.huffman_id;
         tlen --;
@@ -176,7 +178,7 @@ descale_and_clamp(int x, int shift)
 
 /* keep it slow, but high quality */
 void
-idct_float(struct decoder *d, int *output, int stride)
+idct_float(struct jpg_decoder *d, int *output, int stride)
 {
     const float m0 = 2.0 * cos(1.0 / 16.0 * 2.0 * M_PI);
     const float m1 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
@@ -364,7 +366,7 @@ idct_float(struct decoder *d, int *output, int stride)
 
 //decode vec to decoder buf
 bool 
-decode_data_unit(struct decoder *d)
+decode_data_unit(struct jpg_decoder *d)
 {
     int dc, ac;
     int *p = d->buf;
@@ -381,7 +383,7 @@ decode_data_unit(struct decoder *d)
     for (int i = 1; i < 64;) {
         ac = huffman_decode_symbol(ac_tree);
         if (ac == -1) {
-            printf("invalid ac value\n");
+            VERR(jpg, "invalid ac value");
             return false;
         }
         int lead_zero = (ac >> 4) & 0xF;
@@ -414,7 +416,7 @@ decode_data_unit(struct decoder *d)
 }
 
 int 
-init_decoder(JPG* j, struct decoder *d, uint8_t comp_id)
+init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
 {
     if (comp_id >= j->sof.components_num)
         return -1;
@@ -435,13 +437,13 @@ init_decoder(JPG* j, struct decoder *d, uint8_t comp_id)
 }
 
 void 
-reset_decoder(struct decoder *d)
+reset_decoder(struct jpg_decoder *d)
 {
     d->prev_dc = 0;
 }
 
 void
-destroy_decoder(struct decoder *d)
+destroy_decoder(struct jpg_decoder *d)
 {
     huffman_cleanup(d->dc);
     huffman_cleanup(d->ac);
@@ -458,12 +460,12 @@ static void
 YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
 {
 #if 0
-    fprintf(stdout, "YCbCr :\n");
+    VDBG(jpg, "YCbCr :");
     for (int i = 0; i < 16; i ++) {
         for (int j = 0; j < 16; j ++) {
-            fprintf(stdout, "%04x ", Y[i*16 + j]);
+            VDBG(jpg, "%04x ", Y[i*16 + j]);
         }
-        fprintf(stdout, "\n");
+        VDBG(jpg, "\n");
     }
 #endif
     uint8_t *p, *p2;
@@ -523,7 +525,7 @@ YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
 
 
 static int 
-read_next_rst_marker(struct decoder *d)
+read_next_rst_marker(struct jpg_decoder *d)
 {
     int rst_marker_found = 0;
     int marker;
@@ -540,16 +542,16 @@ read_next_rst_marker(struct decoder *d)
             m = huffman_read_symbol(8);
         }
         if (m == -1) {
-            printf("wrong boudary\n");
+            VERR(jpg, "wrong boudary");
             return -1;
         }
 
         marker = m;
         if ((0xD0 + d->last_rst_marker_seen) == (marker)) {
             rst_marker_found = 1;
-            printf("reset marker found\n");
+            VERR(jpg, "reset marker found");
         } else if ((marker) >= 0xD0 && MARKER(marker) <= 0xD7)
-            printf("Wrong Reset marker found, abording\n");
+            VERR(jpg, "Wrong Reset marker found, abording");
         else if (MARKER(marker) == EOI)
             return 0;
     }
@@ -564,12 +566,12 @@ void
 JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     // each component owns a decoder
-    struct decoder *d[4];
+    struct jpg_decoder *d[4];
     int yn = j->sof.colors[0].horizontal * j->sof.colors[0].vertical;
 
     //components_num is 1 or 3
     for (int i = 0; i < j->sof.components_num; i ++) {
-        d[i] = malloc(sizeof(struct decoder));
+        d[i] = malloc(sizeof(struct jpg_decoder));
         init_decoder(j, d[i], i);
     }
 
@@ -697,7 +699,7 @@ read_compressed_image(JPG* j, FILE *f)
         } else if (prev == 0xFF && c == 0xFF) {
 
         } else {
-            printf("invalid %x %x\n", prev, c);
+            VERR(jpg, "invalid %x %x", prev, c);
         }
     } while(!feof(f));
 
@@ -773,9 +775,9 @@ JPG_load(const char *filename)
                 j->dri.interval = ntohs(j->dri.interval);
                 break;
             case APP1:
-                printf("app1 exif\n");
+                VDBG(jpg, "app1 exif");
             default:
-                printf("marker %x\n", ntohs(m));
+                VDBG(jpg, "marker %x", ntohs(m));
                 fread(&len, 2, 1, f);
                 len = ntohs(len);
                 fseek(f, len-2, SEEK_CUR);
@@ -844,11 +846,11 @@ JPG_info(FILE *f, struct pic* p)
             fprintf(f, "DQT %d: precision %d\n", i, j->dqt[i].precision);
             for (int k = 0; k < 64; k ++ ) {
                 if ((k % 8) == 0) {
-                    printf("\t\t");
+                    fprintf(f, "\t\t");
                 }
                 fprintf(f, "%d ", j->dqt[i].tdata[k]);
                 if (((k + 1) % 8) == 0) {
-                    printf("\n");
+                    fprintf(f, "\n");
                 }
             }
             fprintf(f, "\n");

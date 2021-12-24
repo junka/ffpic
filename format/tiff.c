@@ -7,13 +7,16 @@
 #include "file.h"
 #include "tiff.h"
 #include "lzw.h"
+#include "vlog.h"
 
-static int 
+VLOG_REGISTER(tiff, INFO);
+
+static int
 TIFF_probe(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
+        VERR(tiff, "fail to open %s", filename);
         return -ENOENT;
     }
     struct tiff_file_header h;
@@ -66,7 +69,7 @@ read_de(TIFF *t, struct tiff_directory_entry *de, FILE *f)
     BYTEORDER(de->num);
     BYTEORDER(de->offset);
     int tlen = get_tag_type_size(de->type) * de->num;
-    // printf("TAG %d TYPE %d, NUM %d, offset %x\n", de->tag, de->type, de->num, de->offset);
+    VDBG(tiff, "TAG %d TYPE %d, NUM %d, offset %x", de->tag, de->type, de->num, de->offset);
 
     if (tlen <= 4 ) {
         de->value = NULL;
@@ -165,7 +168,7 @@ read_int_from_de(uint16_t byteorder, struct tiff_directory_entry *de, uint32_t* 
             case TAG_LONG:
             case TAG_SLONG:
                 *val = (de->offset);
-                // printf("TAG %d TYPE %d NUM %d OFFSET %d\n", de->tag, de->type, de->num, de->offset);
+                VDBG(tiff, "TAG %d TYPE %d NUM %d OFFSET %d", de->tag, de->type, de->num, de->offset);
                 break;
             default:
                 break;
@@ -193,7 +196,7 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
 
         int declen = lzw_decode_tiff(0, 8, raw, ifd->strip_byte_counts[id], decode);
         if (declen > ifd->rows_per_strip * pitch) {
-            printf("must be some error in decoding\n");
+            VERR(tiff, "must be some error in decoding");
         }
 
         free(raw);
@@ -283,7 +286,7 @@ tiff_compose_image_from_de(TIFF *t)
             switch (t->ifd[i].de[j].tag) {
                 case TID_IMAGEWIDTH:
                     read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &(t->ifd[i].width));
-                    printf("width %d\n", t->ifd[i].width);
+                    VDBG(tiff, "width %d\n", t->ifd[i].width);
                     break;
                 case TID_IMAGEHEIGHT:
                     read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].height);
@@ -323,17 +326,17 @@ tiff_compose_image_from_de(TIFF *t)
                     break;
                 case TID_NEWSUBFILETYPE:
                     read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].subfile);
-                    printf("subfile %d\n", t->ifd[i].subfile);
+                    VDBG(tiff, "subfile %d", t->ifd[i].subfile);
                     break;
                 case TID_PREDICTOR:
                     read_int_from_de(t->ifh.byteorder, &t->ifd[i].de[j], &t->ifd[i].predictor);
-                    printf("TID_PREDICTOR %d\n", t->ifd[i].predictor);
+                    VDBG(tiff, "TID_PREDICTOR %d", t->ifd[i].predictor);
                     break;
                 case TID_IMAGEDESCRIPTION:
                     read_string_from_de(&t->ifd[i].de[j], t->ifd[i].description);
                     break;
                 default:
-                    printf("TAG %d TYPE %d\n", t->ifd[i].de[j].tag, t->ifd[i].de[j].type);
+                    VDBG(tiff, "TAG %d TYPE %d", t->ifd[i].de[j].tag, t->ifd[i].de[j].type);
                     break;
             }
         }

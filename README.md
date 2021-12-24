@@ -2,13 +2,13 @@
 
 ### FFPic Layers
 
-	-----------------------
-	|   file format        |
-	-----------------------
-	|   decode/encode      |
-	-----------------------
-	|   dislay buffer      |
-	-----------------------
+    -----------------------
+    |   file format        |
+    -----------------------
+    |   decode/encode      |
+    -----------------------
+    |   dislay buffer      |
+    -----------------------
 
 - first layer for file operations like load/free/info callback.
 this will include format probe 
@@ -23,7 +23,7 @@ supported file formart is:
 |:----:|:-------:|:--------:|
 | GIF | y | Graphaic Interchange Format |
 | PNG | y | Portable Network Graphics|
-| BMP |	y |	Microsoft BMP image |
+| BMP |    y |    Microsoft BMP image |
 | PBM | y | Portable BitMap image |
 | PGM | y | Portable GrayMap image |
 | PPM | y | Portable PixelMap image |

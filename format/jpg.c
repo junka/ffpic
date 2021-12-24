@@ -138,25 +138,25 @@ read_dht(JPG* j, FILE *f)
 static int 
 get_vlc(int code, int bitlen)
 {
-	if (bitlen == 0)
+    if (bitlen == 0)
         return 0;
     // if msb is not 0, a negtiva value
-	if ((code << 1) < (1 << bitlen))
-		return code + 1 - (1 << bitlen);
+    if ((code << 1) < (1 << bitlen))
+        return code + 1 - (1 << bitlen);
     // else is code itself
-	return code;
+    return code;
 }
 
 
 static uint8_t
 clamp(int i)
 {
-	if (i < 0)
-		return 0;
-	else if (i > 255)
-		return 255;
-	else
-		return i;
+    if (i < 0)
+        return 0;
+    else if (i > 255)
+        return 255;
+    else
+        return i;
 }
 
 static inline uint8_t
@@ -273,7 +273,7 @@ idct_float(struct jpg_decoder *d, int *output, int stride)
         wsptr[6 * 8] = b1 - b6;
         wsptr[7 * 8] = b0 - b7;
 
-        inptr++;			/* advance pointers to next column */
+        inptr++;            /* advance pointers to next column */
         wsptr++;
     }
     
@@ -359,7 +359,7 @@ idct_float(struct jpg_decoder *d, int *output, int stride)
         outptr[4] = descale_and_clamp((int)(b3 + b4), 0);
         outptr[3] = descale_and_clamp((int)(b3 - b4), 0);
         
-        wsptr += 8;		/* advance pointer to next row */
+        wsptr += 8;        /* advance pointer to next row */
         outptr += stride;
     }
 }
@@ -410,8 +410,8 @@ decode_data_unit(struct jpg_decoder *d)
     }
 
     for (int i = 0; i < 64; i++) {
-		p[i] *= d->quant[i];
-	}
+        p[i] *= d->quant[i];
+    }
     return true;
 }
 

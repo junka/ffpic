@@ -9,7 +9,7 @@ extern "C" {
 
 
 #define _format_printf(format_index, first_arg) \
-	__attribute__((format(printf, format_index, first_arg)))
+    __attribute__((format(printf, format_index, first_arg)))
 
 /**
  * Change the stream that will be used by the logging system.
@@ -69,9 +69,9 @@ int vlog(uint32_t level, uint32_t logtype, const char *format, ...)
 
 int vlog_register_type_and_pick_level(const char *name, uint32_t level_def);
 
-#define VLOG(l, t, ...)					    \
-	 vlog(VLOG_ ## l,					\
-		vlog_## t, # t ": " __VA_ARGS__)
+#define VLOG(l, t, ...)                        \
+     vlog(VLOG_ ## l,                    \
+        vlog_## t, # t ": " __VA_ARGS__)
 
 #define VDBG(t, ...)   VLOG(DEBUG, t, __VA_ARGS__)
 #define VINFO(t, ...)   VLOG(INFO, t, __VA_ARGS__)
@@ -83,11 +83,11 @@ int vlog_register_type_and_pick_level(const char *name, uint32_t level_def);
 #define VFATAL(t, ...)   VLOG(EMERG, t, __VA_ARGS__)
 
 
-#define VLOG_REGISTER(name, level)				\
-int vlog_##name;								        \
+#define VLOG_REGISTER(name, level)                \
+int vlog_##name;                                        \
 static void __attribute__((constructor))__##name(void) {    \
-	vlog_##name = vlog_register_type_and_pick_level(#name,	\
-						    VLOG_##level);	            \
+    vlog_##name = vlog_register_type_and_pick_level(#name,    \
+                            VLOG_##level);                \
 }
 
 

@@ -89,17 +89,17 @@ calc_image_raw_size(PNG *p)
 static int 
 paeth_predictor(int a, int b, int c)
 {
-	int p = a + b - c;
-	int pa = p > a ? p - a : a - p;
-	int pb = p > b ? p - b : b - p;
-	int pc = p > c ? p - c : c - p;
+    int p = a + b - c;
+    int pa = p > a ? p - a : a - p;
+    int pb = p > b ? p - b : b - p;
+    int pc = p > c ? p - c : c - p;
 
-	if (pa <= pb && pa <= pc)
-		return a;
-	else if (pb <= pc)
-		return b;
-	else
-		return c;
+    if (pa <= pb && pa <= pc)
+        return a;
+    else if (pb <= pc)
+        return b;
+    else
+        return c;
 }
 
 static void 
@@ -107,93 +107,93 @@ unfilter_scanline(unsigned char *recon, const unsigned char *scanline,
         const unsigned char *precon, unsigned long bytewidth, 
         unsigned char filterType, unsigned long length)
 {
-	/*
-	   For PNG filter method 0
-	   unfilter a PNG image scanline by scanline. 
+    /*
+       For PNG filter method 0
+       unfilter a PNG image scanline by scanline. 
        when the pixels are smaller than 1 byte, the filter works byte per byte (bytewidth = 1)
-	   precon is the previous unfiltered scanline, recon the result, scanline the current one
-	   the incoming scanlines do NOT include the filtertype byte, that one is given in the parameter filterType instead
-	   recon and scanline MAY be the same memory address! precon must be disjoint.
-	 */
+       precon is the previous unfiltered scanline, recon the result, scanline the current one
+       the incoming scanlines do NOT include the filtertype byte, that one is given in the parameter filterType instead
+       recon and scanline MAY be the same memory address! precon must be disjoint.
+     */
 
-	unsigned long i;
-	switch (filterType) {
-	case FILTER_NONE:
-		for (i = 0; i < length; i++)
-			recon[i] = scanline[i];
-		break;
-	case FILTER_SUB:
-		for (i = 0; i < bytewidth; i++)
-			recon[i] = scanline[i];
-		for (i = bytewidth; i < length; i++)
-			recon[i] = scanline[i] + recon[i - bytewidth];
-		break;
-	case FILTER_UP:
-		if (precon)
-			for (i = 0; i < length; i++)
-				recon[i] = scanline[i] + precon[i];
-		else
-			for (i = 0; i < length; i++)
-				recon[i] = scanline[i];
-		break;
-	case FILTER_AVERAGE:
-		if (precon) {
-			for (i = 0; i < bytewidth; i++)
-				recon[i] = scanline[i] + precon[i] / 2;
-			for (i = bytewidth; i < length; i++)
-				recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
-		} else {
-			for (i = 0; i < bytewidth; i++)
-				recon[i] = scanline[i];
-			for (i = bytewidth; i < length; i++)
-				recon[i] = scanline[i] + recon[i - bytewidth] / 2;
-		}
-		break;
-	case FILTER_PAETH:
-		if (precon) {
-			for (i = 0; i < bytewidth; i++)
-				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(0, precon[i], 0));
-			for (i = bytewidth; i < length; i++)
-				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], precon[i], precon[i - bytewidth]));
-		} else {
-			for (i = 0; i < bytewidth; i++)
-				recon[i] = scanline[i];
-			for (i = bytewidth; i < length; i++)
-				recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], 0, 0));
-		}
-		break;
-	default:
-		break;
-	}
+    unsigned long i;
+    switch (filterType) {
+    case FILTER_NONE:
+        for (i = 0; i < length; i++)
+            recon[i] = scanline[i];
+        break;
+    case FILTER_SUB:
+        for (i = 0; i < bytewidth; i++)
+            recon[i] = scanline[i];
+        for (i = bytewidth; i < length; i++)
+            recon[i] = scanline[i] + recon[i - bytewidth];
+        break;
+    case FILTER_UP:
+        if (precon)
+            for (i = 0; i < length; i++)
+                recon[i] = scanline[i] + precon[i];
+        else
+            for (i = 0; i < length; i++)
+                recon[i] = scanline[i];
+        break;
+    case FILTER_AVERAGE:
+        if (precon) {
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i] + precon[i] / 2;
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + ((recon[i - bytewidth] + precon[i]) / 2);
+        } else {
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = scanline[i] + recon[i - bytewidth] / 2;
+        }
+        break;
+    case FILTER_PAETH:
+        if (precon) {
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(0, precon[i], 0));
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], precon[i], precon[i - bytewidth]));
+        } else {
+            for (i = 0; i < bytewidth; i++)
+                recon[i] = scanline[i];
+            for (i = bytewidth; i < length; i++)
+                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], 0, 0));
+        }
+        break;
+    default:
+        break;
+    }
 }
 
 static void 
 remove_padding_bits(unsigned char *out, const unsigned char *in, 
             unsigned long olinebits, unsigned long ilinebits, unsigned h)
 {
-	/*
-	   After filtering there are still padding bpp if scanlines have non multiple of 8 bit amounts. They need to be removed (except at last scanline of (Adam7-reduced) image) before working with pure image buffers for the Adam7 code, the color convert code and the output to the user.
-	   in and out are allowed to be the same buffer, in may also be higher but still overlapping; in must have >= ilinebits*h bpp, out must have >= olinebits*h bpp, olinebits must be <= ilinebits
-	   also used to move bpp after earlier such operations happened, e.g. in a sequence of reduced images from Adam7
-	   only useful if (ilinebits - olinebits) is a value in the range 1..7
-	 */
-	unsigned y;
-	unsigned long diff = ilinebits - olinebits;
-	unsigned long obp = 0, ibp = 0;	/*bit pointers */
-	for (y = 0; y < h; y++) {
-		unsigned long x;
-		for (x = 0; x < olinebits; x++) {
-			unsigned char bit = (unsigned char)((in[(ibp) >> 3] >> (7 - ((ibp) & 0x7))) & 1);
-			ibp++;
+    /*
+       After filtering there are still padding bpp if scanlines have non multiple of 8 bit amounts. They need to be removed (except at last scanline of (Adam7-reduced) image) before working with pure image buffers for the Adam7 code, the color convert code and the output to the user.
+       in and out are allowed to be the same buffer, in may also be higher but still overlapping; in must have >= ilinebits*h bpp, out must have >= olinebits*h bpp, olinebits must be <= ilinebits
+       also used to move bpp after earlier such operations happened, e.g. in a sequence of reduced images from Adam7
+       only useful if (ilinebits - olinebits) is a value in the range 1..7
+     */
+    unsigned y;
+    unsigned long diff = ilinebits - olinebits;
+    unsigned long obp = 0, ibp = 0;    /*bit pointers */
+    for (y = 0; y < h; y++) {
+        unsigned long x;
+        for (x = 0; x < olinebits; x++) {
+            unsigned char bit = (unsigned char)((in[(ibp) >> 3] >> (7 - ((ibp) & 0x7))) & 1);
+            ibp++;
 
-			if (bit == 0)
-				out[(obp) >> 3] &= (unsigned char)(~(1 << (7 - ((obp) & 0x7))));
-			else
-				out[(obp) >> 3] |= (1 << (7 - ((obp) & 0x7)));
-			++obp;
-		}
-		ibp += diff;
-	}
+            if (bit == 0)
+                out[(obp) >> 3] &= (unsigned char)(~(1 << (7 - ((obp) & 0x7))));
+            else
+                out[(obp) >> 3] |= (1 << (7 - ((obp) & 0x7)));
+            ++obp;
+        }
+        ibp += diff;
+    }
 }
 
 static void
@@ -201,23 +201,23 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 {
     uint8_t type = *buf;
     int depth = calc_png_bits_per_pixel(p);
-    unsigned bytewidth = (depth + 7) / 8;	/*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
-	unsigned linebytes = (p->ihdr.width * depth + 7) / 8;
+    unsigned bytewidth = (depth + 7) / 8;    /*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
+    unsigned linebytes = (p->ihdr.width * depth + 7) / 8;
 
-	unsigned char *prevline = 0;
+    unsigned char *prevline = 0;
 
     for (int y = 0; y < p->ihdr.height; y++) {
         unsigned long outindex = linebytes * y;
-		unsigned long pos = (1 + linebytes) * y;	/*the extra filterbyte added to each row */
-		unsigned char filterType = buf[pos];
+        unsigned long pos = (1 + linebytes) * y;    /*the extra filterbyte added to each row */
+        unsigned char filterType = buf[pos];
         unfilter_scanline(&p->data[outindex], &buf[pos + 1], prevline, bytewidth, filterType, linebytes);
         prevline = &p->data[outindex];
     }
 
     if (bytewidth == 1 && p->ihdr.width * depth != (linebytes * 8)) {
         //means get padding per line
-		remove_padding_bits(p->data, buf, p->ihdr.width * depth, linebytes * 8, p->ihdr.height);
-	}
+        remove_padding_bits(p->data, buf, p->ihdr.width * depth, linebytes * 8, p->ihdr.height);
+    }
 }
 
 static struct pic* 

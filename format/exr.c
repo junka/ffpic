@@ -151,10 +151,10 @@ uint16_cov_float(uint16_t value)
 static uint8_t 
 exr_to_rgb(float v)
 {
-	if (v <= 0.0031308)
-		return (uint8_t)((v * 12.92) * 255.0);
-	else
-		return (uint8_t)((1.055*(pow(v, (1.0/2.4))-0.055) * 255.0));
+    if (v <= 0.0031308)
+        return (uint8_t)((v * 12.92) * 255.0);
+    else
+        return (uint8_t)((1.055*(pow(v, (1.0/2.4))-0.055) * 255.0));
 }
 
 float

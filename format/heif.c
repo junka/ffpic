@@ -103,7 +103,7 @@ static struct file_ops heif_ops = {
     .probe = HEIF_probe,
     .load = HEIF_load,
     .free = HEIF_free,
-	.info = HEIF_info,
+    .info = HEIF_info,
 };
 
 void HEIF_init(void)

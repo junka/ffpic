@@ -805,7 +805,6 @@ WEBP_free(struct pic * p)
     free(p);
 }
 
-
 void 
 WEBP_info(FILE *f, struct pic* p)
 {
@@ -875,7 +874,6 @@ WEBP_info(FILE *f, struct pic* p)
     }
 #endif
 }
-
 
 static struct file_ops webp_ops = {
     .name = "WEBP",

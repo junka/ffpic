@@ -533,7 +533,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
 	}
 	*decomp_len = d.dest - d.dest_start;
 
-	bit_vec_free(d.v);
+	bits_vec_free(d.v);
 
 	return 0;
 }

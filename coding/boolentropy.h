@@ -13,13 +13,15 @@ extern "C"{
 #define VP8_LOTS_OF_BITS (0x40000000)
 
 typedef struct bool_tree {
-    size_t value;
+    uint64_t value;
     uint32_t range;     //[127, 254]
     int count;
     struct bits_vec *bits;
 } bool_tree;
 
-bool_tree *  bool_tree_init(struct bits_vec* v);
+bool_tree *bool_tree_init(uint8_t* start, int len);
+
+void bool_tree_free(bool_tree *bt);
 
 int bool_decode(bool_tree *br, int probability);
 

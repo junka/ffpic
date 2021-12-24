@@ -103,25 +103,31 @@ read_mb_lf_adjustments(struct vp8_mb_lf_adjustments *d, struct bits_vec *v)
 }
 
 static void
-read_token_partition(WEBP *w, struct bits_vec *v)
+read_token_partition(WEBP *w, struct bits_vec *v, FILE *f)
 {
     /* all partions info | partition 1| partition 2 */
     int log2_nbr_of_dct_partitions = READ_BITS(v, 2);
     int num = (1 << log2_nbr_of_dct_partitions) - 1;
-    w->k.nbr_partitions = num + 1;
-    uint8_t* size = v->start + v->len; //exclude 7 bytes key frame info;
-    uint8_t* next_part = size + num * 3;
+    // bits_vec_dump(v);
+
+    uint8_t size[3 * MAX_PARTI_NUM];
+    if (num) {
+        fread(size, 3, num, f);
+    }
+    uint32_t next_part = ftell(f);
     for (int i = 0; i < num; i ++)
     {
-        int partsize = size[0] | size[1] << 8 | size[2] << 16;
+        int partsize = size[i*3] | size[i*3 + 1] << 8 | size[i*3 + 2] << 16;
         w->p[i].start = next_part;
         w->p[i].len = partsize;
-        printf("part %d size %d\n", i, partsize);
-        next_part += partsize;
-        size += 3;
+
+        fseek(f, partsize, SEEK_CUR);
+        next_part = ftell(f);
     }
-    w->p[num].start = next_part,
-    w->p[num].len = -1; //means to the end
+    w->p[num].start = next_part;
+    fseek(f, 0, SEEK_END);
+    w->p[num].len = ftell(f) - next_part; 
+    w->k.nbr_partitions = num + 1;
 }
 
 static void
@@ -358,7 +364,7 @@ read_proba(struct vp8_key_frame_header *kh, struct bits_vec *v)
 }
 
 static void
-read_vp8_ctl_partition(WEBP *w, struct bits_vec *v)
+read_vp8_ctl_partition(WEBP *w, struct bits_vec *v, FILE *f)
 {
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
@@ -380,7 +386,7 @@ read_vp8_ctl_partition(WEBP *w, struct bits_vec *v)
 
     /*Token Partition and Partition Data Offsets 9.5*/
 
-    read_token_partition(w, v);
+    read_token_partition(w, v, f);
 
     /* READ Dequantization Indices 9.6 */
     read_dequantization(&w->k, v);
@@ -611,7 +617,7 @@ NzCodeBits(uint32_t nz_coeffs, int nz, int dc_nz)
 }
 
 static int 
-parse_residuals(WEBP *w, struct macro_block *mb, struct bits_vec *v, struct partition *p)
+parse_residuals(WEBP *w, struct macro_block *mb, bool_tree *bt, struct partition *p)
 {
     int16_t* dst = mb->coeffs;
     memset(dst, 0, 384 * sizeof(*dst));
@@ -626,9 +632,8 @@ parse_residuals(WEBP *w, struct macro_block *mb, struct bits_vec *v, struct part
 }
 
 static void
-vp8_decode(WEBP *w, struct bits_vec *v)
+vp8_decode(WEBP *w, bool_tree **btree)
 {
-    bool_tree * bt = bool_tree_init(v);
     uint8_t left[4], top[4];
     struct macro_block *mb = malloc(sizeof(*mb));
 
@@ -636,14 +641,18 @@ vp8_decode(WEBP *w, struct bits_vec *v)
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    for (int y = 0; y < height >> 4; y ++) {
+    for (int y = 0; y < (height + 15) >> 4; y ++) {
+        // parse intra mode
         struct partition *p = &w->p[y & (w->k.nbr_partitions-1)];
-        for (int x = 0; x < width >> 4; x ++) {
-            if (w->k.segmentation.update_mb_segmentation_map)
-            {
+        bool_tree *bt = btree[y & (w->k.nbr_partitions-1)];
+        for (int x = 0; x < (width + 15) >> 4; x ++) {
+            // from libwebp we don't save the segment map
+            if (w->k.segmentation.update_mb_segmentation_map) {
                 mb->segment = !bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) ?
                     bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) :
                     bool_decode(bt, w->k.segmentation.segment_prob[0].segment_prob) + 2;
+            } else {
+                mb->segment = 0;
             }
             if (w->k.mb_no_skip_coeff) {
                 mb->skip = bool_decode(bt, w->k.prob_skip_false);
@@ -651,8 +660,8 @@ vp8_decode(WEBP *w, struct bits_vec *v)
             uint8_t is_4x4 = !bool_decode(bt, 145);
             if (!is_4x4) {
                 const int ymode = bool_decode(bt, 156) ?
-                        (bool_decode(bt, 128) ? TM_PRED : H_PRED) :
-                        (bool_decode(bt, 163) ? V_PRED : DC_PRED);
+                    (bool_decode(bt, 128) ? TM_PRED : H_PRED) :
+                    (bool_decode(bt, 163) ? V_PRED : DC_PRED);
                 mb->imodes[0] = ymode;
                 memset(top, ymode, 4 * sizeof(*top));
                 memset(left, ymode, 4 * sizeof(*left));
@@ -683,10 +692,13 @@ vp8_decode(WEBP *w, struct bits_vec *v)
                             : !bool_decode(bt, 114) ? V_PRED
                             : bool_decode(bt, 183) ? TM_PRED : H_PRED;
         }
+        //end of intra mode
+
+
         for (int x = 0; x < width >> 4; x ++) {
             int skip = w->k.mb_no_skip_coeff? mb->skip : 0;
             if (skip) {
-                skip = parse_residuals(w, mb, v, p);
+                skip = parse_residuals(w, mb, bt, p);
             } else {
                 mb->non_zero_y = 0;
                 mb->non_zero_uv = 0;
@@ -694,6 +706,8 @@ vp8_decode(WEBP *w, struct bits_vec *v)
             }
         }
     }
+
+    free(mb);
 }
 
 static struct pic* 
@@ -730,29 +744,50 @@ WEBP_load(const char *filename)
         printf("not a key frame for vp8\n");
         free(w);
         free(p);
+        fclose(f);
         return NULL;
-    } else {
-        //key frame, more info
-        unsigned char b[7];
-        fread(b, 7, 1, f);
-        if (b[0] != 0x9d || b[1] != 0x01 || b[2] != 0x2a) {
-            printf("not a valid start code for vp8\n");
-        }
-        w->fi.start1 = b[0];
-        w->fi.start2 = b[1];
-        w->fi.start3 = b[2];
-        w->fi.horizontal = b[4] >> 6;
-        w->fi.width = (b[4] << 8 | b[3]) & 0x3fff;
-        w->fi.vertical = b[6] >> 6;
-        w->fi.height = (b[6] << 8 | b[5]) & 0x3fff;
     }
-    int partition0_size = (((int)w->fh.size << 3) | w->fh.size_h) - 7;
+
+    //key frame, more info
+    uint8_t keyfb[7];
+    fread(keyfb, 7, 1, f);
+    if (keyfb[0] != 0x9d || keyfb[1] != 0x01 || keyfb[2] != 0x2a) {
+        printf("not a valid start code for vp8\n");
+    }
+    w->fi.start1 = keyfb[0];
+    w->fi.start2 = keyfb[1];
+    w->fi.start3 = keyfb[2];
+    w->fi.horizontal = keyfb[4] >> 6;
+    w->fi.width = (keyfb[4] << 8 | keyfb[3]) & 0x3fff;
+    w->fi.vertical = keyfb[6] >> 6;
+    w->fi.height = (keyfb[6] << 8 | keyfb[5]) & 0x3fff;
+
+    int partition0_size = (((int)w->fh.size << 3) | w->fh.size_h);
     uint8_t *buf = malloc(partition0_size);
     fread(buf, partition0_size, 1, f);
+    printf("partion0_size %d\n", partition0_size);
     struct bits_vec * first_part = bits_vec_alloc(buf, partition0_size, BITS_MSB);
-    read_vp8_ctl_partition(w, first_part);
-    vp8_decode(w, first_part);
+
+    read_vp8_ctl_partition(w, first_part, f);
+    // bits_vec_dump(first_part);
+
+    bool_tree *bt[MAX_PARTI_NUM];
+
+    for (int i = 0; i < w->k.nbr_partitions; i ++) {
+        uint8_t *parts = malloc(w->p[i].len);
+        fseek(f, w->p[i].start, SEEK_SET);
+        fread(parts, 1, w->p[i].len, f);
+        printf("part %d: len %d\n", i, w->p[i].len);
+        bt[i] = bool_tree_init(parts, w->p[i].len);
+    }
     fclose(f);
+    
+    vp8_decode(w, bt);
+
+    bits_vec_free(first_part);
+    for (int i = 0; i < w->k.nbr_partitions; i ++) { 
+        bool_tree_free(bt[i]);
+    }
     return p;
 }
 

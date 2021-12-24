@@ -244,11 +244,11 @@ enum {
 };
 
 
-#define MAX_PARTITION (8)
+#define MAX_PARTI_NUM (4)
 
 struct partition {
-    uint8_t* start;
-    uint32_t len;
+    uint32_t start;     // offset in the file
+    uint32_t len;       // partition length
 };
 
 typedef struct {
@@ -257,7 +257,7 @@ typedef struct {
     struct vp8_frame_tag fh;
     struct vp8_key_frame_extra fi;
     struct vp8_key_frame_header k;
-    struct partition p[MAX_PARTITION];
+    struct partition p[MAX_PARTI_NUM];
 } WEBP;
 
 void WEBP_init(void);

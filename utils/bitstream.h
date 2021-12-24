@@ -22,36 +22,39 @@ struct bits_vec {
 /* Allocate a bitstream reader */
 struct bits_vec * bits_vec_alloc(uint8_t *buff, int len, uint8_t msb);
 /* free a bitstream reader */
-void bit_vec_free(struct bits_vec *v);
+void bits_vec_free(struct bits_vec *v);
 
 /* end of stream */
-int eof_bits(struct bits_vec *v, int n);
+int bits_vec_eof_bits(struct bits_vec *v, int n);
 
 /* make the stream ptr back n bits */
-void step_back(struct bits_vec *v, int n);
+void bits_vec_step_back(struct bits_vec *v, int n);
 
 /* read a bit from the stream */
-int read_bit(struct bits_vec *v);
+int bits_vec_read_bit(struct bits_vec *v);
 
 /* read a bit from the stream */
-int read_bits(struct bits_vec *v, int n);
+int bits_vec_read_bits(struct bits_vec *v, int n);
 
 /* skip several bits without caring the value */
-void skip_bits(struct bits_vec *v, int n);
+void bits_vec_skip_bits(struct bits_vec *v, int n);
 
 /* skip all bits left int current byte */
-void reset_bits_border(struct bits_vec *v);
+void bits_vec_reset_border(struct bits_vec *v);
 
 /* read bits and add the value with base */
-int read_bits_base(struct bits_vec *v, int n, int base);
+int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 
-#define READ_BIT(v) read_bit(v)
-#define READ_BITS(v, n) read_bits(v, n)
-#define SKIP_BITS(v, n) skip_bits(v, n)
-#define STEP_BACK(v, n) step_back(v, n)
-#define RESET_BORDER(v) reset_bits_border(v)
-#define EOF_BITS(v, n) eof_bits(v, n)
-#define READ_BITS_BASE(v, n, b) read_bits_base(v, n, b)
+/* debug function for stream info */
+void bits_vec_dump(struct bits_vec *v);
+
+#define READ_BIT(v) bits_vec_read_bit(v)
+#define READ_BITS(v, n) bits_vec_read_bits(v, n)
+#define SKIP_BITS(v, n) bits_vec_skip_bits(v, n)
+#define STEP_BACK(v, n) bits_vec_step_back(v, n)
+#define RESET_BORDER(v) bits_vec_reset_border(v)
+#define EOF_BITS(v, n) bits_vec_eof_bits(v, n)
+#define READ_BITS_BASE(v, n, b) bits_vec_read_bits_base(v, n, b)
 
 #ifdef __cplusplus
 }

@@ -16,14 +16,16 @@ bits_vec_alloc(uint8_t *buff, int len, uint8_t msb)
 }
 
 void
-bit_vec_free(struct bits_vec *v)
+bits_vec_free(struct bits_vec *v)
 {
+    if (v->start)
+        free(v->start);    
     free(v);
 }
 
 
 int 
-eof_bits(struct bits_vec *v, int n)
+bits_vec_eof_bits(struct bits_vec *v, int n)
 {
 	if (v->ptr + n/8 - v->start > v->len) {
 		return 1;
@@ -36,7 +38,7 @@ eof_bits(struct bits_vec *v, int n)
 }
 
 void 
-step_back(struct bits_vec *v, int n)
+bits_vec_step_back(struct bits_vec *v, int n)
 {
 	while(n --) {
 		if (v->offset == 0) {
@@ -90,7 +92,7 @@ read_bits(struct bits_vec *v, int n)
 #endif
 
 int 
-read_bit(struct bits_vec *v)
+bits_vec_read_bit(struct bits_vec *v)
 {
 	if (v->ptr - v->start > v->len)
 		return -1;
@@ -110,11 +112,11 @@ read_bit(struct bits_vec *v)
 
 #if 1
 int 
-read_bits(struct bits_vec *v, int n)
+bits_vec_read_bits(struct bits_vec *v, int n)
 {
 	int ret = 0;
 	for (int i = 0; i < n; i++) {
-		int a = read_bit(v);
+		int a = bits_vec_read_bit(v);
 		if (a == -1) {
 			return -1;
 		}
@@ -128,7 +130,7 @@ read_bits(struct bits_vec *v, int n)
 #endif
 
 void
-skip_bits(struct bits_vec *v, int n)
+bits_vec_skip_bits(struct bits_vec *v, int n)
 {
 	uint8_t skip  = 0;
 	while (skip < n) {
@@ -139,7 +141,7 @@ skip_bits(struct bits_vec *v, int n)
 }
 
 void
-reset_bits_border(struct bits_vec *v)
+bits_vec_reset_border(struct bits_vec *v)
 {
 	if (v->offset) {
 		v->ptr ++;
@@ -149,7 +151,15 @@ reset_bits_border(struct bits_vec *v)
 
 /* Read a num bit value from stream and add base */
 int
-read_bits_base(struct bits_vec *v, int n, int base)
+bits_vec_read_bits_base(struct bits_vec *v, int n, int base)
 {
-	return base + (n ? read_bits(v, n) : 0);
+	return base + (n ? bits_vec_read_bits(v, n) : 0);
+}
+
+
+void
+bits_vec_dump(struct bits_vec *v)
+{
+    printf("stream start %p, current %ld, len %ld, bits in use %d\n", 
+        v->start, v->ptr - v->start, v->len, v->offset);
 }

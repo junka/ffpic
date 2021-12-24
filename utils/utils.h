@@ -9,6 +9,8 @@ void hexdump(FILE *f, const char *title, const void *buf, unsigned int len);
 
 void mcu_dump(FILE *f, const char *title, const int *buf);
 
+int log2floor(uint32_t n);
+
 #ifdef __cplusplus
 }
 #endif

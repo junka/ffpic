@@ -550,9 +550,9 @@ read_next_rst_marker(struct jpg_decoder *d)
         if ((0xD0 + d->last_rst_marker_seen) == (marker)) {
             rst_marker_found = 1;
             VERR(jpg, "reset marker found");
-        } else if ((marker) >= 0xD0 && MARKER(marker) <= 0xD7)
+        } else if ((marker) >= 0xD0 && MARKER(marker) <= 0xD7) {
             VERR(jpg, "Wrong Reset marker found, abording");
-        else if (MARKER(marker) == EOI)
+        } else if (MARKER(marker) == EOI)
             return 0;
     }
 

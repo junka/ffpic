@@ -2,6 +2,7 @@
 #include <stdio.h>
 
 #include "file.h"
+#include "vlog.h"
 
 int main(int argc, const char *argv[])
 {
@@ -11,6 +12,9 @@ int main(int argc, const char *argv[])
         return -1;
     }
     const char *filename = argv[1];
+    FILE *logf = fopen("picinfo.log", "w+");
+
+    vlog_openlog_stream(logf);
 
     file_ops_init();
     struct file_ops *ops = file_probe(filename);
@@ -23,5 +27,7 @@ int main(int argc, const char *argv[])
     file_info(ops, p);
 
     file_free(ops, p);
+
+    fclose(logf);
     return 0;
 }

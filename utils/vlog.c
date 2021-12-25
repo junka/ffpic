@@ -120,7 +120,6 @@ _vlog(uint32_t level, uint32_t logtype, const char *format, va_list ap)
     log_cur_msg.logtype = logtype;
 
     ret = vfprintf(f, format, ap);
-    ret = vfprintf(f, "\n", ap);
     fflush(f);
     return ret;
 }

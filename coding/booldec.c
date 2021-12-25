@@ -4,11 +4,11 @@
 #include <stdlib.h>
 
 #include "utils.h"
-#include "boolentropy.h"
+#include "booldec.h"
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(boolentroy, DEBUG);
+VLOG_REGISTER(booldec, DEBUG);
 
 const uint8_t 
 vp8_norm[256] __attribute__((aligned(16))) =
@@ -31,22 +31,20 @@ vp8_norm[256] __attribute__((aligned(16))) =
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-#define BITS (56)
-
-bool_tree *
-bool_tree_init(uint8_t* start, int len)
+bool_dec *
+bool_dec_init(uint8_t* start, int len)
 {
-    bool_tree *br = (bool_tree *)malloc(sizeof(bool_tree));
+    bool_dec *br = (bool_dec *)malloc(sizeof(bool_dec));
     br->value = 0;
     br->range = 255;
-    br->count = 0;
+    br->count = -8;
     br->bits = bits_vec_alloc(start, len, BITS_LSB);;
-    VDBG(boolentroy, "init a bool tree %p, %d", start, len);
+    VDBG(booldec, "init a bool tree %p, %d", start, len);
     return br;
 }
 
 void
-bool_tree_free(bool_tree *bt)
+bool_dec_free(bool_dec *bt)
 {
     if (bt->bits)
         bits_vec_free(bt->bits);
@@ -54,21 +52,18 @@ bool_tree_free(bool_tree *bt)
 }
 
 void
-bool_load_bytes(bool_tree *br)
+bool_load_bytes(bool_dec *br)
 {
     uint64_t read = 0;
-    for (int i = 0; i < BITS >> 3; i ++) {
-        read <<= 8;
-        read |= READ_BITS(br->bits, 8);
-    }
-    br->value = read | (br->value << BITS);
-    br->count += BITS;
+    read = READ_BITS(br->bits, 8);
+    br->value = read | (br->value << 8);
+    br->count += 8;
 }
 
-int
-bool_decode_alt(bool_tree *br, int prob)
+uint32_t
+bool_decode_alt(bool_dec *br, int prob)
 {
-    if (br->count <= 0) {
+    if (br->count < 0) {
         bool_load_bytes(br);
     }
     uint32_t range = br->range - 1;
@@ -78,13 +73,13 @@ bool_decode_alt(bool_tree *br, int prob)
     int bit;
     if (value > split) {
         range -= split + 1;
-        br->value -= (split + 1) << pos;
+        br->value -= (uint64_t)(split + 1) << pos;
         bit = 1;
     } else {
         range = split;
         bit = 0;
     }
-    if (range < 0x7e) {
+    if (range < 0x7E) {
         int shift = vp8_norm[range];
         range <<= shift;
         value <<= shift;
@@ -94,20 +89,21 @@ bool_decode_alt(bool_tree *br, int prob)
     return bit;
 }
 
-int
-bool_decode(bool_tree *br, int prob)
+uint32_t
+bool_dec_bit(bool_dec *br, int prob)
 {
-     if (br->count <= 0) {
+    if (br->count <= 0) {
         bool_load_bytes(br);
     }
+
     uint32_t range = br->range - 1;
     int pos = br->count;
     uint32_t split = (range * prob) >> 8;
     uint32_t value = br->value >> pos;
-    int bit = value >> split;
+    int bit = (value > split);
     if (bit) {
         range -= split;
-        br->value -= (split + 1) << pos;
+        br->value -= (uint64_t)(split + 1) << pos;
     } else {
         range = split + 1;
     }
@@ -116,7 +112,35 @@ bool_decode(bool_tree *br, int prob)
     range <<= shift;
     br->count -= shift;
     br->range = range;
-
     return bit;
 }
 
+// simplified version of dec_bit for prob=0x80 (note shift is always 1 here)
+uint32_t
+bool_dec_bit_half(bool_dec *br, int v)
+{
+    if (br->count <= 0) {
+        bool_load_bytes(br);
+    }
+    uint32_t range = br->range - 1;
+    int pos = br->count;
+    uint32_t split = range >> 1;
+    uint32_t value = br->value >> pos;
+    int32_t mask = (int32_t)(split - value) >> 31; // -1 or 0
+    range += mask;
+    range |= 1;
+    br->count -= 1;
+    br->range = range + 1;
+    br->value -= (uint64_t)((split + 1) & mask) << pos;
+    return (v ^ mask) - mask;
+}
+
+uint32_t
+bool_dec_bits(bool_dec *br, int nums)
+{
+    uint32_t v = 0;
+    while (nums-- > 0) {
+        v |= bool_dec_bit(br, 0x80) << nums;
+    }
+    return v;
+}

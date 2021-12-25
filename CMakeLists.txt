@@ -40,7 +40,7 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/lz77.c"
             "${FFPIC_ROOT}/coding/huffman.c"
             "${FFPIC_ROOT}/coding/deflate.c"
-            "${FFPIC_ROOT}/coding/boolentropy.c"
+            "${FFPIC_ROOT}/coding/booldec.c"
             "${FFPIC_ROOT}/utils/crc.c"
             "${FFPIC_ROOT}/utils/alder.c"
             "${FFPIC_ROOT}/utils/hexdump.c"

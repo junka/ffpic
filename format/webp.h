@@ -123,7 +123,6 @@ struct vp8_loop_filter_update {
 };
 
 struct vp8_segment_prob_update {
-    uint8_t segment_prob_update: 1;
     uint8_t segment_prob;
 };
 
@@ -137,7 +136,8 @@ struct vp8_update_segmentation {
 
     struct vp8_loop_filter_update lf[4];
 
-    struct vp8_segment_prob_update segment_prob[3];
+    /* one bit flag for if we have prob, may ignore */
+    uint8_t segment_prob[3];
 
 };
 

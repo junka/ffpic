@@ -31,6 +31,18 @@ vp8_norm[256] __attribute__((aligned(16))) =
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
+static void
+bool_load_bytes(bool_dec *br)
+{
+    uint64_t read = 0;
+    if (EOF_BITS(br->bits, 8)) {
+        VERR(booldec, "why here!");
+    }
+    read = READ_BITS(br->bits, 8);
+    br->value = read | (br->value << 8);
+    br->count += 8;
+}
+
 bool_dec *
 bool_dec_init(uint8_t* start, int len)
 {
@@ -38,8 +50,8 @@ bool_dec_init(uint8_t* start, int len)
     br->value = 0;
     br->range = 255;
     br->count = -8;
-    br->bits = bits_vec_alloc(start, len, BITS_LSB);;
-    VDBG(booldec, "init a bool tree %p, %d", start, len);
+    br->bits = bits_vec_alloc(start, len, BITS_LSB);
+    bool_load_bytes(br);
     return br;
 }
 
@@ -49,15 +61,6 @@ bool_dec_free(bool_dec *bt)
     if (bt->bits)
         bits_vec_free(bt->bits);
     free(bt);
-}
-
-void
-bool_load_bytes(bool_dec *br)
-{
-    uint64_t read = 0;
-    read = READ_BITS(br->bits, 8);
-    br->value = read | (br->value << 8);
-    br->count += 8;
 }
 
 uint32_t
@@ -119,7 +122,7 @@ bool_dec_bit(bool_dec *br, int prob)
 uint32_t
 bool_dec_bit_half(bool_dec *br, int v)
 {
-    if (br->count <= 0) {
+    if (br->count < 0) {
         bool_load_bytes(br);
     }
     uint32_t range = br->range - 1;
@@ -140,7 +143,7 @@ bool_dec_bits(bool_dec *br, int nums)
 {
     uint32_t v = 0;
     while (nums-- > 0) {
-        v |= bool_dec_bit(br, 0x80) << nums;
+        v |= BOOL_BIT(br) << nums;
     }
     return v;
 }

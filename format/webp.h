@@ -122,10 +122,6 @@ struct vp8_loop_filter_update {
     uint8_t lf_update_value : 7;
 };
 
-struct vp8_segment_prob_update {
-    uint8_t segment_prob;
-};
-
 struct vp8_update_segmentation {
     uint8_t segmentation_enabled:1;
     uint8_t update_mb_segmentation_map:1;

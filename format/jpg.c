@@ -148,16 +148,6 @@ get_vlc(int code, int bitlen)
 }
 
 
-static uint8_t
-clamp(int i)
-{
-    if (i < 0)
-        return 0;
-    else if (i > 255)
-        return 255;
-    else
-        return i;
-}
 
 static inline uint8_t
 descale_and_clamp(int x, int shift)
@@ -168,12 +158,7 @@ descale_and_clamp(int x, int shift)
     else
         x >>= shift;
     x += 128;
-    if (x > 255)
-        return 255;
-    else if (x < 0)
-        return 0;
-    else
-        return x;
+    return clamp(x, 255);
 }
 
 /* keep it slow, but high quality */
@@ -497,9 +482,9 @@ YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
                 b = (y + add_b) >> SCALEBITS;
                 g = (y + add_g) >> SCALEBITS;
                 r = (y + add_r) >> SCALEBITS;
-                *p++ = clamp(b);
-                *p++ = clamp(g);
-                *p++ = clamp(r);
+                *p++ = clamp(b, 255);
+                *p++ = clamp(g, 255);
+                *p++ = clamp(r, 255);
                 *p++ = 0xff;    //alpha
             }
             if (v == 2) {
@@ -508,9 +493,9 @@ YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
                     b = (y + add_b) >> SCALEBITS;
                     g = (y + add_g) >> SCALEBITS;
                     r = (y + add_r) >> SCALEBITS;
-                    *p2++ = clamp(b);
-                    *p2++ = clamp(g);
-                    *p2++ = clamp(r);
+                    *p2++ = clamp(b, 255);
+                    *p2++ = clamp(g, 255);
+                    *p2++ = clamp(r, 255);
                     *p2++ = 0xff;
                 }
             }

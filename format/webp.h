@@ -77,7 +77,10 @@ enum vp8_version {
     VP8_NONE,
 };
 
-typedef enum { KEY_FRAME = 0, INTER_FRAME = 1 } FRAME_TYPE;
+typedef enum {
+    KEY_FRAME = 0,
+    INTER_FRAME = 1
+} FRAME_TYPE;
 
 struct vp8_frame_tag {
     uint8_t frame_type : 1;
@@ -154,6 +157,21 @@ struct vp8_quant_indice {
     int8_t uv_ac_delta;
 };
 
+
+enum { 
+    MB_FEATURE_TREE_PROBS = 3,
+    NUM_MB_SEGMENTS = 4,
+    NUM_REF_LF_DELTAS = 4,
+    NUM_MODE_LF_DELTAS = 4,    // I4x4, ZERO, *, SPLIT
+    MAX_NUM_PARTITIONS = 8,
+    // Probabilities
+    NUM_TYPES = 4,   // 0: i16-AC,  1: i16-DC,  2:chroma-AC,  3:i4-AC
+    NUM_BANDS = 8,
+    NUM_CTX = 3,
+    NUM_PROBAS = 11
+};
+
+
 struct vp8_key_frame_header {
     struct vp8_key_cs cs_and_clamp;
   
@@ -170,10 +188,17 @@ struct vp8_key_frame_header {
 
     uint8_t refresh_entropy_probs:1;
 
-    uint8_t coeff_prob[4][8][3][11];
+    uint8_t coeff_prob[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS];
     uint8_t mb_no_skip_coeff: 1;
     uint8_t prob_skip_false;
 
+};
+
+struct quant {
+    uint8_t dqm_y1[NUM_MB_SEGMENTS][2];
+    uint8_t dqm_y2[NUM_MB_SEGMENTS][2];
+    uint8_t dqm_uv[NUM_MB_SEGMENTS][2];
+    int uv_quant[NUM_MB_SEGMENTS];
 };
 
 struct macro_block {
@@ -193,6 +218,9 @@ struct macro_block {
     uint8_t dither;      // local dithering strength (deduced from non_zero_*)
     uint8_t skip;
     uint8_t segment;
+
+    uint8_t nz;         // non-zero AC/DC coeffs (4bit for luma + 4bit for chroma)
+    uint8_t nz_dc;      // non-zero DC coeff (1bit)
 };
 
 
@@ -224,19 +252,6 @@ enum {
     B_DC_PRED_NOLEFT = 5,
     B_DC_PRED_NOTOPLEFT = 6,
     NUM_B_DC_MODES = 7 
-};
-
-enum { 
-    MB_FEATURE_TREE_PROBS = 3,
-    NUM_MB_SEGMENTS = 4,
-    NUM_REF_LF_DELTAS = 4,
-    NUM_MODE_LF_DELTAS = 4,    // I4x4, ZERO, *, SPLIT
-    MAX_NUM_PARTITIONS = 8,
-    // Probabilities
-    NUM_TYPES = 4,   // 0: i16-AC,  1: i16-DC,  2:chroma-AC,  3:i4-AC
-    NUM_BANDS = 8,
-    NUM_CTX = 3,
-    NUM_PROBAS = 11
 };
 
 

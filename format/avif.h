@@ -1,6 +1,5 @@
-#ifndef _HEIF_H_
-#define _HEIF_H_
-
+#ifndef _AVIF_H_
+#define _AVIF_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -8,27 +7,23 @@ extern "C" {
 
 #include "basemedia.h"
 
-#pragma pack(push, 1)
 
-
-
-struct heif_ftyp {
+struct avif_ftyp {
     uint32_t len;
     uint32_t major_brand;
     uint32_t minor_version;
     uint8_t *extended_compatible;
 };
 
-#pragma pack(pop)
 
 typedef struct {
 
 
-} HEIF;
+} AVIF;
 
 
 
-void HEIF_init(void);
+void AVIF_init(void);
 
 
 #ifdef __cplusplus

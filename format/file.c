@@ -15,6 +15,7 @@
 #include "exr.h"
 #include "psd.h"
 #include "svg.h"
+#include "avif.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -74,4 +75,5 @@ file_ops_init(void)
     EXR_init();
     PSD_init();
     SVG_init();
+    AVIF_init();
 }

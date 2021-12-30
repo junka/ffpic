@@ -34,19 +34,6 @@ HEIF_probe(const char *filename)
     return -EINVAL;
 }
 
-
-static void
-read_box(FILE *f, int tlen)
-{
-    uint32_t len;
-    uint32_t type;
-    fread(&len, 4, 1, f);
-    fread(&type, 4, 1, f);
-    len = ntohl(len);
-    printf("len %d , total len %d, %s\n",len, tlen, (uint8_t *)&type);
-    fseek(f, len - 4, SEEK_CUR);
-}
-
 static void
 read_meta_box(FILE *f, int tlen)
 {
@@ -60,8 +47,8 @@ read_filetype_box(FILE *f)
     fread(&typ, 12, 1, f);
     typ.len = ntohl(typ.len);
     typ.extended_compatible = malloc(typ.len - 12);
-    fread(typ.extended_compatible, typ.len - 12, 1, f);
-    read_box(f, typ.len - 12);
+    // fread(typ.extended_compatible, typ.len - 12, 1, f);
+    read_box(f, typ.extended_compatible, typ.len - 12);
     
 }
 

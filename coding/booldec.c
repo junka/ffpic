@@ -10,7 +10,7 @@
 
 VLOG_REGISTER(booldec, DEBUG);
 
-const uint8_t 
+const uint8_t
 vp8_norm[256] __attribute__((aligned(16))) =
 {
     0, 7, 6, 6, 5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4,
@@ -95,7 +95,7 @@ bool_decode_alt(bool_dec *br, int prob)
 uint32_t
 bool_dec_bit(bool_dec *br, int prob)
 {
-    if (br->count <= 0) {
+    if (br->count < 0) {
         bool_load_bytes(br);
     }
 

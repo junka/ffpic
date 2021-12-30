@@ -25,7 +25,7 @@ extern "C" {
 //channel definition
 #define CDEF TYPE2UINT("cdef")
 //resolution
-#define RES TYPE2UINT("res ")
+#define RES  TYPE2UINT("res ")
 //capture resolution
 #define RESC TYPE2UINT("resc")
 //default display resolution
@@ -35,11 +35,11 @@ extern "C" {
 //intellectual property
 #define JP2I TYPE2UINT("jp2i")
 
-#define XML TYPE2UINT("xml ")
+#define XML  TYPE2UINT("xml ")
 #define UUID TYPE2UINT("uuid")
 #define UINF TYPE2UINT("uinf")
 #define ULST TYPE2UINT("ulst")
-#define URL TYPE2UINT("url ")
+#define URL  TYPE2UINT("url ")
 
 
 
@@ -356,10 +356,6 @@ struct cme {
     uint16_t use;
     uint8_t *str;
 };
-
-
-
-
 
 #pragma pack(pop)
 

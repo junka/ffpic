@@ -240,10 +240,13 @@ enum {
     B_HD_PRED = 8,
     B_HU_PRED = 9,
     NUM_BMODES = B_HU_PRED + 1 - B_DC_PRED,  // = 10
+};
 
-    // Luma16 or UV modes
-    DC_PRED = B_DC_PRED, V_PRED = B_VE_PRED,
-    H_PRED = B_HE_PRED, TM_PRED = B_TM_PRED,
+enum {    // Luma16 or UV modes
+    DC_PRED = B_DC_PRED,
+    V_PRED = B_VE_PRED,
+    H_PRED = B_HE_PRED,
+    TM_PRED = B_TM_PRED,
     B_PRED = NUM_BMODES,   // refined I4x4 mode
     NUM_PRED_MODES = 4,
 

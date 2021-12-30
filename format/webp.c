@@ -9,7 +9,7 @@
 #include "utils.h"
 #include "vlog.h"
 
-VLOG_REGISTER(webp, DEBUG);
+VLOG_REGISTER(webp, INFO);
 
 static int
 WEBP_probe(const char *filename)
@@ -1288,6 +1288,18 @@ vp8_decode_MB(WEBP *w, struct macro_block *mb, bool_dec *bt,
     }
     return 0;
 }
+static const int8_t kYModesIntra4[18] = {
+    -B_DC_PRED, 1,
+        -B_TM_PRED, 2,
+            -B_VE_PRED, 3,
+                4, 6,
+                    -B_HE_PRED, 5,
+                        -B_RD_PRED, -B_VR_PRED,
+                -B_LD_PRED, 7,
+                    -B_VL_PRED, 8,
+                        -B_HD_PRED, -B_HU_PRED
+};
+
 
 void
 vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
@@ -1296,18 +1308,21 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
     int intra_size = (width + 15) >> 2;
-    uint8_t left[4], *top;
-    top = malloc(intra_size);
+    uint8_t left[4], *tops, *top;
+    tops = malloc(intra_size);
     struct macro_block *mb;
 
     for (int y = 0; y < (height + 15) >> 4; y ++) {
+        memset(left, 0, 4 * sizeof(uint8_t));
         for (int x = 0; x < (width + 15) >> 4; x ++) {
             mb = mbs + x;
+            top = tops + 4 * x;
             if (w->k.segmentation.update_mb_segmentation_map) {
                 mb->segment = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
                     BOOL_DECODE(bt, w->k.segmentation.segment_prob[1]) :
                     BOOL_DECODE(bt, w->k.segmentation.segment_prob[2]) + 2;
-                VDBG(webp, "%x", mb->segment);
+                if (bt->bits->len - (bt->bits->ptr - bt->bits->start) <= 58960)
+                    VDBG(webp, "%x, %ld", mb->segment, bt->bits->len - (bt->bits->ptr - bt->bits->start));
             } else {
                 mb->segment = 0;
             }
@@ -1320,27 +1335,18 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                     (BOOL_DECODE(bt, 128) ? TM_PRED : H_PRED) :
                     (BOOL_DECODE(bt, 163) ? V_PRED : DC_PRED);
                 mb->imodes[0] = ymode;
-                memset(top + 4 * x, ymode, 4 * sizeof(*top));
+                memset(top, ymode, 4 * sizeof(*top));
                 memset(left, ymode, 4 * sizeof(*left));
+                VDBG(webp, "left %d, %d, %d, %d ymode %d", left[0], left[1], left[2], left[3], ymode);
             } else {
                 uint8_t* modes = mb->imodes;
                 for (int i = 0; i < 4; i++) {
                     int ymode = left[i];
                     for (int j = 0; j < 4; j ++) {
-                        const uint8_t* const prob = kf_bmode_prob[top[x * 4 + j]][ymode];
-                        VDBG(webp, "top %d, ymode %d, prob %d", top[x * 4 + j], ymode, prob[0]);
+                        const uint8_t* const prob = kf_bmode_prob[top[j]][ymode];
+                        if (bt->bits->len - (bt->bits->ptr - bt->bits->start) <= 58960)
+                            VDBG(webp, "left %d, %d, %d, %d top %d, ymode %d, prob %d",left[0], left[1], left[2], left[3], top[j], ymode, prob[0]);
 #if 1
-                        static const int8_t kYModesIntra4[18] = {
-                            -B_DC_PRED, 1,
-                            -B_TM_PRED, 2,
-                            -B_VE_PRED, 3,
-                            4, 6,
-                            -B_HE_PRED, 5,
-                            -B_RD_PRED, -B_VR_PRED,
-                            -B_LD_PRED, 7,
-                            -B_VL_PRED, 8,
-                            -B_HD_PRED, -B_HU_PRED
-                        };
                         int a = kYModesIntra4[BOOL_DECODE(bt, prob[0])];
                         while (a > 0) {
                             a = kYModesIntra4[2 * a + BOOL_DECODE(bt, prob[a])];
@@ -1358,9 +1364,9 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                             (!BOOL_DECODE(bt, prob[8]) ? B_HD_PRED : B_HU_PRED))
                         );
 #endif
-                        top[x * 4 + j] = ymode;
+                        top[j] = ymode;
                     }
-                    memcpy(modes, top + 4 * x, 4 *sizeof(*top));
+                    memcpy(modes, top, 4 *sizeof(*top));
                     modes += 4;
                     left[i] = ymode;
                 }
@@ -1370,7 +1376,7 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                         : BOOL_DECODE(bt, 183) ? TM_PRED : H_PRED;
         }
     }
-    free(top);
+    free(tops);
 }
 
 
@@ -2512,8 +2518,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
     // }
     for (int i = 0; i < ((width + 15) >> 4); i ++) {
         VP8FInfo *fi = finfos + i;
-        printf("ilevel %d, inner %d,  limit %d, hev %d \n", 
-            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
+        // printf("ilevel %d, inner %d,  limit %d, hev %d \n", 
+        //     fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
     }
 
 

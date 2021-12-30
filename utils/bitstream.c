@@ -23,8 +23,7 @@ bits_vec_free(struct bits_vec *v)
     free(v);
 }
 
-
-int 
+int
 bits_vec_eof_bits(struct bits_vec *v, int n)
 {
     if (v->ptr + n/8 - v->start > v->len) {

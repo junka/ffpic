@@ -5,10 +5,10 @@
 extern "C" {
 #endif
 
-
+/* this needs special care */
 enum bits_order {
-    BITS_LSB = 0,
-    BITS_MSB = 1,
+    BITS_LSB = 0,   /* bool decoder order */
+    BITS_MSB = 1,   /* huffman stream order */
 };
 
 struct bits_vec {
@@ -21,6 +21,7 @@ struct bits_vec {
 
 /* Allocate a bitstream reader */
 struct bits_vec * bits_vec_alloc(uint8_t *buff, int len, uint8_t msb);
+
 /* free a bitstream reader */
 void bits_vec_free(struct bits_vec *v);
 
@@ -48,6 +49,7 @@ int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 /* debug function for stream info */
 void bits_vec_dump(struct bits_vec *v);
 
+/* macro define for bitstream helper */
 #define READ_BIT(v) bits_vec_read_bit(v)
 #define READ_BITS(v, n) bits_vec_read_bits(v, n)
 #define SKIP_BITS(v, n) bits_vec_skip_bits(v, n)
@@ -59,6 +61,5 @@ void bits_vec_dump(struct bits_vec *v);
 #ifdef __cplusplus
 }
 #endif
-
 
 #endif /*_BITSTREAM_H_*/

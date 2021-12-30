@@ -5,7 +5,6 @@
 extern "C"{
 #endif
 
-
 struct zlib_header {
     uint8_t compress_method : 4;
     uint8_t compression_info : 4;
@@ -15,8 +14,8 @@ struct zlib_header {
     //uint32_t DICTID; //only present when preset_dict is set, for png we don't have it
 };
 
-
-int deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed, int * dec_len);
+/* decode comp buffer with comp_len to decomp buffer */
+int deflate_decode(uint8_t* comp, int comp_len, uint8_t* decomp, int * decomp_len);
 
 #ifdef __cplusplus
 }

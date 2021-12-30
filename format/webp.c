@@ -2501,14 +2501,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
 
     /* reconstruct the row with filter */
     for (int y = 0; y < (height + 15) >> 4; y ++) {
-        // parse intra mode
-        bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
-        // for (int x = 0; x < (width + 15) >> 4; x ++) {
-            // printf("y %d x %d, 4x4 %d skip %x: \n", y, x, mb->is_i4x4, mb->skip);
-        
         reconstruct_row(w, mbs, yuv_b, y, &c, finfos);
         finish_row(w, filter_type, y, &c, finfos);
-        // }
     }
     // for (int j = 0; j < 24; j ++) {
     //     for (int i = 0; i < 16; i ++) {
@@ -2516,6 +2510,11 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
     //     }
     //     printf("\n");
     // }
+    for (int i = 0; i < ((width + 15) >> 4); i ++) {
+        VP8FInfo *fi = finfos + i;
+        printf("ilevel %d, inner %d,  limit %d, hev %d \n", 
+            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
+    }
 
 
 }

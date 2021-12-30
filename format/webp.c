@@ -9,7 +9,7 @@
 #include "utils.h"
 #include "vlog.h"
 
-VLOG_REGISTER(webp, INFO);
+VLOG_REGISTER(webp, DEBUG);
 
 static int
 WEBP_probe(const char *filename)
@@ -359,7 +359,7 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
         s->update_segment_feature_data = BOOL_BIT(br);
         if (s->update_segment_feature_data) {
             s->segment_feature_mode = BOOL_BIT(br);
-            for (int i = 0; i < 4; i ++) {
+            for (int i = 0; i < NUM_MB_SEGMENTS; i ++) {
                 s->quant[i].quantizer_update = BOOL_BIT(br);
                 if (s->quant[i].quantizer_update) {
                     s->quant[i].quantizer_update_value = BOOL_BITS(br, 7);
@@ -368,7 +368,7 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
                     }
                 }
             }
-            for (int i = 0; i < 4; i ++) {
+            for (int i = 0; i < NUM_MB_SEGMENTS; i ++) {
                 s->lf[i].loop_filter_update = BOOL_BIT(br);
                 if (s->lf[i].loop_filter_update) {
                     s->lf[i].lf_update_value = BOOL_BITS(br, 6);
@@ -381,7 +381,7 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
             }
         }
         if (s->update_mb_segmentation_map) {
-            for (int i = 0; i < 3; i ++) {
+            for (int i = 0; i < MB_FEATURE_TREE_PROBS; i ++) {
                 if (BOOL_BIT(br)) {
                     s->segment_prob[i] = BOOL_BITS(br, 8);
                 }
@@ -400,22 +400,26 @@ read_mb_lf_adjustments(struct vp8_mb_lf_adjustments *d, struct bool_dec *br)
     if (d->loop_filter_adj_enable) {
         d->mode_ref_lf_delta_update_flag = BOOL_BIT(br);
         if (d->mode_ref_lf_delta_update_flag) {
-            for (int i = 0; i < 4; i ++) {
+            for (int i = 0; i < NUM_REF_LF_DELTAS; i ++) {
                 // d->mode_ref_lf_delta_update[i].ref_frame_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
                     d->mode_ref_lf_delta_update[i] = BOOL_BITS(br, 6);
                     if (BOOL_BIT(br)) {
                         d->mode_ref_lf_delta_update[i] *= -1;
                     }
+                } else {
+                    d->mode_ref_lf_delta_update[i] = 0;
                 }
             }
-            for (int i = 0; i < 4; i ++) {
+            for (int i = 0; i < NUM_MODE_LF_DELTAS; i ++) {
                 // d->mb_mode_delta_update[i].mb_mode_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
                     d->mb_mode_delta_update[i] = BOOL_BITS(br, 6);
                     if (BOOL_BIT(br)) {
                         d->mb_mode_delta_update[i] *= -1;
                     }
+                } else {
+                    d->mb_mode_delta_update[i] = 0;
                 }
             }
         }
@@ -1263,8 +1267,9 @@ VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
 static int 
 vp8_decode_MB(WEBP *w, struct macro_block *mb, bool_dec *bt,
-             struct quant *qt, int filter_type, VP8FInfo *finfo)
+             struct quant *qt, VP8FInfo *finfo)
 {
+    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
     // 0=off, 1=simple, 2=complex
     struct macro_block *left_mb = mb - 1;
 
@@ -1321,8 +1326,6 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                 mb->segment = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
                     BOOL_DECODE(bt, w->k.segmentation.segment_prob[1]) :
                     BOOL_DECODE(bt, w->k.segmentation.segment_prob[2]) + 2;
-                if (bt->bits->len - (bt->bits->ptr - bt->bits->start) <= 58960)
-                    VDBG(webp, "%x, %ld", mb->segment, bt->bits->len - (bt->bits->ptr - bt->bits->start));
             } else {
                 mb->segment = 0;
             }
@@ -1337,33 +1340,17 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                 mb->imodes[0] = ymode;
                 memset(top, ymode, 4 * sizeof(*top));
                 memset(left, ymode, 4 * sizeof(*left));
-                VDBG(webp, "left %d, %d, %d, %d ymode %d", left[0], left[1], left[2], left[3], ymode);
             } else {
                 uint8_t* modes = mb->imodes;
                 for (int i = 0; i < 4; i++) {
                     int ymode = left[i];
                     for (int j = 0; j < 4; j ++) {
                         const uint8_t* const prob = kf_bmode_prob[top[j]][ymode];
-                        if (bt->bits->len - (bt->bits->ptr - bt->bits->start) <= 58960)
-                            VDBG(webp, "left %d, %d, %d, %d top %d, ymode %d, prob %d",left[0], left[1], left[2], left[3], top[j], ymode, prob[0]);
-#if 1
                         int a = kYModesIntra4[BOOL_DECODE(bt, prob[0])];
                         while (a > 0) {
                             a = kYModesIntra4[2 * a + BOOL_DECODE(bt, prob[a])];
                         }
                         ymode = -a;
-#else
-                        int ymode = !BOOL_DECODE(bt, prob[0]) ? B_DC_PRED :
-                            !BOOL_DECODE(bt, prob[1]) ? B_TM_PRED :
-                            !BOOL_DECODE(bt, prob[2]) ? B_VE_PRED :
-                            !BOOL_DECODE(bt, prob[3]) ?
-                            (!BOOL_DECODE(bt, prob[4]) ? B_HE_PRED :
-                            (!BOOL_DECODE(bt, prob[5]) ? B_RD_PRED : B_VR_PRED)) :
-                            (!BOOL_DECODE(bt, prob[6]) ? B_LD_PRED :
-                            (!BOOL_DECODE(bt, prob[7]) ? B_VL_PRED :
-                            (!BOOL_DECODE(bt, prob[8]) ? B_HD_PRED : B_HU_PRED))
-                        );
-#endif
                         top[j] = ymode;
                     }
                     memcpy(modes, top, 4 *sizeof(*top));
@@ -1383,41 +1370,41 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
 
 // Paragraph 14.1
 static const uint8_t kDcTable[128] = {
-  4,     5,   6,   7,   8,   9,  10,  10,
-  11,   12,  13,  14,  15,  16,  17,  17,
-  18,   19,  20,  20,  21,  21,  22,  22,
-  23,   23,  24,  25,  25,  26,  27,  28,
-  29,   30,  31,  32,  33,  34,  35,  36,
-  37,   37,  38,  39,  40,  41,  42,  43,
-  44,   45,  46,  46,  47,  48,  49,  50,
-  51,   52,  53,  54,  55,  56,  57,  58,
-  59,   60,  61,  62,  63,  64,  65,  66,
-  67,   68,  69,  70,  71,  72,  73,  74,
-  75,   76,  76,  77,  78,  79,  80,  81,
-  82,   83,  84,  85,  86,  87,  88,  89,
-  91,   93,  95,  96,  98, 100, 101, 102,
-  104, 106, 108, 110, 112, 114, 116, 118,
-  122, 124, 126, 128, 130, 132, 134, 136,
-  138, 140, 143, 145, 148, 151, 154, 157
+    4,     5,   6,   7,   8,   9,  10,  10,
+    11,   12,  13,  14,  15,  16,  17,  17,
+    18,   19,  20,  20,  21,  21,  22,  22,
+    23,   23,  24,  25,  25,  26,  27,  28,
+    29,   30,  31,  32,  33,  34,  35,  36,
+    37,   37,  38,  39,  40,  41,  42,  43,
+    44,   45,  46,  46,  47,  48,  49,  50,
+    51,   52,  53,  54,  55,  56,  57,  58,
+    59,   60,  61,  62,  63,  64,  65,  66,
+    67,   68,  69,  70,  71,  72,  73,  74,
+    75,   76,  76,  77,  78,  79,  80,  81,
+    82,   83,  84,  85,  86,  87,  88,  89,
+    91,   93,  95,  96,  98, 100, 101, 102,
+    104, 106, 108, 110, 112, 114, 116, 118,
+    122, 124, 126, 128, 130, 132, 134, 136,
+    138, 140, 143, 145, 148, 151, 154, 157
 };
 
 static const uint16_t kAcTable[128] = {
-  4,     5,   6,   7,   8,   9,  10,  11,
-  12,   13,  14,  15,  16,  17,  18,  19,
-  20,   21,  22,  23,  24,  25,  26,  27,
-  28,   29,  30,  31,  32,  33,  34,  35,
-  36,   37,  38,  39,  40,  41,  42,  43,
-  44,   45,  46,  47,  48,  49,  50,  51,
-  52,   53,  54,  55,  56,  57,  58,  60,
-  62,   64,  66,  68,  70,  72,  74,  76,
-  78,   80,  82,  84,  86,  88,  90,  92,
-  94,   96,  98, 100, 102, 104, 106, 108,
-  110, 112, 114, 116, 119, 122, 125, 128,
-  131, 134, 137, 140, 143, 146, 149, 152,
-  155, 158, 161, 164, 167, 170, 173, 177,
-  181, 185, 189, 193, 197, 201, 205, 209,
-  213, 217, 221, 225, 229, 234, 239, 245,
-  249, 254, 259, 264, 269, 274, 279, 284
+    4,     5,   6,   7,   8,   9,  10,  11,
+    12,   13,  14,  15,  16,  17,  18,  19,
+    20,   21,  22,  23,  24,  25,  26,  27,
+    28,   29,  30,  31,  32,  33,  34,  35,
+    36,   37,  38,  39,  40,  41,  42,  43,
+    44,   45,  46,  47,  48,  49,  50,  51,
+    52,   53,  54,  55,  56,  57,  58,  60,
+    62,   64,  66,  68,  70,  72,  74,  76,
+    78,   80,  82,  84,  86,  88,  90,  92,
+    94,   96,  98, 100, 102, 104, 106, 108,
+    110, 112, 114, 116, 119, 122, 125, 128,
+    131, 134, 137, 140, 143, 146, 149, 152,
+    155, 158, 161, 164, 167, 170, 173, 177,
+    181, 185, 189, 193, 197, 201, 205, 209,
+    213, 217, 221, 225, 229, 234, 239, 245,
+    249, 254, 259, 264, 269, 274, 279, 284
 };
 
 
@@ -2080,6 +2067,12 @@ reconstruct_row(WEBP *w, struct macro_block *mbs,
     }
 }
 
+
+static void DitherRow() {
+
+}
+
+
 //-------------------------------------------------------------------------
 // Filtering
 
@@ -2089,11 +2082,6 @@ reconstruct_row(WEBP *w, struct macro_block *mbs,
 // Complex filter: up to 4 luma samples are read and 3 are written. Same for
 //                 U/V, so it's 8 samples total (because of the 2x upsampling).
 static const uint8_t kFilterExtraRows[3] = { 0, 2, 8 };
-
-static void DitherRow() {
-
-}
-
 
 typedef void (*VP8SimpleFilterFunc)(uint8_t* p, int stride, int thresh);
 
@@ -2387,6 +2375,60 @@ finish_row(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
     return 0;
 }
 
+
+/* see 15.1 */
+static void
+precompute_filter(WEBP *w)
+{
+    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
+
+    // precompute the filtering strength for each segment and each i4x4/i16x16 mode
+    if (filter_type) {
+        for (int s = 0; s < NUM_MB_SEGMENTS; s++) {
+            int base_level;
+            if (w->k.segmentation.segmentation_enabled) {
+                base_level = w->k.segmentation.lf[s].lf_update_value;
+                if (!w->k.segmentation.segment_feature_mode) {
+                    base_level += w->k.loop_filter_level;
+                }
+            } else {
+                base_level = w->k.loop_filter_level;
+            }
+            for (int i4x4 = 0; i4x4 <=1; i4x4 ++) {
+                VP8FInfo* const info = &fstrengths[s][i4x4];
+                int level = base_level;
+                if (w->k.mb_lf_adjustments.loop_filter_adj_enable) {
+                    level += w->k.mb_lf_adjustments.mode_ref_lf_delta_update[0];
+                    if (i4x4) {
+                        level += w->k.mb_lf_adjustments.mb_mode_delta_update[0];
+                    }
+                }
+                level = clamp(level, 63);
+                if (level > 0) {
+                    int ilevel = level;
+                    if (w->k.sharpness_level > 0) {
+                        if (w->k.sharpness_level > 4) {
+                            ilevel >>= 2;
+                        } else {
+                            ilevel >>= 1;
+                        }
+                        if (ilevel > 9 - w->k.sharpness_level) {
+                            ilevel = 9 - w->k.sharpness_level;
+                        }
+                    }
+                    if (ilevel < 1) ilevel = 1;
+                    info->f_ilevel = ilevel;
+                    info->f_limit = 2 * level + ilevel;
+                    info->hev_thresh = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
+                } else {
+                    info->f_limit = 0;  // no filtering
+                }
+                info->f_inner = i4x4;
+            }
+        }
+    }
+}
+
 static void
 vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
 {
@@ -2433,54 +2475,17 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
 
         qt.uv_quant[i] = q + w->k.quant_indice.uv_ac_delta;   // for dithering strength evaluation
     }
-    int filter_type = (w->k.filter_type == 0) ? 0 : w->k.loop_filter_level ? 1 : 2;
-    // precompute the filtering strength for each segment and each i4x4/i16x16 mode
 
-    if (filter_type) {
-        for (int s = 0; s < 4; s++) {
-            int base_level;
-            if (w->k.segmentation.segmentation_enabled) {
-                base_level = w->k.segmentation.lf[s].lf_update_value;
-                if (w->k.segmentation.segment_feature_mode) {
-                    base_level += w->k.loop_filter_level;
-                }
-            } else {
-                base_level = w->k.loop_filter_level;
-            }
-            for (int i4x4 = 0; i4x4 <=1; i4x4 ++) {
-                VP8FInfo* const info = &fstrengths[s][i4x4];
-                int level = base_level;
-                if (w->k.mb_lf_adjustments.loop_filter_adj_enable) {
-                    level += w->k.mb_lf_adjustments.mode_ref_lf_delta_update[0];
-                    if (i4x4) {
-                        level += w->k.mb_lf_adjustments.mb_mode_delta_update[0];
-                    }
-                }
-                level = (level < 0) ? 0 : (level > 63) ? 63 : level;
-                if (level > 0) {
-                    int ilevel = level;
-                    if (w->k.sharpness_level > 0) {
-                        if (w->k.sharpness_level > 4) {
-                            ilevel >>= 2;
-                        } else {
-                            ilevel >>= 1;
-                        }
-                        if (ilevel > 9 - w->k.sharpness_level) {
-                            ilevel = 9 - w->k.sharpness_level;
-                        }
-                    }
-                    if (ilevel < 1) ilevel = 1;
-                    info->f_ilevel = ilevel;
-                    info->f_limit = 2 * level + ilevel;
-                    info->hev_thresh = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
-                } else {
-                    info->f_limit = 0;  // no filtering
-                }
-                info->f_inner = i4x4;
-            }
+    precompute_filter(w);
+#if 0
+    for (int s = 0; s < NUM_MB_SEGMENTS; ++s) {
+        for (int i4x4 = 0; i4x4 <= 1; ++i4x4) {
+        VP8FInfo* const fi = &fstrengths[s][i4x4];
+        printf("ilevel %d, inner %d,  limit %d, hev %d \n",
+            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
         }
     }
-
+#endif
     struct macro_block *mbs = malloc(sizeof(struct macro_block)* ((width + 15) >> 4));
     vp8_intramode(w, br, mbs);
     VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * ((width + 15) >> 4));
@@ -2490,10 +2495,11 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
         for (int x = 0; x < (width + 15) >> 4; x ++) {
             struct macro_block *mb = mbs + x;
             VP8FInfo *fi = finfos + x;
-            vp8_decode_MB(w, mb, bt, &qt, filter_type, fi);
+            vp8_decode_MB(w, mb, bt, &qt, fi);
         }
     }
 
+    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
     uint8_t* yuv_b = malloc(YUV_SIZE);
     int extra_rows = kFilterExtraRows[filter_type];
 
@@ -2518,8 +2524,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
     // }
     for (int i = 0; i < ((width + 15) >> 4); i ++) {
         VP8FInfo *fi = finfos + i;
-        // printf("ilevel %d, inner %d,  limit %d, hev %d \n", 
-        //     fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
+        VDBG(webp, "ilevel %d, inner %d,  limit %d, hev %d", 
+            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
     }
 
 

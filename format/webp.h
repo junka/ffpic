@@ -171,6 +171,16 @@ enum {
     NUM_PROBAS = 11
 };
 
+typedef struct {   // all the probas associated to one band
+  uint8_t probas[NUM_CTX][NUM_PROBAS];
+} VP8BandProbas;
+
+
+enum webp_filter_type {
+    WEBP_FILTER_NONE = 0,
+    WEBP_FILTER_SIMPLE = 1,
+    WEBP_FILTER_NORMAL = 2
+};
 
 struct vp8_key_frame_header {
     struct vp8_key_cs cs_and_clamp;
@@ -188,7 +198,7 @@ struct vp8_key_frame_header {
 
     uint8_t refresh_entropy_probs:1;
 
-    uint8_t coeff_prob[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS];
+    VP8BandProbas coeff_prob[NUM_TYPES][NUM_BANDS];
     uint8_t mb_no_skip_coeff: 1;
     uint8_t prob_skip_false;
 
@@ -218,10 +228,13 @@ struct macro_block {
     uint8_t dither;      // local dithering strength (deduced from non_zero_*)
     uint8_t skip;
     uint8_t segment;
+};
 
+struct vp8mb {
     uint8_t nz;         // non-zero AC/DC coeffs (4bit for luma + 4bit for chroma)
     uint8_t nz_dc;      // non-zero DC coeff (1bit)
 };
+
 
 
 #pragma pack(pop)

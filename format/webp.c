@@ -809,14 +809,14 @@ read_proba(struct vp8_key_frame_header *kh, struct bool_dec *br)
    */
 
     /* DCT Coefficient Probability Update 9.9 */
-    for (int i = 0; i < 4; i ++) {
-        for (int j = 0; j < 8 ; j ++) {
-            for (int k = 0; k < 3; k ++) {
-                for (int l = 0; l < 11; l ++) {
+    for (int i = 0; i < NUM_TYPES; i ++) {
+        for (int j = 0; j < NUM_BANDS ; j ++) {
+            for (int k = 0; k < NUM_CTX; k ++) {
+                for (int l = 0; l < NUM_PROBAS; l ++) {
                     if (BOOL_DECODE(br, CoeffsUpdateProba[i][j][k][l])) {
-                        kh->coeff_prob[i][j][k][l] = BOOL_BITS(br, 8);
+                        kh->coeff_prob[i][j].probas[k][l] = BOOL_BITS(br, 8);
                     } else {
-                        kh->coeff_prob[i][j][k][l] = def_coeffsProba0[i][j][k][l];
+                        kh->coeff_prob[i][j].probas[k][l] = def_coeffsProba0[i][j][k][l];
                     }
                 }
             }
@@ -942,27 +942,26 @@ get_large_value(struct bool_dec *bt, const uint8_t* const p)
 /* Returns the position of the last non-zero coeff plus one */
 static int
 vp8_get_coeff_fast(struct bool_dec *bt, int16_t *out,
-                    uint8_t ***coeff_prob, int n, int ctx, uint8_t *dq)
+                    const VP8BandProbas * const bands[], int n, int ctx, uint8_t *dq)
 {
-    const uint8_t* p = coeff_prob[n][ctx];
+    const uint8_t* p = bands[n]->probas[ctx];
     for (; n < 16; ++n) {
         if (!BOOL_DECODE(bt, p[0])) {
             return n;  // previous coeff was last non-zero coeff
         }
         while (!BOOL_DECODE(bt, p[1])) {       // sequence of zero coeffs
-            p = coeff_prob[++n][0];
+            p = bands[++n]->probas[0];
             if (n == 16)
                 return 16;
         }
         // non zero coeff
-        uint8_t **p_ctx = coeff_prob[n+1];
         int v;
         if (!BOOL_DECODE(bt, p[2])) {
             v = 1;
-            p = p_ctx[1];
+            p = bands[n+1]->probas[1];
         } else {
             v = get_large_value(bt, p);
-            p = p_ctx[2];
+            p = bands[n+1]->probas[2];
         }
         out[kZigzag[n]] = BOOL_SIGNED(bt, v) * dq[n > 0];
     
@@ -1160,35 +1159,37 @@ NzCodeBits(uint32_t nz_coeffs, int nz, int dc_nz)
     return nz_coeffs;
 }
 
+
 static int
-vp8_residuals(WEBP *w, struct macro_block *mb, bool_dec *bt, struct quant *qt)
+vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_block *block, bool_dec *bt, struct quant *qt)
 {
     static const uint8_t kBands[16 + 1] = {
         0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7,
         0  // extra entry as sentinel
     };
-    uint8_t **prob[NUM_TYPES][16 + 1];
-    int16_t* dst = mb->coeffs;
+    const VP8BandProbas *bands[NUM_TYPES][16 + 1];
+    int16_t* dst = block->coeffs;
     memset(dst, 0, 384 * sizeof(*dst));
-    struct macro_block *left_mb = mb - 1;
+    // struct macro_block *left_mb = mb - 1;
     uint8_t tnz, lnz;
     uint32_t non_zero_y = 0;
     uint32_t non_zero_uv = 0;
     int x, y, ch;
     uint32_t out_t_nz, out_l_nz;
     int first;
-    uint8_t ***ac_proba;
+    const VP8BandProbas* const * ac_proba;
 
     for (int t = 0; t < NUM_TYPES; ++t) {
         for (int b = 0; b < 16 + 1; ++b) {
-            prob[t][b] = (uint8_t **)w->k.coeff_prob[t][kBands[b]];
+            bands[t][b] = &w->k.coeff_prob[t][kBands[b]];
         }
     }
-    if (!mb->is_i4x4) {
+    if (!block->is_i4x4) {
         int16_t dc[16] = {0};
         const int ctx = mb->nz_dc + left_mb->nz_dc;
-        const int nz = vp8_get_coeff_fast(bt, dc, prob[1], 0, ctx, qt->dqm_y2[mb->segment]);
+        const int nz = vp8_get_coeff_fast(bt, dc, bands[1], 0, ctx, qt->dqm_y2[block->segment]);
         mb->nz_dc = left_mb->nz_dc = (nz > 0);
+        printf("nz %d\n", nz);
         if (nz > 1) {   // more than just the DC -> perform the full transform
             transformWHT_C(dc, dst);
         } else {        // only DC is non-zero -> inlined simplified transform
@@ -1198,10 +1199,10 @@ vp8_residuals(WEBP *w, struct macro_block *mb, bool_dec *bt, struct quant *qt)
             }
         }
         first = 1;
-        ac_proba = prob[0];
+        ac_proba = bands[0];
     } else {
         first = 0;
-        ac_proba = prob[3];
+        ac_proba = bands[3];
     }
 
     tnz = mb->nz & 0x0f;
@@ -1211,7 +1212,9 @@ vp8_residuals(WEBP *w, struct macro_block *mb, bool_dec *bt, struct quant *qt)
         uint32_t nz_coeffs = 0;
         for (x = 0; x < 4; ++x) {
             const int ctx = l + (tnz & 1);
-            const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, qt->dqm_y1[mb->segment]);
+            // printf("tnz %d, lnz %d, ctx %d\n", tnz, lnz, ctx);
+            const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, qt->dqm_y1[block->segment]);
+            printf("1 %d nz %d\n", block->segment, nz);
             l = (nz > first);
             tnz = (tnz >> 1) | (l << 7);
             nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1232,7 +1235,8 @@ vp8_residuals(WEBP *w, struct macro_block *mb, bool_dec *bt, struct quant *qt)
             int l = lnz & 1;
             for (x = 0; x < 2; ++x) {
                 const int ctx = l + (tnz & 1);
-                const int nz = vp8_get_coeff_fast(bt, dst, prob[2], 0, ctx, qt->dqm_uv[mb->segment]);
+                const int nz = vp8_get_coeff_fast(bt, dst, bands[2], 0, ctx, qt->dqm_uv[block->segment]);
+                printf("2 nz %d\n", nz);
                 l = (nz > 0);
                 tnz = (tnz >> 1) | (l << 3);
                 nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1249,8 +1253,8 @@ vp8_residuals(WEBP *w, struct macro_block *mb, bool_dec *bt, struct quant *qt)
     mb->nz = out_t_nz;
     left_mb->nz = out_l_nz;
 
-    mb->non_zero_y = non_zero_y;
-    mb->non_zero_uv = non_zero_uv;
+    block->non_zero_y = non_zero_y;
+    block->non_zero_uv = non_zero_uv;
 
     return 0;
 }
@@ -1263,32 +1267,31 @@ typedef struct {  // filter specs
   uint8_t hev_thresh;   // high edge variance threshold in [0..2]
 } VP8FInfo;
 
-VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
+static VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
 static int 
-vp8_decode_MB(WEBP *w, struct macro_block *mb, bool_dec *bt,
+vp8_decode_MB(WEBP *w, struct vp8mb *left, struct vp8mb *mb, struct macro_block *block, bool_dec *bt,
              struct quant *qt, VP8FInfo *finfo)
 {
-    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
+    int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
+        w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
     // 0=off, 1=simple, 2=complex
-    struct macro_block *left_mb = mb - 1;
+    // struct macro_block *left_mb = mb - 1;
 
-    int skip = w->k.mb_no_skip_coeff ? mb->skip : 0;
-    if (skip) {
-        skip = vp8_residuals(w, mb, bt, qt);
+    int skip = w->k.mb_no_skip_coeff ? block->skip : 0;
+    if (!skip) {
+        skip = vp8_residuals(w, left, mb, block, bt, qt);
     } else {
-        if (!mb->is_i4x4) {
-            left_mb->nz = mb->nz = 0;
-            if (!mb->is_i4x4) {
-                left_mb->nz_dc = mb->nz_dc = 0;
-            }
+        left->nz = mb->nz = 0;
+        if (!block->is_i4x4) {
+            left->nz_dc = mb->nz_dc = 0;
         }
-        mb->non_zero_y = 0;
-        mb->non_zero_uv = 0;
-        mb->dither = 0;
+        block->non_zero_y = 0;
+        block->non_zero_uv = 0;
+        block->dither = 0;
     }
     if (filter_type) {
-        *finfo = fstrengths[mb->segment][mb->is_i4x4];
+        *finfo = fstrengths[block->segment][block->is_i4x4];
         finfo->f_inner |= !skip;
     }
     return 0;
@@ -1311,7 +1314,6 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
 {
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
     int intra_size = (width + 15) >> 2;
     uint8_t left[4], *tops, *top;
     tops = malloc(intra_size);
@@ -1320,7 +1322,7 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
     for (int y = 0; y < (height + 15) >> 4; y ++) {
         memset(left, 0, 4 * sizeof(uint8_t));
         for (int x = 0; x < (width + 15) >> 4; x ++) {
-            mb = mbs + x;
+            mb = mbs + y *((width + 15) >> 4) + x;
             top = tops + 4 * x;
             if (w->k.segmentation.update_mb_segmentation_map) {
                 mb->segment = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
@@ -1329,10 +1331,12 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
             } else {
                 mb->segment = 0;
             }
+            // printf("%x, %ld\n", mb->segment, bt->bits->len - (bt->bits->ptr - bt->bits->start));
             if (w->k.mb_no_skip_coeff) {
                 mb->skip = BOOL_DECODE(bt, w->k.prob_skip_false);
             }
             mb->is_i4x4 = !BOOL_DECODE(bt, 145);
+            // printf("y %d, x %d, is 4x4 %d\n", y, x, mb->is_i4x4);
             if (!mb->is_i4x4) {
                 const int ymode = BOOL_DECODE(bt, 156) ?
                     (BOOL_DECODE(bt, 128) ? TM_PRED : H_PRED) :
@@ -1346,6 +1350,7 @@ vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
                     int ymode = left[i];
                     for (int j = 0; j < 4; j ++) {
                         const uint8_t* const prob = kf_bmode_prob[top[j]][ymode];
+                        // printf("top %d, ymode %d, prob %d\n", top[j], ymode, prob[0]);
                         int a = kYModesIntra4[BOOL_DECODE(bt, prob[0])];
                         while (a > 0) {
                             a = kYModesIntra4[2 * a + BOOL_DECODE(bt, prob[a])];
@@ -1409,7 +1414,7 @@ static const uint16_t kAcTable[128] = {
 
 
 
-#define BPS (32)
+#define BPS      (32)
 #define YUV_SIZE (BPS * 17 + BPS * 9)
 #define Y_OFF    (BPS * 1 + 8)
 #define U_OFF    (Y_OFF + BPS * 16 + BPS)
@@ -1422,14 +1427,14 @@ static inline uint8_t clip_8b(int v) {
 }
 
 #define STORE(x, y, v) \
-  dst[(x) + (y) * BPS] = clip_8b(dst[(x) + (y) * BPS] + ((v) >> 3))
+    dst[(x) + (y) * BPS] = clip_8b(dst[(x) + (y) * BPS] + ((v) >> 3))
 
-#define STORE2(y, dc, d, c) do {    \
-  const int DC = (dc);              \
-  STORE(0, y, DC + (d));            \
-  STORE(1, y, DC + (c));            \
-  STORE(2, y, DC - (c));            \
-  STORE(3, y, DC - (d));            \
+#define STORE2(y, dc, d, c) do {      \
+    const int DC = (dc);              \
+    STORE(0, y, DC + (d));            \
+    STORE(1, y, DC + (c));            \
+    STORE(2, y, DC - (c));            \
+    STORE(3, y, DC - (d));            \
 } while (0)
 
 #define MUL1(a) ((((a) * 20091) >> 16) + (a))
@@ -1941,7 +1946,7 @@ typedef struct {
 } cache;
 
 void
-reconstruct_row(WEBP *w, struct macro_block *mbs, 
+reconstruct_row(WEBP *w, struct macro_block *blocks, 
                 uint8_t* yuv_b, int y, cache *c, VP8FInfo *finfos)
 {
 
@@ -1978,8 +1983,8 @@ reconstruct_row(WEBP *w, struct macro_block *mbs,
 
     // Reconstruct one row.
     for (int x = 0; x < ((width + 15) >> 4); ++x) {
-        struct macro_block *mb = mbs + x;
-        VP8FInfo *finfo = finfos + x;
+        struct macro_block *mb = blocks + y * ((width + 15) >> 4) + x;
+        VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
 
         // Rotate in the left samples from previously decoded block. We move four
         // pixels at a time for alignment reason, and because of in-loop filter.
@@ -2007,30 +2012,30 @@ reconstruct_row(WEBP *w, struct macro_block *mbs,
 
         // predict and add residuals
         if (mb->is_i4x4) {   // 4x4
-        uint32_t* const top_right = (uint32_t*)(y_dst - BPS + 16);
+            uint32_t* const top_right = (uint32_t*)(y_dst - BPS + 16);
 
-        if (y > 0) {
-            if (x >= ((width + 15) >> 4) - 1) {    // on rightmost border
-            memset(top_right, top_yuv[0].y[15], sizeof(*top_right));
-            } else {
-            memcpy(top_right, top_yuv[1].y, sizeof(*top_right));
+            if (y > 0) {
+                if (x >= ((width + 15) >> 4) - 1) {    // on rightmost border
+                memset(top_right, top_yuv[0].y[15], sizeof(*top_right));
+                } else {
+                memcpy(top_right, top_yuv[1].y, sizeof(*top_right));
+                }
             }
-        }
-        // replicate the top-right pixels below
-        top_right[BPS] = top_right[2 * BPS] = top_right[3 * BPS] = top_right[0];
+            // replicate the top-right pixels below
+            top_right[BPS] = top_right[2 * BPS] = top_right[3 * BPS] = top_right[0];
 
-        // predict and add residuals for all 4x4 blocks in turn.
-        for (int n = 0; n < 16; ++n, bits <<= 2) {
-            uint8_t* const dst = y_dst + kScan[n];
-            VP8PredLuma4[mb->imodes[n]](dst);
-            DoTransform(bits, coeffs + n * 16, dst);
-        }
+            // predict and add residuals for all 4x4 blocks in turn.
+            for (int n = 0; n < 16; ++n, bits <<= 2) {
+                uint8_t* const dst = y_dst + kScan[n];
+                VP8PredLuma4[mb->imodes[n]](dst);
+                DoTransform(bits, coeffs + n * 16, dst);
+            }
         } else {    // 16x16
             const int pred_func = CheckMode(x, y, mb->imodes[0]);
             VP8PredLuma16[pred_func](y_dst);
             if (bits != 0) {
                 for (int n = 0; n < 16; ++n, bits <<= 2) {
-                DoTransform(bits, coeffs + n * 16, y_dst + kScan[n]);
+                    DoTransform(bits, coeffs + n * 16, y_dst + kScan[n]);
                 }
             }
         }
@@ -2057,8 +2062,13 @@ reconstruct_row(WEBP *w, struct macro_block *mbs,
         uint8_t* const y_out = c->y + x * 16 + y_offset;
         uint8_t* const u_out = c->u + x * 8 + uv_offset;
         uint8_t* const v_out = c->v + x * 8 + uv_offset;
+        // printf("Y: ");
         for (int j = 0; j < 16; ++j) {
             memcpy(y_out + j * c->y_stride, y_dst + j * BPS, 16);
+            // for (int ls = 0; ls < 16; ls ++) {
+            // printf("%d ", *(y_out + j * c->y_stride + ls));
+            // }
+            // printf("\n");
         }
         for (int j = 0; j < 8; ++j) {
             memcpy(u_out + j * c->uv_stride, u_dst + j * BPS, 8);
@@ -2335,7 +2345,7 @@ FilterRow(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
 {
     int width = ((w->fi.width + 3) >> 2) << 2;
     for (int x = 0; x < (width + 15) >> 4; ++ x) {
-        VP8FInfo *finfo = finfos + x;
+        VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
         DoFilter(w, filter_type, x, y, c, finfo);
     }
 }
@@ -2430,7 +2440,7 @@ precompute_filter(WEBP *w)
 }
 
 static void
-vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
+vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 {
     uint32_t *Y, *U, *V;
     int width = ((w->fi.width + 3) >> 2) << 2;
@@ -2486,16 +2496,29 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
         }
     }
 #endif
-    struct macro_block *mbs = malloc(sizeof(struct macro_block)* ((width + 15) >> 4));
-    vp8_intramode(w, br, mbs);
-    VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * ((width + 15) >> 4));
+    struct macro_block *blocks = malloc(sizeof(struct macro_block)* (((width + 15) >> 4) * ((height + 15) >> 4)));
+    
+    struct vp8mb *mbs = malloc(sizeof(struct vp8mb)* (((width + 15) >> 4) + 1));
+    
+    vp8_intramode(w, br, blocks);
+
+    VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * ((width + 15) >> 4)* ((height + 15) >> 4));
+
     for (int y = 0; y < (height + 15) >> 4; y ++) {
-        // parse intra mode
+        // parse intra mode here or in advance
         bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
+
+        //reset left part
+        struct vp8mb *left = mbs;
+        left->nz = 0;
+        left->nz_dc = 0;
+
         for (int x = 0; x < (width + 15) >> 4; x ++) {
-            struct macro_block *mb = mbs + x;
-            VP8FInfo *fi = finfos + x;
-            vp8_decode_MB(w, mb, bt, &qt, fi);
+            struct macro_block *block = blocks + y *((width + 15) >> 4) + x;
+            struct vp8mb *mb = mbs + 1 + x;
+            VP8FInfo *fi = finfos + y *((width + 15) >> 4) + x;
+            // printf("2 y %d, x %d, is 4x4 %d, tnz %d, lnz %d\n", y, x, block->is_i4x4, mb->nz, left->nz);
+            vp8_decode_MB(w, left, mb, block, bt, &qt, fi);
         }
     }
 
@@ -2510,25 +2533,32 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec **btree)
     c.y = c.m + extra_rows * c.y_stride;
     c.u = c.y + 16 * c.y_stride + (extra_rows / 2) * c.uv_stride;
     c.v = c.u + 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride;
+    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n",  extra_rows * c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride,
+    // 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
+    //     (((width + 15) >> 4) * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
 
+    for (int j = 0; j < 24; j ++) {
+        for (int i = 0; i < 16; i ++) {
+            printf("%03d ", blocks->coeffs[j * 16 + i]);
+        }
+        printf("\n");
+    }
     /* reconstruct the row with filter */
     for (int y = 0; y < (height + 15) >> 4; y ++) {
-        reconstruct_row(w, mbs, yuv_b, y, &c, finfos);
+        reconstruct_row(w, blocks, yuv_b, y, &c, finfos);
         finish_row(w, filter_type, y, &c, finfos);
     }
-    // for (int j = 0; j < 24; j ++) {
-    //     for (int i = 0; i < 16; i ++) {
-    //         printf("%03d ", mbs->coeffs[j * 16 + i]);
-    //     }
-    //     printf("\n");
+    
+    
+
+    // for (int i = 0; i < ((width + 15) >> 4); i ++) {
+    //     VP8FInfo *fi = finfos + i;
+    //     VDBG(webp, "ilevel %d, inner %d,  limit %d, hev %d", 
+    //         fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
     // }
-    for (int i = 0; i < ((width + 15) >> 4); i ++) {
-        VP8FInfo *fi = finfos + i;
-        VDBG(webp, "ilevel %d, inner %d,  limit %d, hev %d", 
-            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
-    }
 
-
+    free(yuv_b);
+    free(c.m);
 }
 
 static struct pic* 

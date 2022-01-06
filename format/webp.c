@@ -964,6 +964,7 @@ vp8_get_coeff_fast(struct bool_dec *bt, int16_t *out,
             p = bands[n+1]->probas[2];
         }
         out[kZigzag[n]] = BOOL_SIGNED(bt, v) * dq[n > 0];
+        //do both zigzag and dequantation here
     
     }
     return 16;
@@ -1189,7 +1190,6 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
         const int ctx = mb->nz_dc + left_mb->nz_dc;
         const int nz = vp8_get_coeff_fast(bt, dc, bands[1], 0, ctx, qt->dqm_y2[block->segment]);
         mb->nz_dc = left_mb->nz_dc = (nz > 0);
-        printf("nz %d\n", nz);
         if (nz > 1) {   // more than just the DC -> perform the full transform
             transformWHT_C(dc, dst);
         } else {        // only DC is non-zero -> inlined simplified transform
@@ -1214,7 +1214,6 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
             const int ctx = l + (tnz & 1);
             // printf("tnz %d, lnz %d, ctx %d\n", tnz, lnz, ctx);
             const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, qt->dqm_y1[block->segment]);
-            printf("1 %d nz %d\n", block->segment, nz);
             l = (nz > first);
             tnz = (tnz >> 1) | (l << 7);
             nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1236,7 +1235,6 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
             for (x = 0; x < 2; ++x) {
                 const int ctx = l + (tnz & 1);
                 const int nz = vp8_get_coeff_fast(bt, dst, bands[2], 0, ctx, qt->dqm_uv[block->segment]);
-                printf("2 nz %d\n", nz);
                 l = (nz > 0);
                 tnz = (tnz >> 1) | (l << 3);
                 nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1556,10 +1554,10 @@ TransformDCUV_C(const int16_t* in, uint8_t* dst)
 // Main reconstruction function.
 
 static const uint16_t kScan[16] = {
-  0 +  0 * BPS,  4 +  0 * BPS, 8 +  0 * BPS, 12 +  0 * BPS,
-  0 +  4 * BPS,  4 +  4 * BPS, 8 +  4 * BPS, 12 +  4 * BPS,
-  0 +  8 * BPS,  4 +  8 * BPS, 8 +  8 * BPS, 12 +  8 * BPS,
-  0 + 12 * BPS,  4 + 12 * BPS, 8 + 12 * BPS, 12 + 12 * BPS
+    0 +  0 * BPS,  4 +  0 * BPS, 8 +  0 * BPS, 12 +  0 * BPS,
+    0 +  4 * BPS,  4 +  4 * BPS, 8 +  4 * BPS, 12 +  4 * BPS,
+    0 +  8 * BPS,  4 +  8 * BPS, 8 +  8 * BPS, 12 +  8 * BPS,
+    0 + 12 * BPS,  4 + 12 * BPS, 8 + 12 * BPS, 12 + 12 * BPS
 };
 
 static int
@@ -1954,7 +1952,6 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
     int height = w->fi.height;
     int cache_id = 0;
 
-    // int filter_now = (filter_type > 0) && ();
     topsamples yuv_t;
 
     uint8_t* const y_dst = yuv_b + Y_OFF;
@@ -2078,11 +2075,6 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
 }
 
 
-static void DitherRow() {
-
-}
-
-
 //-------------------------------------------------------------------------
 // Filtering
 
@@ -2094,7 +2086,6 @@ static void DitherRow() {
 static const uint8_t kFilterExtraRows[3] = { 0, 2, 8 };
 
 typedef void (*VP8SimpleFilterFunc)(uint8_t* p, int stride, int thresh);
-
 
 // 4 pixels in, 2 pixels out
 static inline void DoFilter2_C(uint8_t* p, int step) {
@@ -2108,15 +2099,15 @@ static inline void DoFilter2_C(uint8_t* p, int step) {
 
 // 4 pixels in, 4 pixels out
 static inline void DoFilter4_C(uint8_t* p, int step) {
-  const int p1 = p[-2*step], p0 = p[-step], q0 = p[0], q1 = p[step];
-  const int a = 3 * (q0 - p0);
-  const int a1 = VP8ksclip2[(a + 4) >> 3];
-  const int a2 = VP8ksclip2[(a + 3) >> 3];
-  const int a3 = (a1 + 1) >> 1;
-  p[-2*step] = VP8kclip1[p1 + a3];
-  p[-  step] = VP8kclip1[p0 + a2];
-  p[      0] = VP8kclip1[q0 - a1];
-  p[   step] = VP8kclip1[q1 - a3];
+    const int p1 = p[-2*step], p0 = p[-step], q0 = p[0], q1 = p[step];
+    const int a = 3 * (q0 - p0);
+    const int a1 = VP8ksclip2[(a + 4) >> 3];
+    const int a2 = VP8ksclip2[(a + 3) >> 3];
+    const int a3 = (a1 + 1) >> 1;
+    p[-2*step] = VP8kclip1[p1 + a3];
+    p[-  step] = VP8kclip1[p0 + a2];
+    p[      0] = VP8kclip1[q0 - a1];
+    p[   step] = VP8kclip1[q1 - a3];
 }
 
 // 6 pixels in, 6 pixels out
@@ -2246,53 +2237,61 @@ void FilterLoop24_C(uint8_t* p,
 
 // on macroblock edges
 static void VFilter16_C(uint8_t* p, int stride,
-                        int thresh, int ithresh, int hev_thresh) {
+                        int thresh, int ithresh, int hev_thresh)
+{
     FilterLoop26_C(p, stride, 1, 16, thresh, ithresh, hev_thresh);
 }
 
 static void HFilter16_C(uint8_t* p, int stride,
-                        int thresh, int ithresh, int hev_thresh) {
+                        int thresh, int ithresh, int hev_thresh)
+{
     FilterLoop26_C(p, 1, stride, 16, thresh, ithresh, hev_thresh);
 }
 
 // on three inner edges
 static void VFilter16i_C(uint8_t* p, int stride,
-                         int thresh, int ithresh, int hev_thresh) {
-    int k;
-    for (k = 3; k > 0; --k) {
+                         int thresh, int ithresh, int hev_thresh)
+{
+    for (int k = 3; k > 0; --k) {
         p += 4 * stride;
         FilterLoop24_C(p, stride, 1, 16, thresh, ithresh, hev_thresh);
     }
 }
+
 static void HFilter16i_C(uint8_t* p, int stride,
-                         int thresh, int ithresh, int hev_thresh) {
-  int k;
-  for (k = 3; k > 0; --k) {
-    p += 4;
-    FilterLoop24_C(p, 1, stride, 16, thresh, ithresh, hev_thresh);
-  }
+                         int thresh, int ithresh, int hev_thresh)
+{
+    for (int k = 3; k > 0; --k) {
+        p += 4;
+        FilterLoop24_C(p, 1, stride, 16, thresh, ithresh, hev_thresh);
+    }
 }
+
 // 8-pixels wide variant, for chroma filtering
 static void VFilter8_C(uint8_t* u, uint8_t* v, int stride,
                        int thresh, int ithresh, int hev_thresh) {
     FilterLoop26_C(u, stride, 1, 8, thresh, ithresh, hev_thresh);
     FilterLoop26_C(v, stride, 1, 8, thresh, ithresh, hev_thresh);
 }
+
 static void HFilter8_C(uint8_t* u, uint8_t* v, int stride,
                        int thresh, int ithresh, int hev_thresh) {
     FilterLoop26_C(u, 1, stride, 8, thresh, ithresh, hev_thresh);
     FilterLoop26_C(v, 1, stride, 8, thresh, ithresh, hev_thresh);
 }
+
 static void VFilter8i_C(uint8_t* u, uint8_t* v, int stride,
                         int thresh, int ithresh, int hev_thresh) {
     FilterLoop24_C(u + 4 * stride, stride, 1, 8, thresh, ithresh, hev_thresh);
     FilterLoop24_C(v + 4 * stride, stride, 1, 8, thresh, ithresh, hev_thresh);
 }
+
 static void HFilter8i_C(uint8_t* u, uint8_t* v, int stride,
                         int thresh, int ithresh, int hev_thresh) {
     FilterLoop24_C(u + 4, 1, stride, 8, thresh, ithresh, hev_thresh);
     FilterLoop24_C(v + 4, 1, stride, 8, thresh, ithresh, hev_thresh);
 }
+
 static void
 DoFilter(WEBP *w, int filter_type, int x, int y, cache *c, VP8FInfo *finfo)
 {
@@ -2355,8 +2354,7 @@ finish_row(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
 {
     int filter_now = (filter_type > 0);
     int height = w->fi.height;
-    int dither = 0;
-    const int extra_y_rows = kFilterExtraRows[filter_type];
+    const int extra_y_rows = filter_type * 3 - 1; //kFilterExtraRows
     const int cache_id = 0;
     const int ysize = extra_y_rows * c->y_stride;
     const int uvsize = (extra_y_rows / 2) * c->uv_stride;
@@ -2370,10 +2368,6 @@ finish_row(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
 
     if (filter_now) {
         FilterRow(w, filter_type, y, c, finfos);
-    }
-
-    if (dither) {
-        DitherRow();
     }
 
     if (!is_last_row) {
@@ -2537,19 +2531,20 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     // 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
     //     (((width + 15) >> 4) * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
 
+#if 0
     for (int j = 0; j < 24; j ++) {
         for (int i = 0; i < 16; i ++) {
-            printf("%03d ", blocks->coeffs[j * 16 + i]);
+            printf("%03d ", (blocks + ((width + 15) >> 4)*(((height + 15) >> 4) -1))->coeffs[j * 16 + i]);
         }
         printf("\n");
     }
+#endif
+
     /* reconstruct the row with filter */
     for (int y = 0; y < (height + 15) >> 4; y ++) {
         reconstruct_row(w, blocks, yuv_b, y, &c, finfos);
         finish_row(w, filter_type, y, &c, finfos);
     }
-    
-    
 
     // for (int i = 0; i < ((width + 15) >> 4); i ++) {
     //     VP8FInfo *fi = finfos + i;

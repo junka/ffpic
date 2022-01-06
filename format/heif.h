@@ -10,19 +10,24 @@ extern "C" {
 
 #pragma pack(push, 1)
 
+/* see iso_ico 230008-12 9.3*/
+struct iprp_box {
+    uint32_t size;
+    uint32_t type;
+    uint32_t version: 8;
+    uint32_t flags : 24;
 
+};
 
-struct heif_ftyp {
-    uint32_t len;
-    uint32_t major_brand;
-    uint32_t minor_version;
-    uint8_t *extended_compatible;
+struct ipco_box {
+    uint32_t size;
+    uint32_t type;
 };
 
 #pragma pack(pop)
 
 typedef struct {
-
+    struct ftyp_box ftyp;
 
 } HEIF;
 

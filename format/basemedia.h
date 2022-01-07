@@ -174,8 +174,17 @@ struct ipro_box {
 struct frma_box {
     uint32_t size;
     uint32_t type;
+    uint32_t data_format;
 };
 
+/* defined in 14496-1 */
+struct IPMP_Descriptor {
+    uint8_t tag;    //0x0B
+    uint8_t length;
+    uint8_t id;
+    uint16_t type;
+    uint8_t* data; //type = 0: url string; 1: n data
+};
 
 struct imif_box {
     uint32_t size;
@@ -183,7 +192,7 @@ struct imif_box {
     uint32_t version: 8;
     uint32_t flags : 24;
     /* IPMP_Descriptor is defined in 14496-1. */
-    void *ipmp_desc;
+    struct IPMP_Descriptor *ipmp_descs;
 };
 
 
@@ -198,13 +207,19 @@ struct schm_box {
     uint8_t * scheme_uri; //only exist when flag & 0x1
 };
 
+struct schi_box {
+    uint32_t size;
+    uint32_t type;
+};
 
-/*see 8.45*/
+/* see 8.45 */
 struct sinf_box {
+    uint32_t size;
+    uint32_t type;
     struct frma_box original_format;
     struct imif_box IPMP_descriptors;   //optional
     struct schm_box scheme_type_box;    //optional
-    struct box *info;    //optional
+    struct schi_box *info;    //optional
 };
 
 
@@ -226,6 +241,8 @@ void read_iloc_box(FILE *f, struct iloc_box *b);
 void read_pitm_box(FILE *F, struct pitm_box *b);
 
 void read_iinf_box(FILE *f, struct iinf_box *b);
+
+void read_sinf_box(FILE *f, struct sinf_box *b);
 
 #ifdef __cplusplus
 }

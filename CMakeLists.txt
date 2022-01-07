@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.6)
+set(CMAKE_C_STANDARD 11)
 
 set(FFPIC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(FFPIC_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}")
@@ -46,7 +47,8 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/utils/hexdump.c"
             "${FFPIC_ROOT}/utils/bitstream.c"
             "${FFPIC_ROOT}/utils/utils.c"
-            "${FFPIC_ROOT}/utils/vlog.c")
+            "${FFPIC_ROOT}/utils/vlog.c"
+            "${FFPIC_ROOT}/utils/byteorder.c")
 
 list(APPEND FFPIC_FORMART
             "${FFPIC_ROOT}/format/png.c"

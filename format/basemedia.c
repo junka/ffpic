@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <arpa/inet.h>
 
+#include "byteorder.h"
 #include "basemedia.h"
 
 
@@ -26,7 +26,7 @@ read_box(FILE *f, void * d, int blen)
 {
     struct box* b = (struct box*)d;
     fread(b, sizeof(struct box), 1, f);
-    b->size = ntohl(b->size);
+    b->size = SWAP(b->size);
     if (b->size == 1) {
         //large size
         uint32_t large_size;
@@ -36,7 +36,7 @@ read_box(FILE *f, void * d, int blen)
         if (large_size) {
             printf("should error here for now\n");
         }
-        b->size = ntohl(value);
+        b->size = SWAP(value);
     } else if (b->size == 0) {
         //last box, read to end of box
         b->size = blen;
@@ -50,7 +50,7 @@ read_ftyp(FILE *f, void *d)
 {
     struct ftyp_box *ftyp = (struct ftyp_box*)d;
     fread(ftyp, 12, 1, f);
-    ftyp->size = ntohl(ftyp->size);
+    ftyp->size = SWAP(ftyp->size);
     if (ftyp->size > 12) {
         ftyp->compatible_brands = malloc(4 * ((ftyp->size - 12)>>2));
         fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
@@ -76,7 +76,7 @@ void
 read_mvhd_box(FILE *f, struct mvhd_box *b)
 {
     fread(b, 4, 3, f);
-    b->size = ntohl(b->size);
+    b->size = SWAP(b->size);
     if (b->version == 0) {
         fread(&b->ctime, 4, 1, f);
         fread(&b->mtime, 4, 1, f);
@@ -93,7 +93,7 @@ void
 read_hdlr_box(FILE *f, struct hdlr_box *b)
 {
     fread(b, 4, 8, f);
-    b->size = ntohl(b->size);
+    b->size = SWAP(b->size);
     if (b->size - 32 - 1) {
         b->name = malloc(b->size - 32 -1);
         fread(b->name, b->size - 32, 1, f);
@@ -108,14 +108,14 @@ void
 read_iloc_box(FILE *f, struct iloc_box *b)
 {
     fread(b, 4, 3, f);
-    b->size = ntohl(b->size);
+    b->size = SWAP(b->size);
     uint8_t a = fgetc(f);
     b->offset_size = a >> 4;
     b->length_size = a & 0xf;
     a = fgetc(f);
     b->base_offset_size = a >> 4;
     fread(&b->item_count, 2, 1, f);
-    b->item_count = ntohs(b->item_count);
+    b->item_count = SWAP(b->item_count);
     b->items = malloc(sizeof(struct item_location) * b->item_count);
     for (int i = 0; i < b->item_count; i ++) {
         fread(b->items + i, 2, 2, f);
@@ -125,7 +125,7 @@ read_iloc_box(FILE *f, struct iloc_box *b)
             fread(&b->items[i].base_offset, 4, 1, f);
         }
         fread(&b->items[i].extent_count, 2, 1, f);
-        b->items[i].extent_count = ntohs(b->items[i].extent_count);
+        b->items[i].extent_count = SWAP(b->items[i].extent_count);
         b->items[i].extents = malloc(sizeof(struct item_extent) * b->items[i].extent_count);
         for (int j = 0; j < b->items[i].extent_count; j ++) {
             if (b->offset_size == 8) {
@@ -148,21 +148,38 @@ void
 read_pitm_box(FILE *f, struct pitm_box *b)
 {
     fread(b, 14, 1, f);
-    b->size = ntohl(b->size);
-    b->item_id = ntohs(b->item_id);
+    b->size = SWAP(b->size);
+    b->item_id = SWAP(b->item_id);
 }
 
 void
 read_iinf_box(FILE *f, struct iinf_box *b)
 {
     fread(b, 14, 1, f);
-    b->size = ntohl(b->size);
-    b->entry_count = ntohs(b->entry_count);
+    b->size = SWAP(b->size);
+    b->entry_count = SWAP(b->entry_count);
     b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
     for (int i = 0; i < b->entry_count; i ++) {
         fread(b->item_infos + i, 16, 1, f);
-        b->item_infos[i].size = ntohl(b->item_infos[i].size);
+        b->item_infos[i].size = SWAP(b->item_infos[i].size);
         fseek(f, b->item_infos[i].size - 16, SEEK_CUR);
     }
 }
 
+
+void
+read_sinf_box(FILE *f, struct sinf_box *b)
+{
+    fread(b, 8, 1, f);
+    b->size = SWAP(b->size);
+    fread(&b->original_format, 12, 1, f);
+    b->original_format.size = SWAP(b->original_format.size);
+
+    fread(&b->IPMP_descriptors, 12, 1, f);
+    b->IPMP_descriptors.size = SWAP(b->IPMP_descriptors.size);
+    b->IPMP_descriptors.ipmp_descs = malloc(b->IPMP_descriptors.size - 12);
+    fread(b->IPMP_descriptors.ipmp_descs, b->IPMP_descriptors.size - 12, 1, f);
+
+    fread(&b->scheme_type_box, 20, 1, f);
+    b->scheme_type_box.size = SWAP(b->scheme_type_box.size);
+}

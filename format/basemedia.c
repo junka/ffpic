@@ -44,6 +44,16 @@ read_box(FILE *f, void * d, int blen)
     return b->type;
 }
 
+uint32_t
+read_full_box(FILE *f, void * d, int blen)
+{
+    uint32_t type = read_box(f, d, blen);
+    struct full_box* b = (struct full_box*)d;
+    b->version = fgetc(f);
+    b->flags = fgetc(f) << 16 | fgetc(f) <<8| fgetc(f);
+    return type;
+}
+
 
 void
 read_ftyp(FILE *f, void *d)
@@ -52,22 +62,17 @@ read_ftyp(FILE *f, void *d)
     fread(ftyp, 12, 1, f);
     ftyp->size = SWAP(ftyp->size);
     if (ftyp->size > 12) {
-        ftyp->compatible_brands = malloc(4 * ((ftyp->size - 12)>>2));
+        ftyp->compatible_brands = malloc(((ftyp->size - 12)));
         fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
     }
 }
 
-void
-read_meta_box(FILE *f)
-{
-
-}
-
 void 
-print_box(FILE *f, struct box *b)
+print_box(FILE *f, void *d)
 {
+    struct box *b = (struct box *) d;
     char *s = UINT2TYPE(b->type);
-    fprintf(f, "size %d, type \"%s\"\n", b->size, s);
+    fprintf(f, "\"%s\":%d", s, b->size);
     free(s);
 }
 
@@ -152,6 +157,57 @@ read_pitm_box(FILE *f, struct pitm_box *b)
     b->item_id = SWAP(b->item_id);
 }
 
+int
+read_till_null(FILE *f, char *str)
+{
+    int i = 0;
+    char c = fgetc(f);
+    i ++;
+    while (c != '\0') {
+        str[i-1] = c;
+        c = fgetc(f);
+        i ++;
+    }
+    str[i-1] = '\0';
+    return i;
+}
+
+static int
+read_infe_box(FILE *f, struct infe_box *b)
+{
+    fread(b, 12, 1, f);
+    b->size = SWAP(b->size);
+    if (b->version == 0 || b->version == 1) {
+        fread(&b->item_id, 2, 1, f);
+        b->item_id = SWAP(b->item_id);
+        fread(&b->item_protection_index, 2, 1, f);
+        b->item_protection_index = SWAP(b->item_protection_index);
+        read_till_null(f, b->item_name);
+        read_till_null(f, b->content_type);
+    }
+    if (b->version == 1) {
+        fread(&b->item_type, 4, 1, f);
+        b->item_type = SWAP(b->item_type);
+
+    } else if (b->version == 2) {
+        fread(&b->item_id, 2, 1, f);
+        b->item_id = SWAP(b->item_id);
+        fread(&b->item_protection_index, 2, 1, f);
+        b->item_protection_index = SWAP(b->item_protection_index);
+        fread(&b->item_type, 4, 1, f);
+        int l = read_till_null(f, b->item_name);
+        if (b->item_type == TYPE2UINT("mime")) {
+            int m = read_till_null(f, b->content_type);
+            b->content_encoding = malloc(b->size - 20 - l - m);
+            read_till_null(f, b->content_encoding);
+            // fgetc(f);
+        } else if (b->item_type == TYPE2UINT("uri ")) {
+            read_till_null(f, b->content_type);
+        }
+    }
+    return b->size;
+}
+
 void
 read_iinf_box(FILE *f, struct iinf_box *b)
 {
@@ -160,9 +216,7 @@ read_iinf_box(FILE *f, struct iinf_box *b)
     b->entry_count = SWAP(b->entry_count);
     b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
     for (int i = 0; i < b->entry_count; i ++) {
-        fread(b->item_infos + i, 16, 1, f);
-        b->item_infos[i].size = SWAP(b->item_infos[i].size);
-        fseek(f, b->item_infos[i].size - 16, SEEK_CUR);
+        read_infe_box(f, b->item_infos + i);
     }
 }
 
@@ -175,11 +229,46 @@ read_sinf_box(FILE *f, struct sinf_box *b)
     fread(&b->original_format, 12, 1, f);
     b->original_format.size = SWAP(b->original_format.size);
 
-    fread(&b->IPMP_descriptors, 12, 1, f);
-    b->IPMP_descriptors.size = SWAP(b->IPMP_descriptors.size);
-    b->IPMP_descriptors.ipmp_descs = malloc(b->IPMP_descriptors.size - 12);
-    fread(b->IPMP_descriptors.ipmp_descs, b->IPMP_descriptors.size - 12, 1, f);
+    // fread(&b->IPMP_descriptors, 12, 1, f);
+    // b->IPMP_descriptors.size = SWAP(b->IPMP_descriptors.size);
+    // b->IPMP_descriptors.ipmp_descs = malloc(b->IPMP_descriptors.size - 12);
+    // fread(b->IPMP_descriptors.ipmp_descs, b->IPMP_descriptors.size - 12, 1, f);
 
     fread(&b->scheme_type_box, 20, 1, f);
     b->scheme_type_box.size = SWAP(b->scheme_type_box.size);
+    if (b->scheme_type_box.size - 20) {
+        b->scheme_type_box.scheme_uri = malloc(b->scheme_type_box.size - 20);
+        fread(b->scheme_type_box.scheme_uri, 1, b->scheme_type_box.size - 20, f);
+    }
+
+    // fread(b->info)
+    // read_box()
+}
+
+static int
+read_itemtype_box(FILE *f, struct itemtype_ref_box *b)
+{
+    fread(b, 4, 1, f);
+    b->size = SWAP(b->size);
+    b->from_item_id = SWAP(b->from_item_id);
+    b->ref_count = SWAP(b->ref_count);
+    b->to_item_ids = malloc(b->ref_count * 2);
+    fread(b->to_item_ids, b->ref_count * 2, 1, f);
+    return b->size;
+}
+
+void
+read_iref_box(FILE *f, struct iref_box *b)
+{
+    fread(b, 12, 1, f);
+    b->size = SWAP(b->size);
+    int sz = b->size - 12;
+    int n = 1;
+    b->refs = malloc(sizeof(struct itemtype_ref_box));
+    while (sz) {
+        b->refs = realloc(b->refs, sizeof(struct itemtype_ref_box) * n);
+        int l = read_itemtype_box(f, b->refs);
+        sz -= l;
+        n ++;
+    }
 }

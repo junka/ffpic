@@ -33,18 +33,25 @@ type2name(uint32_t type)
 
 #pragma pack(push, 2)
 
+#define BOX_ST \
+    uint32_t size; \
+    uint32_t type
+
+#define FULL_BOX_ST \
+    uint32_t size;  \
+    uint32_t type;  \
+    uint32_t version: 8;    \
+    uint32_t flags : 24
+
+
 /* see 14496-12 4.2 */
 struct box {
-    uint32_t size;
-    uint32_t type;
+    BOX_ST;
     uint8_t buf[0];
 };
 
 struct full_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
 };
 
 /* see 14496-12 4.3 */
@@ -57,18 +64,14 @@ struct ftyp_box {
 
 /* see 14496-12 8.2 */
 struct mdat_box {
-    uint32_t size;
-    uint32_t type;
+    BOX_ST;
     uint8_t *data;
 };
 
 /* see 14496-12 8.3 */
 struct mvhd_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
-    
+    FULL_BOX_ST;
+
     uint64_t ctime;
     uint64_t mtime;
     uint32_t timescale;
@@ -87,11 +90,8 @@ struct mvhd_box {
 
 /* see 8.9 */
 struct hdlr_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
-    
+    FULL_BOX_ST;
+
     uint32_t pre_defined;
     uint32_t handler_type;
     uint32_t reserved[3];
@@ -114,10 +114,7 @@ struct item_location {
 };
 
 struct iloc_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
 
     uint8_t offset_size:4;   /* 0, 4, 8 */
     uint8_t length_size:4;   /* 0, 4, 8 */
@@ -130,77 +127,60 @@ struct iloc_box {
 
 /*see 8.44.4 */
 struct pitm_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
 
     uint16_t item_id;
 };
 
 /* see 8.44.6 */
 struct infe_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
 
     uint16_t item_id;
     uint16_t item_protection_index;
-    char* item_name;
-    char* content_type;
+    uint32_t item_type;
+
+    char item_name[32];
+    char content_type[32];
     char* content_encoding;
 };
 
 struct iinf_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
     uint16_t entry_count;
     struct infe_box *item_infos;
 };
 
 /* see 8.44.5 */
 struct ipro_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
     uint16_t protection_count;
 };
 
 
 struct frma_box {
-    uint32_t size;
-    uint32_t type;
+    BOX_ST;
     uint32_t data_format;
 };
 
 /* defined in 14496-1 */
-struct IPMP_Descriptor {
-    uint8_t tag;    //0x0B
-    uint8_t length;
-    uint8_t id;
-    uint16_t type;
-    uint8_t* data; //type = 0: url string; 1: n data
-};
+// struct IPMP_Descriptor {
+//     uint8_t tag;    //0x0B
+//     uint8_t length;
+//     uint8_t id;
+//     uint16_t type;
+//     uint8_t* data; //type = 0: url string; 1: n data
+// };
 
-struct imif_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
-    /* IPMP_Descriptor is defined in 14496-1. */
-    struct IPMP_Descriptor *ipmp_descs;
-};
+// struct imif_box {
+//     FULL_BOX_ST;
+//     /* IPMP_Descriptor is defined in 14496-1. */
+//     struct IPMP_Descriptor *ipmp_descs;
+// };
 
 
 struct schm_box {
-    uint32_t size;
-    uint32_t type;
-    uint32_t version: 8;
-    uint32_t flags : 24;
+    FULL_BOX_ST;
 
     uint32_t scheme_type;
     uint32_t scheme_version;
@@ -208,29 +188,105 @@ struct schm_box {
 };
 
 struct schi_box {
-    uint32_t size;
-    uint32_t type;
+    BOX_ST;
 };
 
-/* see 8.45 */
+/* see 8.12 */
 struct sinf_box {
-    uint32_t size;
-    uint32_t type;
+    BOX_ST;
     struct frma_box original_format;
-    struct imif_box IPMP_descriptors;   //optional
+    // struct imif_box IPMP_descriptors;   //optional
     struct schm_box scheme_type_box;    //optional
     struct schi_box *info;    //optional
 };
 
+struct pasp_box {
+    BOX_ST;
 
+    uint32_t hSpacing;
+    uint32_t vSpacing; 
+};
+
+struct clap_box {
+    BOX_ST;
+
+    uint32_t cleanApertureWidthN;
+    uint32_t cleanApertureWidthD;
+
+    uint32_t cleanApertureHeightN;
+    uint32_t cleanApertureHeightD;
+
+    uint32_t horizOffN;
+    uint32_t horizOffD;
+
+    uint32_t vertOffN;
+    uint32_t vertOffD;
+};
+
+struct colr_box {
+    BOX_ST;
+    uint32_t color_type;
+    uint16_t color_primaries;
+    uint16_t transfer_characteristics;
+    uint16_t matrix_coefficients;
+    uint8_t full_range_flag:1;
+    uint8_t reserved:7;
+};
+
+//see 8.3.2 track header box
+struct tkhd_box {
+    FULL_BOX_ST;
+    uint64_t creation_time; //for version 0 , size 32
+    uint64_t modification_time; //for version 0 , size 32
+    uint32_t track_id;
+    uint32_t reserved;
+    uint64_t duration; //for version 0 , size 32
+
+    uint64_t rsd;
+    int16_t layer;
+    int16_t alternate_group;
+    int16_t volume;
+    uint32_t matrix[9];
+    uint32_t width;
+    uint32_t height;
+};
+
+
+//see 8.3.3
+//track reference box
+struct tref_box {
+    BOX_ST;
+    
+};
+
+/* hint, cdsc, hind, vdep, vplx */
+struct track_ref_type_box {
+    BOX_ST;
+    uint32_t* track_ids;
+};
+
+
+//see 8.11.12
+struct itemtype_ref_box {
+    BOX_ST;
+    uint16_t from_item_id;
+    uint16_t ref_count;
+    uint16_t* to_item_ids;
+};
+
+struct iref_box {
+    FULL_BOX_ST;
+    struct itemtype_ref_box *refs;
+};
 
 #pragma pack(pop)
 
 uint32_t read_box(FILE *f, void * d, int len);
+uint32_t read_full_box(FILE *f, void * d, int blen);
 
 void read_ftyp(FILE *f, void *d);
 
-void print_box(FILE *f, struct box *b);
+void print_box(FILE *f, void *d);
 
 void read_mvhd_box(FILE *f, struct mvhd_box *b);
 
@@ -243,6 +299,8 @@ void read_pitm_box(FILE *F, struct pitm_box *b);
 void read_iinf_box(FILE *f, struct iinf_box *b);
 
 void read_sinf_box(FILE *f, struct sinf_box *b);
+
+void read_iref_box(FILE *f, struct iref_box *b);
 
 #ifdef __cplusplus
 }

@@ -92,7 +92,8 @@ static void __attribute__((constructor))__##name(void) {    \
 }
 
 
-
+void vlog_init(void);
+void vlog_uninit(void);
 
 #ifdef __cplusplus
 }

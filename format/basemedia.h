@@ -62,12 +62,6 @@ struct ftyp_box {
     uint32_t *compatible_brands;
 };
 
-/* see 14496-12 8.2 */
-struct mdat_box {
-    BOX_ST;
-    uint8_t *data;
-};
-
 /* see 14496-12 8.3 */
 struct mvhd_box {
     FULL_BOX_ST;
@@ -100,12 +94,19 @@ struct hdlr_box {
 
 /*see 8.44.3 */
 struct item_extent {
+    
+    uint64_t extent_index;
+
     uint64_t extent_offset;
     uint64_t extent_length;
 };
 
 struct item_location {
     uint16_t item_id;
+
+    //valid when version 1, lsb 4 bits
+    uint16_t construct_method;
+    
     uint16_t data_ref_id;
     
     uint64_t base_offset;
@@ -119,7 +120,7 @@ struct iloc_box {
     uint8_t offset_size:4;   /* 0, 4, 8 */
     uint8_t length_size:4;   /* 0, 4, 8 */
     uint8_t base_offset_size:4; /* 0, 4, 8 */
-    uint8_t reserved:4;
+    uint8_t index_size:4;
     uint16_t item_count;
 
     struct item_location *items;
@@ -276,7 +277,19 @@ struct itemtype_ref_box {
 
 struct iref_box {
     FULL_BOX_ST;
+    int refs_count; // not in iso doc, add for conveniency
     struct itemtype_ref_box *refs;
+};
+
+/* see 8.1.1 */
+struct mdat_box {
+    BOX_ST;
+    uint8_t *data;
+};
+/* see 8.1.2 */
+struct skip_box {
+    BOX_ST;
+    uint8_t *data;
 };
 
 #pragma pack(pop)
@@ -284,7 +297,7 @@ struct iref_box {
 uint32_t read_box(FILE *f, void * d, int len);
 uint32_t read_full_box(FILE *f, void * d, int blen);
 
-void read_ftyp(FILE *f, void *d);
+int read_ftyp(FILE *f, void *d);
 
 void print_box(FILE *f, void *d);
 
@@ -301,6 +314,11 @@ void read_iinf_box(FILE *f, struct iinf_box *b);
 void read_sinf_box(FILE *f, struct sinf_box *b);
 
 void read_iref_box(FILE *f, struct iref_box *b);
+
+
+
+/* read mdat */
+void read_mdat_box(FILE *f, struct mdat_box *b);
 
 #ifdef __cplusplus
 }

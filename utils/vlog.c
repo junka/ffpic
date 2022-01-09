@@ -282,3 +282,16 @@ vlog_init(void)
 
     default_log_stream = stdout;
 }
+
+void
+vlog_uninit(void)
+{
+    if (vlogs.file != NULL) {
+        fclose(vlogs.file);
+    }
+    for (int i = 0; i < vlogs.dynamic_types_len; i ++) {
+        char *name = (char *)vlogs.dynamic_types[i].name;
+        free(name);
+    }
+    free(vlogs.dynamic_types);
+}

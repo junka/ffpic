@@ -13,7 +13,7 @@ int main(int argc, const char *argv[])
     }
     const char *filename = argv[1];
     FILE *logf = fopen("picinfo.log", "w+");
-
+    vlog_init();
     vlog_openlog_stream(logf);
 
     file_ops_init();
@@ -27,7 +27,7 @@ int main(int argc, const char *argv[])
     file_info(ops, p);
 
     file_free(ops, p);
-
-    fclose(logf);
+    
+    vlog_uninit();
     return 0;
 }

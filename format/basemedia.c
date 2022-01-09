@@ -6,6 +6,38 @@
 #include "basemedia.h"
 
 
+uint8_t
+read_u8(FILE *f)
+{
+    return fgetc(f);
+}
+
+uint16_t
+read_u16(FILE *f)
+{
+    uint16_t a;
+    fread(&a, 2, 1, f);
+    a = SWAP(a);
+    return a;
+}
+
+uint32_t
+read_u32(FILE *f)
+{
+    uint32_t a;
+    fread(&a, 4, 1, f);
+    a = SWAP(a);
+    return a;
+}
+
+uint64_t
+read_u64(FILE *f)
+{
+    uint64_t a;
+    fread(&a, 4, 1, f);
+    a = SWAP(a);
+    return a;
+}
 
 /**
  aligned(8) class Box (unsigned int(32) boxtype, 
@@ -55,7 +87,7 @@ read_full_box(FILE *f, void * d, int blen)
 }
 
 
-void
+int
 read_ftyp(FILE *f, void *d)
 {
     struct ftyp_box *ftyp = (struct ftyp_box*)d;
@@ -65,6 +97,7 @@ read_ftyp(FILE *f, void *d)
         ftyp->compatible_brands = malloc(((ftyp->size - 12)));
         fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
     }
+    return ftyp->size;
 }
 
 void 
@@ -114,34 +147,46 @@ read_iloc_box(FILE *f, struct iloc_box *b)
 {
     fread(b, 4, 3, f);
     b->size = SWAP(b->size);
-    uint8_t a = fgetc(f);
+    uint8_t a = read_u8(f);
     b->offset_size = a >> 4;
     b->length_size = a & 0xf;
-    a = fgetc(f);
+    a = read_u8(f);
     b->base_offset_size = a >> 4;
-    fread(&b->item_count, 2, 1, f);
-    b->item_count = SWAP(b->item_count);
+    b->index_size = a & 0xf;
+
+    b->item_count = read_u16(f);
+
     b->items = malloc(sizeof(struct item_location) * b->item_count);
     for (int i = 0; i < b->item_count; i ++) {
-        fread(b->items + i, 2, 2, f);
-        if (b->base_offset_size == 8) {
-            fread(&b->items[i].base_offset, 8, 1, f);
-        } else if (b->base_offset_size == 4) {
-            fread(&b->items[i].base_offset, 4, 1, f);
+        b->items[i].item_id = read_u16(f);
+        if (b->version == 1) {
+            b->items[i].construct_method = read_u16(f);
         }
-        fread(&b->items[i].extent_count, 2, 1, f);
-        b->items[i].extent_count = SWAP(b->items[i].extent_count);
+        b->items[i].data_ref_id = read_u16(f);
+        if (b->base_offset_size == 4) {
+            b->items[i].base_offset =  read_u32(f);
+        } else if (b->base_offset_size == 8) {
+            b->items[i].base_offset =  read_u64(f);
+        }
+        b->items[i].extent_count = read_u16(f);
         b->items[i].extents = malloc(sizeof(struct item_extent) * b->items[i].extent_count);
         for (int j = 0; j < b->items[i].extent_count; j ++) {
-            if (b->offset_size == 8) {
-                fread(b->items[i].extents + j, 8, 1, f);
-            } else if (b->offset_size == 4) {
-                fread(b->items[i].extents + j, 4, 1, f);
+            if (b->version == 1 && b->index_size > 0) {
+                if (b->index_size == 4) {
+                    b->items[i].extents[j].extent_index = read_u32(f);
+                } else if (b->index_size == 8) {
+                    b->items[i].extents[j].extent_index = read_u64(f);
+                } 
             }
-            if (b->length_size == 8) {
-                fread(&b->items[i].extents[j].extent_length, 8, 1, f);
-            } else if (b->length_size == 4) {
-                fread(&b->items[i].extents[j].extent_length, 4, 1, f);
+            if (b->offset_size == 4) {
+                b->items[i].extents[j].extent_offset = read_u32(f);
+            } else if (b->offset_size == 8) {
+                b->items[i].extents[j].extent_offset = read_u64(f);
+            }
+            if (b->length_size == 4) {
+                b->items[i].extents[j].extent_length = read_u32(f);
+            } else if (b->length_size == 8) {
+                b->items[i].extents[j].extent_length = read_u64(f);
             }
         }
     }
@@ -248,7 +293,7 @@ read_sinf_box(FILE *f, struct sinf_box *b)
 static int
 read_itemtype_box(FILE *f, struct itemtype_ref_box *b)
 {
-    fread(b, 4, 1, f);
+    fread(b, 12, 1, f);
     b->size = SWAP(b->size);
     b->from_item_id = SWAP(b->from_item_id);
     b->ref_count = SWAP(b->ref_count);
@@ -271,4 +316,14 @@ read_iref_box(FILE *f, struct iref_box *b)
         sz -= l;
         n ++;
     }
+    b->refs_count = n - 1;
+}
+
+void
+read_mdat_box(FILE *f, struct mdat_box *b)
+{
+    fread(b, 8, 1, f);
+    b->size = SWAP(b->size);
+    b->data = malloc(b->size - 8);
+    fread(b->data, 1, b->size - 8, f);
 }

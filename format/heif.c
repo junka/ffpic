@@ -182,16 +182,56 @@ read_meta_box(FILE *f, struct meta_box *meta)
     
 }
 
+static void
+decode_mdat(HEIF * h, struct mdat_box *b)
+{
+    
+}
+
 static struct pic*
 HEIF_load(const char *filename) {
     HEIF * h = calloc(1, sizeof(HEIF));
     struct pic *p = calloc(1, sizeof(struct pic));
     p->pic = h;
     FILE *f = fopen(filename, "rb");
-    read_ftyp(f, &h->ftyp);
-    read_meta_box(f, &h->meta);
+    fseek(f, 0, SEEK_END);
+    uint32_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
 
+    size -= read_ftyp(f, &h->ftyp);
+    h->mdat = malloc(sizeof(struct mdat_box));
+    struct box b;
+    while (size) {
+        uint32_t type = read_box(f, &b, size);
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+        case TYPE2UINT("meta"):
+            read_meta_box(f, &h->meta);
+            break;
+        case TYPE2UINT("mdat"):
+            h->mdat_num ++;
+            h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
+            read_mdat_box(f, h->mdat + h->mdat_num - 1);
+            break;
+        default:
+            break;
+        }
+        size -= b.size;
+        printf("%s, read %d, left %d\n", UINT2TYPE(type), b.size, size);
+    }
     fclose(f);
+
+    // extract some info from meta box
+    for (int i = 0; i < 2; i ++) {
+        if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
+            p->width = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width;
+            p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
+        }
+    }
+
+    // process mdata
+    decode_mdat(h, h->mdat);
+
 
     return p;
 }
@@ -200,7 +240,49 @@ static void
 HEIF_free(struct pic *p)
 {
     HEIF * h = (HEIF *)p->pic;
-    
+
+    if (h->ftyp.compatible_brands)
+        free(h->ftyp.compatible_brands);
+
+    struct meta_box *m = &h->meta;
+    if (m->hdlr.name)
+        free(m->hdlr.name);
+    for (int i = 0; i < m->iloc.item_count; i ++) {
+        free(m->iloc.items[i].extents);
+    }
+    free(m->iloc.items);
+
+    for (int i = 0; i < m->iinf.entry_count; i ++) {
+        if (m->iinf.item_infos[i].content_encoding)
+            free(m->iinf.item_infos[i].content_encoding);
+    }
+    free(m->iinf.item_infos);
+
+    for (int i = 0; i < 2; i ++) {
+        if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
+            struct hvcC_box *hvcc = (struct hvcC_box *)m->iprp.ipco.property[i];
+            for (int j = 0; j < hvcc->num_of_arrays; j ++) {
+                free(hvcc->nal_arrays[j].nals);                
+            }
+            free(hvcc->nal_arrays);
+        }
+        free(m->iprp.ipco.property[i]);
+    }
+
+    for (int i = 0; i < m->iprp.ipma.entry_count; i ++) {
+        free(m->iprp.ipma.entries[i].association);
+    }
+    free(m->iprp.ipma.entries);
+
+    for (int i = 0; i < m->iref.refs_count; i ++) {
+        free(m->iref.refs[i].to_item_ids);
+    }
+    free(m->iref.refs);
+
+    for (int i = 0; i < h->mdat_num; i ++) {
+        free(h->mdat[i].data);
+    }
+    free(h->mdat);
     free(h);
     free(p);
 }
@@ -221,27 +303,89 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "meta box --------------\n");
     fprintf(f, "\t");
     print_box(f, &h->meta.hdlr);
+    s1 = UINT2TYPE(h->meta.hdlr.handler_type);
+    fprintf(f, " pre_define=%d,handle_type=\"%s\"", h->meta.hdlr.pre_defined, s1);
+    free(s1);
+    if (h->meta.hdlr.name) {
+        fprintf(f, ",name=%s", h->meta.hdlr.name);
+    }
     fprintf(f, "\n");
 
     fprintf(f, "\t");
     print_box(f, &h->meta.pitm);
+    fprintf(f, " item_id=%d", h->meta.pitm.item_id);
     fprintf(f, "\n");
 
     fprintf(f, "\t");
     print_box(f, &h->meta.iloc);
     fprintf(f, "\n");
+    for (int i = 0; i < h->meta.iloc.item_count; i ++) {
+        fprintf(f, "\t\t");
+        if (h->meta.iloc.version == 1) {
+            fprintf(f, "construct_method=%d,", h->meta.iloc.items[i].construct_method);
+        }
+        fprintf(f, "item_id=%d,data_ref_id=%d,base_offset=%lld,extent_count=%d\n", 
+            h->meta.iloc.items[i].item_id, h->meta.iloc.items[i].data_ref_id,
+            h->meta.iloc.items[i].base_offset, h->meta.iloc.items[i].extent_count);
+        for (int j = 0; j < h->meta.iloc.items[i].extent_count; j ++) {
+            fprintf(f, "\t\t\t");
+            if (h->meta.iloc.version == 1) {
+                fprintf(f, "extent_id=%lld,", h->meta.iloc.items[i].extents[j].extent_index);
+            }
+            fprintf(f, "extent_offset=%lld,extent_length=%lld\n", h->meta.iloc.items[i].extents[j].extent_offset,
+                h->meta.iloc.items[i].extents[j].extent_length);
+        }
+    }
+    fprintf(f, "\n");
 
     fprintf(f, "\t");
     print_box(f, &h->meta.iinf);
     fprintf(f, "\n");
+    for (int i = 0; i < h->meta.iinf.entry_count; i ++) {
+        fprintf(f, "\t\t");
+        print_box(f, &h->meta.iinf.item_infos[i]);
+        s1 = UINT2TYPE(h->meta.iinf.item_infos[i].item_type);
+        fprintf(f, " item_id=%d,item_protection_index=%d,item_type=%s",
+            h->meta.iinf.item_infos[i].item_id, h->meta.iinf.item_infos[i].item_protection_index,
+            s1);
+        free(s1);
+        fprintf(f, "\n");
+    }
 
     fprintf(f, "\t");
     print_box(f, &h->meta.iprp);
+    fprintf(f, "\n\t");
+    fprintf(f, "\t");
+    print_box(f, &h->meta.iprp.ipco);
+    fprintf(f, "\n\t");
+    for (int i = 0; i < 2; i ++) {
+        fprintf(f, "\t\t");
+        print_box(f, h->meta.iprp.ipco.property[i]);
+        if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
+            fprintf(f, ", width %d, height %d", 
+                ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width,
+                ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height);
+        } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
+
+        }
+        fprintf(f, "\n\t");
+    }
+    fprintf(f, "\t");
+    print_box(f, &h->meta.iprp.ipma);
     fprintf(f, "\n");
 
     fprintf(f, "\t");
     print_box(f, &h->meta.iref);
     fprintf(f, "\n");
+    for (int i = 0; i < h->meta.iref.refs_count; i ++) {
+        fprintf(f, "\t\t");
+        fprintf(f, "from_item_id=%d,ref_count=%d", h->meta.iref.refs[i].from_item_id,
+           h->meta.iref.refs[i].ref_count);
+        for (int j = 0; j < h->meta.iref.refs[i].ref_count; j ++) {
+            fprintf(f, ",to_item=%d",  h->meta.iref.refs[i].to_item_ids[j]);
+        }
+        fprintf(f, "\n");
+    }
     fprintf(f, "mdat box --------------\n");
     
 }

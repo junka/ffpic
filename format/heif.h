@@ -115,6 +115,8 @@ struct meta_box {
 typedef struct {
     struct ftyp_box ftyp;
     struct meta_box meta;
+    int mdat_num;
+    struct mdat_box *mdat;
 } HEIF;
 
 

@@ -1,19 +1,31 @@
 #ifndef _HEIF_H_
 #define _HEIF_H_
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include "basemedia.h"
 
+
+/* HEVC ITU-T H.265 High efficiency video coding */
+
 #pragma pack(push, 1)
+
 
 /* HEVC configuration item see 14496-15 */
 struct nalus {
     uint16_t unit_length; 
     uint64_t nal_unit;  //size depends on unit_length
+};
+
+//see ISO/IEC 23008-2
+enum hevc_nal_type {
+    VPS,
+    SPS,
+    PPS,
+    pre_SEI,
+    suff_SEI,
 };
 
 struct nal_arr {
@@ -112,11 +124,20 @@ struct meta_box {
     struct iref_box iref;
 };
 
+
+struct heif_item {
+    const struct item_location *item;
+    uint64_t length;
+    uint8_t *data;
+};
+
 typedef struct {
     struct ftyp_box ftyp;
     struct meta_box meta;
     int mdat_num;
     struct mdat_box *mdat;
+
+    struct heif_item *items;
 } HEIF;
 
 

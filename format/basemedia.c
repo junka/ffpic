@@ -299,6 +299,10 @@ read_itemtype_box(FILE *f, struct itemtype_ref_box *b)
     b->ref_count = SWAP(b->ref_count);
     b->to_item_ids = malloc(b->ref_count * 2);
     fread(b->to_item_ids, b->ref_count * 2, 1, f);
+    for (int i = 0; i < b->ref_count; i ++) {
+        b->to_item_ids[i] = SWAP(b->to_item_ids[i]);
+    }
+
     return b->size;
 }
 
@@ -324,6 +328,7 @@ read_mdat_box(FILE *f, struct mdat_box *b)
 {
     fread(b, 8, 1, f);
     b->size = SWAP(b->size);
-    b->data = malloc(b->size - 8);
-    fread(b->data, 1, b->size - 8, f);
+    fseek(f, b->size - 8, SEEK_CUR);
+    // b->data = malloc(b->size - 8);
+    // fread(b->data, 1, b->size - 8, f);
 }

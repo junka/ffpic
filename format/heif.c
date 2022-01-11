@@ -42,23 +42,87 @@ HEIF_probe(const char *filename)
     return -EINVAL;
 }
 
+
+static void
+parse_pps(uint8_t *data, uint16_t len)
+{
+
+}
+
+static void
+parse_sps(uint8_t *data, uint16_t len)
+{
+
+}
+
+//video parameter set
+static void
+parse_vps(uint8_t *data, uint16_t len)
+{
+    uint8_t* p = data;
+    
+}
+
+
+static void
+parse_nalu(uint8_t *data, uint16_t len)
+{
+    struct hevc_nalu_header *h;
+    h = (struct hevc_nalu_header*)data;
+    // printf("data %x %x f %d type %d, layer id %d, tid %d\n",data[0], data[1], h->forbidden_zero_bit, 
+    //     h->nal_unit_type, h->nuh_layer_id, h->nuh_temporal_id_plus1);
+    uint8_t *rbsp = malloc(len);
+    int nrbsp = 0;
+    int l = 2;
+    uint8_t *p = data + 2;
+    for (l = 2; l < len; l ++) {
+        if ((l + 2 < len) && ((p[0]<<16|p[1]<<8|p[2])& 0x3)) {
+            rbsp[nrbsp++] = p[0];
+            rbsp[nrbsp++] = p[1];
+            l += 2;
+            /* skip third byte */
+        } else {
+            rbsp[nrbsp++] = p[0];
+        }
+    }
+
+    switch (h->nal_unit_type) {
+        case NALU_VPS:
+            parse_vps(rbsp, nrbsp);
+            break;
+        case NALU_SPS:
+            parse_sps(rbsp, nrbsp);
+            break;
+        case NALU_PPS:
+            parse_pps(rbsp, nrbsp);
+            break;
+        default:
+            break;
+    }
+}
+
+
 static int
 read_hvcc_box(FILE *f, struct hvcC_box *b)
 {
     fread(b, 8, 1, f);
     b->size = SWAP(b->size);
 
-    printf("hvcc %d\n", b->size);
     fread(&b->configurationVersion, 23, 1, f);
+    b->general_profile_compatibility_flags = SWAP(b->general_profile_compatibility_flags);
+    b->avgframerate = SWAP(b->avgframerate);
     b->nal_arrays = malloc(b->num_of_arrays * sizeof(struct nal_arr));
     for (int i = 0; i < b->num_of_arrays; i ++) {
-        fread(b->nal_arrays + i, 3, 1, f);
+        fread(b->nal_arrays + i, 1, 1, f);
+        fread(&b->nal_arrays[i].numNalus, 2, 1, f);
         b->nal_arrays[i].numNalus = SWAP(b->nal_arrays[i].numNalus);
         b->nal_arrays[i].nals = malloc(b->nal_arrays[i].numNalus * sizeof(struct nalus));
         for (int j = 0; j < b->nal_arrays[i].numNalus; j ++) {
-            fread(b->nal_arrays[i].nals+j, 2, 1, f);
+            fread(&b->nal_arrays[i].nals[j].unit_length, 2, 1, f);
             b->nal_arrays[i].nals[j].unit_length = SWAP(b->nal_arrays[i].nals[j].unit_length);
-            fread(&b->nal_arrays[i].nals[j].unit_length, b->nal_arrays[i].nals[j].unit_length, 1, f);
+            b->nal_arrays[i].nals[j].nal_units = malloc(b->nal_arrays[i].nals[j].unit_length);
+            fread(b->nal_arrays[i].nals[j].nal_units, 1, b->nal_arrays[i].nals[j].unit_length, f);
+            parse_nalu(b->nal_arrays[i].nals[j].nal_units, b->nal_arrays[i].nals[j].unit_length);
         }
     }
     return b->size;
@@ -305,7 +369,10 @@ HEIF_free(struct pic *p)
         if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
             struct hvcC_box *hvcc = (struct hvcC_box *)m->iprp.ipco.property[i];
             for (int j = 0; j < hvcc->num_of_arrays; j ++) {
-                free(hvcc->nal_arrays[j].nals);                
+                for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
+                    free(hvcc->nal_arrays[j].nals[k].nal_units);
+                }
+                free(hvcc->nal_arrays[j].nals);
             }
             free(hvcc->nal_arrays);
         }
@@ -413,12 +480,18 @@ HEIF_info(FILE *f, struct pic* p)
             struct hvcC_box * hvcc = (struct hvcC_box *)(h->meta.iprp.ipco.property[i]);
             fprintf(f, " config version %d, profile space %d, profile idc %d\n", hvcc->configurationVersion,
                     hvcc->general_profile_space, hvcc->general_profile_idc);
-            fprintf(f, "\t\t\t\tavgframerate %d\n", hvcc->avgframerate);
+            fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
+                hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);
+            fprintf(f, "\t\t\t\tavgframerate %d, constantframerate %d\n\t\t\t\tnumtemporalLayers %d, temporalIdNested %d, lengthSizeMinusOne %d\n",
+                hvcc->avgframerate, hvcc->constantframerate, hvcc->numtemporalLayers, hvcc->temporalIdNested, hvcc->lengthSizeMinusOne);
             for (int j = 0; j < hvcc->num_of_arrays; j ++) {
                 fprintf(f, "\t\t\t\t");
                 fprintf(f, "completeness %d, nal_unit_type %d", hvcc->nal_arrays[j].array_completeness, hvcc->nal_arrays[j].nal_unit_type);
                 for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
-                    fprintf(f, ", %d", hvcc->nal_arrays[j].nals[k].unit_length);
+                    fprintf(f, ", unit_length %d", hvcc->nal_arrays[j].nals[k].unit_length);
+                    // for (int m = 0; m < hvcc->nal_arrays[j].nals[k].unit_length; m ++) {
+                    //     fprintf(f, "0x%x ", hvcc->nal_arrays[j].nals[k].nal_units[m]);
+                    // }
                 }
                 fprintf(f, "\n");
             }

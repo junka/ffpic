@@ -94,7 +94,7 @@ struct hdlr_box {
 
 /*see 8.44.3 */
 struct item_extent {
-    
+
     uint64_t extent_index;
 
     uint64_t extent_offset;
@@ -106,9 +106,9 @@ struct item_location {
 
     //valid when version 1, lsb 4 bits
     uint16_t construct_method;
-    
+
     uint16_t data_ref_id;
-    
+
     uint64_t base_offset;
     int16_t extent_count;
     struct item_extent * extents;
@@ -116,11 +116,17 @@ struct item_location {
 
 struct iloc_box {
     FULL_BOX_ST;
-
+#ifdef LITTLE_ENDIAN
+    uint8_t length_size:4;   /* 0, 4, 8 */
+    uint8_t offset_size:4;   /* 0, 4, 8 */
+    uint8_t index_size:4; /* 0, 4, 8 */
+    uint8_t base_offset_size:4;
+#else
     uint8_t offset_size:4;   /* 0, 4, 8 */
     uint8_t length_size:4;   /* 0, 4, 8 */
     uint8_t base_offset_size:4; /* 0, 4, 8 */
     uint8_t index_size:4;
+#endif
     uint16_t item_count;
 
     struct item_location *items;
@@ -230,8 +236,13 @@ struct colr_box {
     uint16_t color_primaries;
     uint16_t transfer_characteristics;
     uint16_t matrix_coefficients;
+#ifdef LITTLE_ENDIAN
+    uint8_t reserved:7;
+    uint8_t full_range_flag:1;
+#else
     uint8_t full_range_flag:1;
     uint8_t reserved:7;
+#endif
 };
 
 //see 8.3.2 track header box

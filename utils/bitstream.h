@@ -49,6 +49,11 @@ int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 /* debug function for stream info */
 void bits_vec_dump(struct bits_vec *v);
 
+/* bit stream start at a new byte */
+int bits_vec_aligned(struct bits_vec *v);
+
+int bits_vec_test_bit(struct bits_vec *v);
+
 /* macro define for bitstream helper */
 #define READ_BIT(v) bits_vec_read_bit(v)
 #define READ_BITS(v, n) bits_vec_read_bits(v, n)
@@ -57,6 +62,8 @@ void bits_vec_dump(struct bits_vec *v);
 #define RESET_BORDER(v) bits_vec_reset_border(v)
 #define EOF_BITS(v, n) bits_vec_eof_bits(v, n)
 #define READ_BITS_BASE(v, n, b) bits_vec_read_bits_base(v, n, b)
+#define BYTE_ALIGNED(v) bits_vec_aligned(v)
+#define TEST_BIT(v) bits_vec_test_bit(v)
 
 #ifdef __cplusplus
 }

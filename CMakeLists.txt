@@ -43,6 +43,7 @@ list(APPEND FFPIC_CODING
             "${FFPIC_ROOT}/coding/deflate.c"
             "${FFPIC_ROOT}/coding/booldec.c"
             "${FFPIC_ROOT}/coding/golomb.c"
+            "${FFPIC_ROOT}/coding/hevc.c"
             "${FFPIC_ROOT}/utils/crc.c"
             "${FFPIC_ROOT}/utils/alder.c"
             "${FFPIC_ROOT}/utils/hexdump.c"

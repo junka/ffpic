@@ -3,11 +3,14 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
+#include "utils.h"
 #include "heif.h"
 #include "file.h"
 #include "byteorder.h"
 #include "basemedia.h"
+#include "bitstream.h"
 
 static char* heif_types[] = {
     "heic",
@@ -43,65 +46,6 @@ HEIF_probe(const char *filename)
 }
 
 
-static void
-parse_pps(uint8_t *data, uint16_t len)
-{
-
-}
-
-static void
-parse_sps(uint8_t *data, uint16_t len)
-{
-
-}
-
-//video parameter set
-static void
-parse_vps(uint8_t *data, uint16_t len)
-{
-    uint8_t* p = data;
-    
-}
-
-
-static void
-parse_nalu(uint8_t *data, uint16_t len)
-{
-    struct hevc_nalu_header *h;
-    h = (struct hevc_nalu_header*)data;
-    // printf("data %x %x f %d type %d, layer id %d, tid %d\n",data[0], data[1], h->forbidden_zero_bit, 
-    //     h->nal_unit_type, h->nuh_layer_id, h->nuh_temporal_id_plus1);
-    uint8_t *rbsp = malloc(len);
-    int nrbsp = 0;
-    int l = 2;
-    uint8_t *p = data + 2;
-    for (l = 2; l < len; l ++) {
-        if ((l + 2 < len) && ((p[0]<<16|p[1]<<8|p[2])& 0x3)) {
-            rbsp[nrbsp++] = p[0];
-            rbsp[nrbsp++] = p[1];
-            l += 2;
-            /* skip third byte */
-        } else {
-            rbsp[nrbsp++] = p[0];
-        }
-    }
-
-    switch (h->nal_unit_type) {
-        case NALU_VPS:
-            parse_vps(rbsp, nrbsp);
-            break;
-        case NALU_SPS:
-            parse_sps(rbsp, nrbsp);
-            break;
-        case NALU_PPS:
-            parse_pps(rbsp, nrbsp);
-            break;
-        default:
-            break;
-    }
-}
-
-
 static int
 read_hvcc_box(FILE *f, struct hvcC_box *b)
 {
@@ -109,6 +53,7 @@ read_hvcc_box(FILE *f, struct hvcC_box *b)
     b->size = SWAP(b->size);
 
     fread(&b->configurationVersion, 23, 1, f);
+    
     b->general_profile_compatibility_flags = SWAP(b->general_profile_compatibility_flags);
     b->avgframerate = SWAP(b->avgframerate);
     b->nal_arrays = malloc(b->num_of_arrays * sizeof(struct nal_arr));
@@ -267,10 +212,20 @@ read_item(HEIF * h, FILE *f, uint32_t id)
     }
 }
 
-static void
+void
 decode_hvc1(HEIF * h, uint8_t *data, uint64_t len)
 {
-
+    // printf("len %llu and sample len %d\n", len , sample_len);
+    // hexdump(stdout, "mdat ", "", data, 256);
+    uint8_t *p = data;
+    while (len) {
+        uint32_t sample_len = data[0] << 24 | data[1] << 16| data[2] << 8| data[3];
+        len -= 4;
+        p += 4;
+        parse_nalu(p, sample_len);
+        len -= sample_len;
+        p += sample_len;
+    }
 }
 
 static void
@@ -282,7 +237,7 @@ decode_items(HEIF * h, FILE *f, struct mdat_box *b)
             // exif mime
             // printf("length %lld, %s\n", h->items[h->meta.iinf.item_infos[i].item_id-1].item->extents[0].extent_length,
             // h->items[h->meta.iinf.item_infos[i].item_id-1].data);
-        } else { 
+        } else {
             //take it as real coded data
             decode_hvc1(h, h->items[h->meta.iinf.item_infos[i].item_id-1].data,
                 h->items[h->meta.iinf.item_infos[i].item_id-1].length);
@@ -293,6 +248,10 @@ decode_items(HEIF * h, FILE *f, struct mdat_box *b)
 
 static struct pic*
 HEIF_load(const char *filename) {
+    for (int i =0; i < 256; i ++) {
+        int ret = log2ceil(2);
+        printf("log(%d)=%d\n", i, ret);
+    }
     HEIF * h = calloc(1, sizeof(HEIF));
     struct pic *p = calloc(1, sizeof(struct pic));
     p->pic = h;
@@ -478,8 +437,16 @@ HEIF_info(FILE *f, struct pic* p)
                 ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height);
         } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
             struct hvcC_box * hvcc = (struct hvcC_box *)(h->meta.iprp.ipco.property[i]);
-            fprintf(f, " config version %d, profile space %d, profile idc %d\n", hvcc->configurationVersion,
-                    hvcc->general_profile_space, hvcc->general_profile_idc);
+
+            fprintf(f, " config version %d, profile_space %d, tier_flag %d, profile_idc %d\n", hvcc->configurationVersion,
+                    hvcc->general_profile_space, hvcc->general_tier_flag, hvcc->general_profile_idc);
+            uint16_t min_spatial_segmentation_idc = hvcc->min_spatial_segmentation_idc1 << 8 | hvcc->min_spatial_segmentation_idc2;
+            fprintf(f, "\t\t\t\tgeneral_profile_compatibility_flags 0x%x\n",
+                hvcc->general_profile_compatibility_flags);
+            fprintf(f, "\t\t\t\tmin_spatial_segmentation_idc %d, general_level_idc %d\n",
+                min_spatial_segmentation_idc, hvcc->general_level_idc);
+            fprintf(f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%llx\n", hvcc->general_constraint_indicator_flags);
+            
             fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
                 hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);
             fprintf(f, "\t\t\t\tavgframerate %d, constantframerate %d\n\t\t\t\tnumtemporalLayers %d, temporalIdNested %d, lengthSizeMinusOne %d\n",
@@ -488,10 +455,8 @@ HEIF_info(FILE *f, struct pic* p)
                 fprintf(f, "\t\t\t\t");
                 fprintf(f, "completeness %d, nal_unit_type %d", hvcc->nal_arrays[j].array_completeness, hvcc->nal_arrays[j].nal_unit_type);
                 for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
-                    fprintf(f, ", unit_length %d", hvcc->nal_arrays[j].nals[k].unit_length);
-                    // for (int m = 0; m < hvcc->nal_arrays[j].nals[k].unit_length; m ++) {
-                    //     fprintf(f, "0x%x ", hvcc->nal_arrays[j].nals[k].nal_units[m]);
-                    // }
+                    fprintf(f, ", unit_length %d\n", hvcc->nal_arrays[j].nals[k].unit_length);
+                    hexdump(f, "\t\t\t\tnalu: ", "\t\t\t\t", hvcc->nal_arrays[j].nals[k].nal_units, hvcc->nal_arrays[j].nals[k].unit_length);
                 }
                 fprintf(f, "\n");
             }

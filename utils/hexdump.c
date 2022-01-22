@@ -7,7 +7,7 @@
 #define LINE_LEN 128
 
 void
-hexdump(FILE *f, const char *title, const void *buf, unsigned int len)
+hexdump(FILE *f, const char *title, const char *prefix, const void *buf, unsigned int len)
 {
     unsigned int i, out, ofs;
     const unsigned char *data = buf;
@@ -18,7 +18,7 @@ hexdump(FILE *f, const char *title, const void *buf, unsigned int len)
     ofs = 0;
     while (ofs < len) {
         /* format the line in the buffer */
-        out = snprintf(line, LINE_LEN, "%08X:", ofs);
+        out = snprintf(line, LINE_LEN, "%s%08X:", prefix, ofs);
         for (i = 0; i < 16; i++) {
             if (ofs + i < len)
                 snprintf(line + out, LINE_LEN - out,

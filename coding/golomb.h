@@ -5,24 +5,22 @@
 extern "C"{
 #endif
 
-struct golomb_dec {
-    int kexp;
-    struct bits_vec *bits;
-};
+#include "bitstream.h"
 
-/* init a kth exp golomb decoder */
-struct golomb_dec *golomb_init(uint8_t * start, int len, int k);
+/* a kth exp golomb decoder for a bit stream reader */
 
-void golomb_free(struct golomb_dec *dec);
+uint32_t golomb_decode_unsigned_value(struct bits_vec *v, int kexp);
 
-uint32_t golomb_decode_unsigned_value(struct golomb_dec *dec);
-
-int32_t golomb_decode_signed_value(struct golomb_dec *dec);
+int32_t golomb_decode_signed_value(struct bits_vec *v, int kexp);
 
 
-#define GOLOMB_UE(d)   golomb_decode_unsigned_value(d)
+#define GOL_UE(d)   golomb_decode_unsigned_value(d, 0)
+#define GOL_SE(d)   golomb_decode_signed_value(d, 0)
 
-#define GOLOMB_SE(d)   golomb_decode_signed_value(d)
+
+#define GUE(x)  uint32_t x
+#define GSE(x)  int32_t x
+
 
 
 #ifdef __cplusplus

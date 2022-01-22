@@ -322,13 +322,15 @@ read_iref_box(FILE *f, struct iref_box *b)
     }
     b->refs_count = n - 1;
 }
-
+// #include "utils.h"
 void
 read_mdat_box(FILE *f, struct mdat_box *b)
 {
     fread(b, 8, 1, f);
     b->size = SWAP(b->size);
-    fseek(f, b->size - 8, SEEK_CUR);
-    // b->data = malloc(b->size - 8);
-    // fread(b->data, 1, b->size - 8, f);
+    // fseek(f, b->size - 8, SEEK_CUR);
+    b->data = malloc(b->size - 8);
+    // printf("mdat size %d\n", b->size - 8);
+    fread(b->data, 1, b->size - 8, f);
+    // hexdump(stdout, "mdat ", "", b->data, 256);
 }

@@ -19,7 +19,7 @@ void
 bits_vec_free(struct bits_vec *v)
 {
     if (v->start)
-        free(v->start);    
+        free(v->start);
     free(v);
 }
 
@@ -137,6 +137,26 @@ bits_vec_skip_bits(struct bits_vec *v, int n)
         skip += 8;
     }
     v->offset = 8 - (skip - n - v->offset);
+}
+
+int
+bits_vec_aligned(struct bits_vec *v)
+{
+    if (v->offset == 8) {
+        return 1;
+    }
+    return 0;
+}
+
+int
+bits_vec_test_bit(struct bits_vec *v)
+{
+    int shift;
+    if (v->msb)
+        shift = 7 - v->offset;
+    else
+        shift = v->offset;
+    return (*(v->ptr) >> shift) & 0x1;
 }
 
 void

@@ -11,7 +11,7 @@
 #include "huffman.h"
 #include "vlog.h"
 
-VLOG_REGISTER(jpg, INFO);
+VLOG_REGISTER(jpg, DEBUG);
 
 struct jpg_decoder {
     int prev_dc;
@@ -664,6 +664,7 @@ read_compressed_image(JPG* j, FILE *f)
     uint8_t* compressed = malloc(last - pos);
     uint8_t prev , c = fgetc(f);
     int l = 0;
+    VDBG(jpg, "read image from 0x%zx", pos);
     do {
         /* take 0xFF00 as 0xFF */
         /* and skip rst marker */
@@ -724,6 +725,8 @@ JPG_load(const char *filename)
     m = read_marker_skip_null(f);
     //0xFFFF means eof
     while (m != EOI && m != 0 && m!= 0xFFFF) {
+
+        VDBG(jpg, "offset at 0x%zx", ftell(f));
         switch(m) {
             case SOF0:
                 fread(&j->sof, 8, 1, f);
@@ -747,6 +750,7 @@ JPG_load(const char *filename)
                 read_dqt(j, f);
                 break;
             case SOS:
+                VDBG(jpg, "sos");
                 read_sos(j, f);
                 break;
             case COM:

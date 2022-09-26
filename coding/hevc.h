@@ -10,6 +10,12 @@ extern "C"{
 
 /* HEVC ITU-T H.265 High efficiency video coding */
 
+enum pred_mode {
+    MODE_INTER = 0,
+    MODE_INTRA = 1,
+    MODE_SKIP = 2,
+};
+
 #pragma pack(push, 1)
 
 /* HEVC configuration item see 14496-15 */
@@ -366,6 +372,8 @@ struct vps_extension {
     uint16_t view_id_val[64];
     uint64_t direct_dependency_flag[64];
 
+    int NumViews;
+
     GUE(num_add_layer_sets);
 
     uint16_t** highest_layer_idx_plus1;
@@ -412,13 +420,15 @@ struct vps_extension {
 //see I.7.3.2.1.7
 struct vps_3d_extension {
     GUE(cp_precision);
-    uint8_t num_cp:6;
-    uint8_t cp_in_slice_segment_header_flag:1;
-    GUE(cp_ref_voi);
-    GSE(vps_cp_scale);
-    GSE(vps_cp_off);
-    GSE(vps_cp_inv_scale_plus_scale);
-    GSE(vps_cp_inv_off_plus_off);
+    struct {
+        uint8_t num_cp:6;
+        uint8_t cp_in_slice_segment_header_flag:1;
+        GUE(cp_ref_voi)[64];
+        GSE(vps_cp_scale)[64];
+        GSE(vps_cp_off)[64];
+        GSE(vps_cp_inv_scale_plus_scale)[64];
+        GSE(vps_cp_inv_off_plus_off)[64];
+    } cp[64];
 };
 
 
@@ -444,7 +454,7 @@ struct vps {
     uint8_t vps_max_layer_id:6; //less than 63
     GUE(vps_num_layer_sets_minus1); //less than 1023
 
-    uint64_t* layer_id_included_flag;
+    uint64_t layer_id_included_flag[1024];
 
     // uint8_t vps_timing_info_present_flag:1;
     struct vps_timing_info * vps_timing_info;
@@ -452,11 +462,35 @@ struct vps {
     // uint8_t vps_extension_flag:1;
     struct vps_extension *vps_ext;
 
+    struct vps_3d_extension *vps_3d_ext;
+
+    int ViewOIdxList[64];
+    int CpPresentFlag[64][64];
+
+    int LayerSetLayerIdList[64][64];
+    int NumLayersInIdList[64];
 
     int NumDirectRefLayers[64];
     int LayerIdxInVps[64];
     int IdRefListLayer[64][64];
     int NumRefListLayers[64];
+
+    uint8_t DepthLayerFlag[64];
+    uint8_t ViewOrderIdx[64];
+};
+
+
+struct pps_range_extension {
+    GUE(log2_max_transform_skip_block_size_minus2);
+    uint8_t cross_component_prediction_enabled_flag:1;
+    uint8_t chroma_qp_offset_list_enabled_flag:1;
+    GUE(diff_cu_chroma_qp_offset_depth);
+    GUE(chroma_qp_offset_list_len_minus1); // range of 0 - 5
+
+    GSE(cb_qp_offset_list)[6];
+    GSE(cr_qp_offset_list)[6];
+    GUE(log2_sao_offset_scale_luma);
+    GUE(log2_sao_offset_scale_chroma);
 };
 
 //see 7.3.2.3.5
@@ -473,6 +507,76 @@ struct color_mapping_table {
     uint8_t cm_delta_flc_bits_minus1:2;
     GSE(cm_adapt_threshold_u_delta);
     GSE(cm_adapt_threshold_v_delta);
+};
+
+struct pps_multilayer_extension {
+    uint8_t poc_reset_info_present_flag:1;
+    uint8_t pps_infer_scaling_list_flag:1;
+    uint8_t pps_scaling_list_ref_layer_id:6;
+
+    GUE(num_ref_loc_offsets);
+
+    struct ref_layer {
+
+        uint8_t ref_loc_offset_layer_id:6;
+        uint8_t scaled_ref_layer_offset_present_flag:1;
+
+        GSE(scaled_ref_layer_left_offset);
+        GSE(scaled_ref_layer_top_offset);
+        GSE(scaled_ref_layer_right_offset);
+        GSE(scaled_ref_layer_bottom_offset);
+
+        uint8_t ref_region_offset_present_flag:1;
+
+        GSE(ref_region_left_offset);
+        GSE(ref_region_top_offset);
+        GSE(ref_region_right_offset);
+        GSE(ref_region_bottom_offset);
+
+        uint8_t resample_phase_set_present_flag:1;
+        GUE(phase_hor_luma);
+        GUE(phase_ver_luma);
+        GUE(phase_hor_chroma_plus8);
+        GUE(phase_ver_chroma_plus8);
+    } reflayer[64];
+    uint8_t colour_mapping_enabled_flag:1;
+    struct color_mapping_table *color_map;
+};
+
+struct pps_3d_extension {
+    uint8_t dlts_present_flag:1;
+    uint8_t pps_depth_layers_minus1:6;
+    uint8_t pps_bit_depth_for_depth_layers_minus8:4; //bit_depth_luma_minus8 : 0 ~ 8
+    struct pps_3d_layer {
+        uint8_t dlt_flag:1;
+        uint8_t dlt_pred_flag:1;
+        uint8_t dlt_val_flags_present_flag:1;
+        uint8_t dlt_value_flag[65535];// depthMaxValue equal to ( 1 << ( pps_bit_depth_for_depth_layers_minus8 + 8 ) ) − 1.
+
+        uint16_t num_val_delta_dlt; //pps_bit_depth_for_depth_layers_minus8 + 8 bits
+        uint16_t max_diff;          //pps_bit_depth_for_depth_layers_minus8 + 8 bits
+        uint32_t min_diff_minus1;    //ceil (log2(max_diff + 1)) bits
+        uint16_t delta_dlt_val0;     //pps_bit_depth_for_depth_layers_minus8 + 8 bits
+        uint32_t delta_val_diff_minus_min[65536];  //ceil (log2(max_diff - min_diff_minus1 )) bits
+    } pps_3d_layers[64];
+};
+
+struct pps_scc_extension {
+    uint8_t pps_curr_pic_ref_enabled_flag:1;
+    uint8_t residual_adaptive_colour_transform_enabled_flag:1;
+
+    uint8_t pps_slice_act_qp_offsets_present_flag:1;
+    GSE(pps_act_y_qp_offset_plus5);
+    GSE(pps_act_cb_qp_offset_plus5);
+    GSE(pps_act_cr_qp_offset_plus3);
+
+    uint8_t pps_palette_predictor_initializers_present_flag:1;
+    GUE(pps_num_palette_predictor_initializers);    //less than PaletteMaxPredictorSize which less than 128
+    uint8_t monochrome_palette_flag:1;
+    GUE(luma_bit_depth_entry_minus8);
+    GUE(chroma_bit_depth_entry_minus8);
+    uint16_t pps_palette_predictor_initializer[3][128]; /* [0][i] luma_bit_depth_entry_minus8 + 8 bits
+                                                            [1][i] and [2][i] chroma_bit_depth_entry_minus8 +8 bits */
 };
 
 // see 7.3.2.3 picture parameter set
@@ -502,8 +606,9 @@ struct pps {
     GUE(num_tile_columns_minus1);
     GUE(num_tile_rows_minus1);
     uint8_t uniform_spacing_flag:1;
-    GUE(column_width_minus1);
-    GUE(row_height_minus1);
+    
+    uint32_t *column_width_minus1;
+    uint32_t *row_height_minus1;
     uint8_t loop_filter_across_tiles_enabled_flag:1;
 
     uint8_t pps_loop_filter_across_slices_enabled_flag:1;
@@ -526,90 +631,13 @@ struct pps {
     uint8_t pps_scc_extension_flag:1;
     uint8_t pps_extension_4bits:4;
     // pps range extension, see 7.3.2.3.2
-    struct pps_range_extension {
-        GUE(log2_max_transform_skip_block_size_minus2);
-        uint8_t cross_component_prediction_enabled_flag:1;
-        uint8_t chroma_qp_offset_list_enabled_flag:1;
-        GUE(diff_cu_chroma_qp_offset_depth);
-        GUE(chroma_qp_offset_list_len_minus1); // range of 0 - 5
-
-        GSE(cb_qp_offset_list)[6];
-        GSE(cr_qp_offset_list)[6];
-        GUE(log2_sao_offset_scale_luma);
-        GUE(log2_sao_offset_scale_chroma);
-    } pps_range_ext;
+    struct pps_range_extension* pps_range_ext;
     // pps multilayer extension
-    struct pps_multilayer_extension {
-        uint8_t poc_reset_info_present_flag:1;
-        uint8_t pps_infer_scaling_list_flag:1;
-        uint8_t pps_scaling_list_ref_layer_id:6;
-
-        GUE(num_ref_loc_offsets);
-
-        struct ref_layer {
-
-            uint8_t ref_loc_offset_layer_id:6;
-            uint8_t scaled_ref_layer_offset_present_flag:1;
-
-            GSE(scaled_ref_layer_left_offset);
-            GSE(scaled_ref_layer_top_offset);
-            GSE(scaled_ref_layer_right_offset);
-            GSE(scaled_ref_layer_bottom_offset);
-
-            uint8_t ref_region_offset_present_flag:1;
-
-            GSE(ref_region_left_offset);
-            GSE(ref_region_top_offset);
-            GSE(ref_region_right_offset);
-            GSE(ref_region_bottom_offset);
-
-            uint8_t resample_phase_set_present_flag:1;
-            GUE(phase_hor_luma);
-            GUE(phase_ver_luma);
-            GUE(phase_hor_chroma_plus8);
-            GUE(phase_ver_chroma_plus8);
-        } reflayer[64];
-        uint8_t colour_mapping_enabled_flag:1;
-        struct color_mapping_table color_map;
-
-    } pps_multiplayer_ext;
+    struct pps_multilayer_extension *pps_multilayer_ext;
     // pps 3d extension 
-    struct pps_3d_extension {
-        uint8_t dlts_present_flag:1;
-        uint8_t pps_depth_layers_minus1:6;
-        uint8_t pps_bit_depth_for_depth_layers_minus8:4; //bit_depth_luma_minus8 : 0 ~ 8
-        struct pps_3d_layer {
-            uint8_t dlt_flag:1;
-            uint8_t dlt_pred_flag:1;
-            uint8_t dlt_val_flags_present_flag:1;
-            uint8_t dlt_value_flag[65535];// depthMaxValue equal to ( 1 << ( pps_bit_depth_for_depth_layers_minus8 + 8 ) ) − 1.
-
-            uint16_t num_val_delta_dlt; //pps_bit_depth_for_depth_layers_minus8 + 8 bits
-            uint16_t max_diff;          //pps_bit_depth_for_depth_layers_minus8 + 8 bits
-            uint32_t min_diff_minus1;    //ceil (log2(max_diff + 1)) bits
-            uint16_t delta_dlt_val0;     //pps_bit_depth_for_depth_layers_minus8 + 8 bits
-            uint32_t delta_val_diff_minus_min[65536];  //ceil (log2(max_diff - min_diff_minus1 )) bits
-        } pps_3d_layers[64];
-        
-    } pps_3d_ext;
+    struct pps_3d_extension *pps_3d_ext;
     // pps scc extension
-    struct pps_scc_extension {
-        uint8_t pps_curr_pic_ref_enabled_flag:1;
-        uint8_t residual_adaptive_colour_transform_enabled_flag:1;
-
-        uint8_t pps_slice_act_qp_offsets_present_flag:1;
-        GSE(pps_act_y_qp_offset_plus5);
-        GSE(pps_act_cb_qp_offset_plus5);
-        GSE(pps_act_cr_qp_offset_plus3);
-
-        uint8_t pps_palette_predictor_initializers_present_flag:1;
-        GUE(pps_num_palette_predictor_initializers);    //less than PaletteMaxPredictorSize which less than 128
-        uint8_t monochrome_palette_flag:1;
-        GUE(luma_bit_depth_entry_minus8);
-        GUE(chroma_bit_depth_entry_minus8);
-        uint16_t pps_palette_predictor_initializer[3][128]; /* [0][i] luma_bit_depth_entry_minus8 + 8 bits
-                                                              [1][i] and [2][i] chroma_bit_depth_entry_minus8 +8 bits */
-    } pps_scc_ext;
+    struct pps_scc_extension *pps_scc_ext;
     // pps extension 4bits
     // uint8_t pps_extension_data_flag:1;
 
@@ -692,10 +720,83 @@ struct st_ref_pic_set {
     GUE(delta_poc_s1_minus1)[16];
     uint8_t used_by_curr_pic_s1_flag[16];
 };
+
+/* long term reference picture set syntax */
+struct lt_ref_pic_set {
+    uint8_t* lt_ref_pic_poc_lsb_sps; // variable
+    uint8_t* used_by_curr_pic_lt_sps_flag;
+};
+
+// sps range extension, see 7.3.2.2.2
+struct sps_range_extension {
+    uint8_t transform_skip_rotation_enabled_flag:1;
+    uint8_t transform_skip_context_enabled_flag:1;
+    uint8_t implicit_rdpcm_enabled_flag:1;
+    uint8_t explicit_rdpcm_enabled_flag:1;
+    uint8_t extended_precision_processing_flag:1;
+    uint8_t intra_smoothing_disabled_flag:1;
+    uint8_t high_precision_offsets_enabled_flag:1;
+    uint8_t persistent_rice_adaptation_enabled_flag:1;
+    uint8_t cabac_bypass_alignment_enabled_flag:1;
+};
+
+struct sps_3d_extension {
+    uint8_t iv_di_mc_enabled_flag:1;
+    uint8_t iv_mv_scal_enabled_flag:1;
+    GUE(log2_ivmc_sub_pb_size_minus3);
+    uint8_t iv_res_pred_enabled_flag:1;
+    uint8_t depth_ref_enabled_flag:1;
+    uint8_t vsp_mc_enabled_flag:1;
+    uint8_t dbbp_enabled_flag:1;
+
+    // uint8_t iv_di_mc_enabled_flag1:1;
+    // uint8_t iv_mv_scal_enabled_flag1:1;
+    uint8_t tex_mc_enabled_flag:1;
+    GUE(log2_texmc_sub_pb_size_minus3);
+    uint8_t intra_contour_enabled_flag:1;
+    uint8_t intra_dc_only_wedge_enabled_flag:1;
+    uint8_t cqt_cu_part_pred_enabled_flag:1;
+    uint8_t inter_dc_only_enabled_flag:1;
+    uint8_t skip_intra_enabled_flag:1;
+};
+
+// sps scc extension , see 7.3.2.2.3
+struct sps_scc_extension {
+    uint8_t sps_curr_pic_ref_enabled_flag:1;
+    uint8_t palette_mode_enabled_flag:1;
+    GUE(palette_max_size);
+    GUE(delta_palette_max_predictor_size);
+    uint8_t sps_palette_predictor_initializers_present_flag:1;
+    GUE(sps_num_palette_predictor_initializers_minus1);
+    uint8_t sps_palette_predictor_initializer[3][128];
+
+    uint8_t motion_vector_resolution_control_idc:2;
+    uint8_t intra_boundary_filtering_disabled_flag:1;
+};
+
+enum chroma_format {
+  CHROMA_400        = 0,
+  CHROMA_420        = 1,
+  CHROMA_422        = 2,
+  CHROMA_444        = 3
+};
+
+struct pcm {
+    uint8_t pcm_sample_bit_depth_luma_minus1:4;
+    uint8_t pcm_sample_bit_depth_chroma_minus1:4;
+
+    GUE(log2_min_pcm_luma_coding_block_size_minus3);
+    GUE(log2_diff_max_min_pcm_luma_coding_block_size);
+    
+    uint8_t pcm_loop_filter_disabled_flag;
+};
+
+#define SPS_EXT_FLAG_NUM (8)
+
 //see 7.3.2.2 sequence parameter set RBSP syntax
 struct sps {
     uint8_t sps_video_parameter_set_id:4;
-    uint8_t sps_max_sub_layer_minus1:3;
+    uint8_t sps_max_sub_layer_minus1:3; //less than 7
     uint8_t sps_temporal_id_nesting_flag:1;
 
     struct profile_tier_level sps_profile_tier_level;
@@ -711,8 +812,8 @@ struct sps {
     GUE(pic_width_in_luma_samples);
     GUE(pic_height_in_luma_samples);
 
+    //conformance windown info
     // uint8_t conformance_window_flag:1;
-
     GUE(conf_win_left_offset);
     GUE(conf_win_right_offset);
     GUE(conf_win_top_offset);
@@ -744,32 +845,25 @@ struct sps {
 
     uint8_t amp_enabled_flag:1;
     uint8_t sample_adaptive_offset_enabled_flag:1;
-    uint8_t pcm_enabled_flag:1;
 
-    uint8_t pcm_sample_bit_depth_luma_minus1:4;
-    uint8_t pcm_sample_bit_depth_chroma_minus1:4;
-
-    GUE(log2_min_pcm_luma_coding_block_size_minus3);
-    GUE(log2_diff_max_min_pcm_luma_coding_block_size);
-    uint8_t pcm_loop_filter_disabled_flag:1;
+    uint8_t pcm_enabled_flag:1; //use pcm
+    struct pcm *pcm;
 
     GUE(num_short_term_ref_pic_sets); //less than 64
-
     struct st_ref_pic_set *sps_st_ref;
 
     uint8_t long_term_ref_pics_present_flag: 1;
     GUE(num_long_term_ref_pics_sps);
-
-    uint8_t* lt_ref_pic_poc_lsb_sps; // variable
-    uint8_t* used_by_curr_pic_lt_sps_flag;
+    struct lt_ref_pic_set *sps_lt_ref;
 
     uint8_t sps_temporal_mvp_enabled_flag:1;
     uint8_t strong_intra_smoothing_enabled_flag:1;
-    uint8_t vui_parameters_present_flag:1;
 
+    uint8_t vui_parameters_present_flag:1;
     struct vui_parameters *vui;
 
     uint8_t sps_extension_present_flag:1;
+    // SPS_EXT_FLAG_NUM
     uint8_t sps_range_extension_flag:1;
     uint8_t sps_multilayer_extension_flag:1;
     uint8_t sps_3d_extension_flag:1;
@@ -777,54 +871,16 @@ struct sps {
     uint8_t sps_extension_4bits:4;
 
     // sps range extension, see 7.3.2.2.2
-    struct sps_range_extension {
-        uint8_t transform_skip_rotation_enabled_flag:1;
-        uint8_t transform_skip_context_enabled_flag:1;
-        uint8_t implicit_rdpcm_enabled_flag:1;
-        uint8_t explicit_rdpcm_enabled_flag:1;
-        uint8_t extended_precision_processing_flag:1;
-        uint8_t intra_smoothing_disabled_flag:1;
-        uint8_t high_precision_offsets_enabled_flag:1;
-        uint8_t persistent_rice_adaptation_enabled_flag:1;
-        uint8_t cabac_bypass_alignment_enabled_flag:1;
-    } sps_range_ext;
+    struct sps_range_extension *sps_range_ext;
     // sps multiplayer extension
     struct sps_multilayer_extension {
         uint8_t inter_view_mv_vert_constraint_flag:1;
     } sps_multilayer_ext;
+
     // sps 3d extension 
-    struct sps_3d_extension {
-        uint8_t iv_di_mc_enabled_flag:1;
-        uint8_t iv_mv_scal_enabled_flag:1;
-        GUE(log2_ivmc_sub_pb_size_minus3);
-        uint8_t iv_res_pred_enabled_flag:1;
-        uint8_t depth_ref_enabled_flag:1;
-        uint8_t vsp_mc_enabled_flag:1;
-        uint8_t dbbp_enabled_flag:1;
-
-        uint8_t iv_di_mc_enabled_flag1:1;
-        uint8_t iv_mv_scal_enabled_flag1:1;
-        uint8_t tex_mc_enabled_flag:1;
-        GUE(log2_texmc_sub_pb_size_minus3);
-        uint8_t intra_contour_enabled_flag:1;
-        uint8_t intra_dc_only_wedge_enabled_flag:1;
-        uint8_t cqt_cu_part_pred_enabled_flag:1;
-        uint8_t inter_dc_only_enabled_flag:1;
-        uint8_t skip_intra_enabled_flag:1;
-    } sps_3d_ext;
+    struct sps_3d_extension sps_3d_ext[2];
     // sps scc extension , see 7.3.2.2.3
-    struct sps_scc_extension {
-        uint8_t sps_curr_pic_ref_enabled_flag:1;
-        uint8_t palette_mode_enabled_flag:1;
-        GUE(palette_max_size);
-        GUE(delta_palette_max_predictor_size);
-        uint8_t sps_palette_predictor_initializers_present_flag:1;
-        GUE(sps_num_palette_predictor_initializers_minus1);
-        uint8_t sps_palette_predictor_initializer[3][128];
-
-        uint8_t motion_vector_resolution_control_idc:2;
-        uint8_t intra_boundary_filtering_disabled_flag:1;
-    } sps_scc_ext;
+    struct sps_scc_extension *sps_scc_ext;
     // sps extension 4bits
     // rbsp tailling
 };
@@ -859,11 +915,290 @@ struct sei {
 };
 
 
+//sample adaptive offset
+struct sao {
+    uint32_t sao_merge_left_flag;
+    uint32_t sao_merge_up_flag;
+    uint32_t sao_type_idx_luma;
+    uint32_t sao_type_idx_chroma;
+    uint32_t sao_offset_abs[3][64][64][4];
+    uint32_t sao_offset_sign[3][64][64][4];
+    uint32_t sao_band_position[3][64][64];
+    uint32_t sao_eo_class_luma;
+    uint32_t sao_eo_class_chroma;
+};
 
-void parse_nalu(uint8_t *data, uint16_t len);
+struct slice_long_term {
+    uint8_t lt_idx_sps;
+    uint8_t poc_lsb_lt;
+    uint8_t used_by_curr_pic_lt_flag:1;
+    uint8_t delta_poc_msb_present_flag:1;
+    GUE(delta_poc_msb_cycle_lt);
+};
+
+struct palette_predictor_entries {
+    int PaletteMaxPredictorSize; /* see 7-35  
+                                = palette_max_size + delta_palette_max_predictor_size 
+                                when delta_palette_max_predictor_size not present, it should be 0
+                                When an active SPS for the base layer has palette_mode_enabled_flag equal to 1,
+                                palette_max_size shall be less than or equal to 64 and 
+                                PaletteMaxPredictorSize shall be less than or equal to 128 */
+    int PredictorPaletteSize;
+    int PredictorPaletteEntries[3][128]; /*  [nComp][PaletteMaxPredictorSize] */
+};
+
+struct slice_segment_header {
+    uint8_t ChromaArrayType;//= (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc)
+
+    uint8_t no_output_of_prior_pics_flag:1;
+
+    GUE(slice_pic_parameter_set_id);
+
+    uint32_t slice_segment_address;
+
+    GUE(slice_type);
+    uint8_t pic_output_flag:1;
+    uint8_t colour_plane_id:2;
+
+    uint32_t slice_pic_order_cnt_lsb;
+
+    struct st_ref_pic_set *st;
+
+    uint32_t short_term_ref_pic_set_idx;
+    GUE(num_long_term_sps);
+    GUE(num_long_term_pics);
+
+    struct slice_long_term* terms;
+
+    uint8_t inter_layer_pred_enabled_flag;
+    uint32_t num_inter_layer_ref_pics_minus1;
+    int NumActiveRefLayerPics;
+    int refLayerPicIdc[64];
+    int numRefLayerPics;
+    int RefPicLayerId[64];
+
+    uint32_t *inter_layer_pred_layer_idc;
+
+    uint8_t in_comp_pred_flag:1;
+
+    uint8_t slice_sao_luma_flag:1;
+    uint8_t slice_sao_chroma_flag:1;
+    
+
+    GUE(num_ref_idx_l0_active_minus1);
+    GUE(num_ref_idx_l1_active_minus1);
+
+    uint8_t ref_pic_list_modification_flag_l0;
+    uint32_t *list_entry_l0;
+    uint32_t *list_entry_l1;
+
+    uint8_t mvd_l1_zero_flag:1;
+    uint8_t cabac_init_flag:1;
+
+    GUE(collocated_ref_idx);
+
+    uint8_t slice_ic_enabled_flag;
+
+    GUE(five_minus_max_num_merge_cand);
+    uint8_t use_integer_mv_flag:1;
+
+    GSE(slice_qp_delta);
+    GSE(slice_cb_qp_offset);
+    GSE(slice_cr_qp_offset);
+
+    GSE(slice_act_y_qp_offset);
+    GSE(slice_act_cb_qp_offset);
+    GSE(slice_act_cr_qp_offset);
+    uint8_t cu_chroma_qp_offset_enabled_flag:1;
+
+    GSE(slice_beta_offset_div2);
+    GSE(slice_tc_offset_div2);
+
+    uint8_t slice_loop_filter_across_slices_enabled_flag:1;
+
+    GUE(num_entry_point_offsets);
+    // GUE(offset_len_minus1);
+    uint32_t *entry_point_offset_minus1;
+    GUE(slice_segment_header_extension_length);
+    uint8_t poc_reset_period_id:6;
+    uint8_t full_poc_reset_flag:1;
+    uint32_t poc_lsb_val;
+
+    GUE(poc_msb_cycle_val);
+
+
+    //Coding Tree Block
+    int SubWidthC, SubHeightC;
+
+    int MinCbLog2SizeY;
+    int CtbLog2SizeY;
+    int MinCbSizeY;
+    int CtbSizeY;
+
+    int PicWidthInCtbsY;
+    int PicHeightInCtbsY;
+
+    int PicWidthInMinCbsY;
+    int PicHeightInMinCbsY;
+
+    int PicSizeInMinCbsY;
+    int PicSizeInCtbsY;
+
+    int PicSizeInSamplesY;
+
+    int PicWidthInSamplesC;
+    int PicHeightInSamplesC;
+
+    int CtbWidthC, CtbHeightC;
+
+    int MinTbLog2SizeY, MaxTbLog2SizeY;
+
+    //code quadtree
+    int IsCuQpDeltaCoded;
+    int CuQpDeltaVal;
+    int IsCuChromaQpOffsetCoded;
+
+
+    //palette_predictor_entries
+    struct palette_predictor_entries ppe;
+};
+
+
+enum inter_pred_mpde {
+    PRED_L0 = 0,
+    PRED_L1 = 1,
+    PRED_BI = 2,
+};
+
+
+struct pcm_sample {
+    int *pcm_sample_luma;
+    int *pcm_sample_chroma;
+};
+
+struct mvd_coding {
+    uint8_t abs_mvd_greater0_flag[2];
+    uint8_t abs_mvd_greater1_flag[2];
+    uint8_t mvd_sign_flag[2];
+    uint32_t abs_mvd_minus2[2];
+};
+
+struct predication_unit {
+    uint8_t mvp_l0_flag; /* the motion vector predictor index of list 0*/
+    uint8_t mvp_l1_flag; /* the motion vector predictor index of list 1*/
+    uint8_t merge_flag; /* whether the inter prediction parameters for the current prediction
+                         unit are inferred from a neighbouring inter-predicted partition */
+    int merge_idx;      /* merging candidate index of the merging candidate list */
+    int inter_pred_idc; /* whether list0, list1, or bi-prediction is used for
+                          the current prediction unit. see  @enum inter_pred_mpde*/
+    int ref_idx_l0;     /* list 0 reference picture index for the current prediction unit */
+    int ref_idx_l1;     /* list 1 reference picture index for the current prediction unit */
+    struct mvd_coding *mvd;
+    int MvdL1[64][64][2];
+};
+
+
+enum part_mode {
+    PART_2Nx2N = 0,
+    PART_2NxN,
+    PART_Nx2N,
+    PART_NxN,
+    PART_2NxnU,
+    PART_2NxnD,
+    PART_nLx2N,
+    PART_nRx2N,
+    PART_NUM,
+};
+
+
+struct cross_comp_pred {
+    uint32_t log2_res_scale_abs_plus1;
+    uint32_t res_scale_sign_flag;
+};
+
+struct trans_unit {
+    uint8_t tu_residual_act_flag[64][64];
+
+    struct cross_comp_pred ccp;
+};
+
+struct trans_tree {
+    uint8_t split_transform_flag[64][64][3];
+    uint32_t cbf_cb[64][64][3];
+    uint32_t cbf_cr[64][64][3];
+    uint32_t cbf_luma[64][64][3];
+};
+
+
+struct cu {
+    uint8_t cu_transquant_bypass_flag;
+    uint8_t cu_skip_flag[64][64];
+    uint8_t skip_intra_flag[64][64];
+    // pred_mode_flag[][]; use value below
+    uint8_t CuPredMode[64][64];
+    int PartMode;
+
+    int MaxTrafoDepth;
+    uint8_t IntraSplitFlag;
+    uint8_t palette_mode_flag[64][64];
+    // part_mode;
+    uint8_t pcm_flag[64][64];
+    struct pcm_sample *pcm;
+    //pcm_alignment_zero_bit
+    uint8_t prev_intra_luma_pred_flag[64][64];
+    uint8_t mpm_idx[64][64];
+    uint8_t rem_intra_luma_pred_mode[64][64];
+    uint8_t intra_chroma_pred_mode[64][64];
+    uint8_t rqt_root_cbf;
+    
+    int CtDepth[64][64];
+
+    struct predication_unit pu[8][8];
+
+    struct trans_tree *tt;
+
+    struct trans_unit *tu;
+};
+
+
+struct chroma_qp_offset {
+    uint8_t cu_chroma_qp_offset_flag;
+    uint8_t cu_chroma_qp_offset_idx;
+
+    // uint8_t IsCuChromaQpOffsetCoded;
+    int32_t CuQpOffsetCb;
+    int32_t CuQpOffsetCr;
+};
+
+
+struct intra_mode_ext {
+    uint8_t no_dim_flag;
+    uint8_t depth_intra_mode_idx_flag;
+    uint8_t wedge_full_tab_idx;
+};
+
+struct cu_extension {
+    uint8_t skip_intra_mode_idx;
+    uint8_t dbbp_flag;
+    uint8_t dc_only_flag;
+    uint8_t iv_res_pred_weight_idx;
+    uint8_t illu_comp_flag;
+};
+
+struct hevc_param_set {
+    struct vps *vps;
+    struct sps *sps;
+    struct pps *pps;
+};
+
+struct hevc_slice {
+    struct hevc_nalu_header *nalu;
+    struct slice_segment_header *slice;
+};
 
 #pragma pack(pop)
 
+void parse_nalu(uint8_t *data, uint16_t len);
 
 #ifdef __cplusplus
 }

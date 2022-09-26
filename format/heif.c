@@ -248,10 +248,6 @@ decode_items(HEIF * h, FILE *f, struct mdat_box *b)
 
 static struct pic*
 HEIF_load(const char *filename) {
-    for (int i =0; i < 256; i ++) {
-        int ret = log2ceil(2);
-        printf("log(%d)=%d\n", i, ret);
-    }
     HEIF * h = calloc(1, sizeof(HEIF));
     struct pic *p = calloc(1, sizeof(struct pic));
     p->pic = h;

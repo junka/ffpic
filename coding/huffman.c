@@ -154,7 +154,7 @@ decode_symbol(struct bits_vec * v, huffman_tree* tree) {
             c = ((c << 1) | READ_BIT(v));
             for (int i =0; i < tree->slow_cnt[bl - FAST_HF_BITS -1]; i ++) {
                 if ( c == tree->slow_codec[bl - FAST_HF_BITS -1][i]) {
-                    VERR(huffman, "offset %d decode %d, bitlen %d", v->offset, c, bl);
+                    VDBG(huffman, "offset %d decode %d, bitlen %d", v->offset, c, bl);
                     return tree->slow_symbol[bl - FAST_HF_BITS -1][i];
                 }
             }

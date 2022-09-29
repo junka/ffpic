@@ -1478,21 +1478,36 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     int NumScalabilityTypes = 0;
     int MaxLayersMinus1 = MIN(62, vps->vps_max_layers_minus1);
     for (int i = 0; i < 16; i ++) {
-        /* dimensions:
+        /* Table F.1 dimensions:
             index 0: texture or depth,  depthLayerFlag
             index 1: multiview,         viewoderIdx
             index 2: spatial/quality scalability,  dependencyId
             index 3: auxiliary,          auxid
             index 4-15: reserved
         */
-        uint8_t scalability_mask_flag = READ_BIT(v);
+        int scalability_mask_flag = READ_BIT(v);
+        // printf("%d: %d\n", i, scalability_mask_flag);
         vps_ext->scalability_mask_flag |= (scalability_mask_flag << i);
         NumScalabilityTypes += scalability_mask_flag;
     }
+    assert(NumScalabilityTypes<=16);
     vps_ext->dimension_id_len_minus1 = malloc(NumScalabilityTypes - vps_ext->splitting_flag);
     for (int j = 0; j < NumScalabilityTypes - vps_ext->splitting_flag; j ++) {
         vps_ext->dimension_id_len_minus1[j] = READ_BITS(v, 3);
     }
+    /*(F-2)*/
+    int dimBitOffset[16];
+    dimBitOffset[0] = 0;
+    for (int j = 1; j < NumScalabilityTypes; j ++) {
+        for (int dimIdx = 0; dimIdx < j; dimIdx ++) {
+            dimBitOffset[j] += (vps_ext->dimension_id_len_minus1[dimIdx] + 1);
+        }
+    }
+    assert(5 - dimBitOffset[NumScalabilityTypes-1] == vps_ext->dimension_id_len_minus1[NumScalabilityTypes-1]);
+    assert(dimBitOffset[NumScalabilityTypes] == 6);
+    assert(NumScalabilityTypes > 0);
+    assert(dimBitOffset[NumScalabilityTypes-1] < 6);
+
     // vps_ext->vps_nuh_layer_id_present_flag = READ_BIT(v);
     uint8_t vps_nuh_layer_id_present_flag = READ_BIT(v);
     if (vps_nuh_layer_id_present_flag) {
@@ -1501,19 +1516,28 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     if (!vps_ext->splitting_flag) {
         vps_ext->dimension_id = malloc(sizeof(uint8_t *) * (MaxLayersMinus1+1));
     }
-    for (int i = 1; i <= MaxLayersMinus1; i ++) {
-        if(vps_nuh_layer_id_present_flag) {
+    for (int i = 0; i <= MaxLayersMinus1; i ++) {
+        if(vps_nuh_layer_id_present_flag && i > 0) {
             vps_ext->layer_id_in_nuh[i] = READ_BITS(v, 6);
-            vps->LayerIdxInVps[vps_ext->layer_id_in_nuh[i]] = i;
+            assert(vps_ext->layer_id_in_nuh[i] > vps_ext->layer_id_in_nuh[i-1]);
+        } else {
+            vps_ext->layer_id_in_nuh[i] = i;
         }
-        if (!vps_ext->splitting_flag) {
-            vps_ext->dimension_id[i] = malloc(NumScalabilityTypes);
-            for (int j = 0; j < NumScalabilityTypes; j ++) {
-                vps_ext->dimension_id[i][j] = READ_BITS(v, vps_ext->dimension_id_len_minus1[j]+1);
+        vps->LayerIdxInVps[vps_ext->layer_id_in_nuh[i]] = i;
+
+        vps_ext->dimension_id[i] = malloc(sizeof(uint8_t) * NumScalabilityTypes);
+        for (int j = 0; j < NumScalabilityTypes; j ++) {
+            if (!vps_ext->splitting_flag) {
+                if (i ==0) {
+                    vps_ext->dimension_id[i][j] = 0;
+                } else {
+                    vps_ext->dimension_id[i][j] = READ_BITS(v, vps_ext->dimension_id_len_minus1[j]+1);
+                }
+            } else {
+                vps_ext->dimension_id[i][j] = ((vps_ext->layer_id_in_nuh[i]&((1 << dimBitOffset[j+1])-1)) >> dimBitOffset[j]);
             }
         }
     }
-
 
     int SubPicHrdFlag = 0;
     vps_ext->NumViews = 1;
@@ -1524,7 +1548,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     for (int i = 0; i <= MaxLayersMinus1; i ++) {
         uint8_t iNuhLId = vps_ext->layer_id_in_nuh[i];
         for (int smIdx = 0, j = 0; smIdx < 16; smIdx ++) {
-            if (vps_ext->scalability_mask_flag &(1 <<smIdx)) {
+            if (vps_ext->scalability_mask_flag & (1 << smIdx)) {
                 ScalabilityId[i][smIdx] = vps_ext->dimension_id[i][j++];
             } else {
                 ScalabilityId[i][smIdx] = 0;

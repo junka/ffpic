@@ -16,6 +16,49 @@ enum pred_mode {
     MODE_SKIP = 2,
 };
 
+/* see table I.2 */
+enum inter_pred_mode {
+    INTRA_PLANAR = 0,
+    INTRA_DC = 1,
+    INTRA_ANGULAR2 = 2,
+    INTRA_ANGULAR3 = 3,
+    INTRA_ANGULAR4 = 4,
+    INTRA_ANGULAR5 = 5,
+    INTRA_ANGULAR6 = 6,
+    INTRA_ANGULAR7 = 7,
+    INTRA_ANGULAR8 = 8,
+    INTRA_ANGULAR9 = 9,
+    INTRA_ANGULAR10 = 10,
+    INTRA_ANGULAR11 = 11,
+    INTRA_ANGULAR12 = 12,
+    INTRA_ANGULAR13 = 13,
+    INTRA_ANGULAR14 = 14,
+    INTRA_ANGULAR15 = 15,
+    INTRA_ANGULAR16 = 16,
+    INTRA_ANGULAR17 = 17,
+    INTRA_ANGULAR18 = 18,
+    INTRA_ANGULAR19 = 19,
+    INTRA_ANGULAR20 = 20,
+    INTRA_ANGULAR21 = 21,
+    INTRA_ANGULAR22 = 22,
+    INTRA_ANGULAR23 = 23,
+    INTRA_ANGULAR24 = 24,
+    INTRA_ANGULAR25 = 25,
+    INTRA_ANGULAR26 = 26,
+    INTRA_ANGULAR27 = 27,
+    INTRA_ANGULAR28 = 28,
+    INTRA_ANGULAR29 = 29,
+    INTRA_ANGULAR30 = 30,
+    INTRA_ANGULAR31 = 31,
+    INTRA_ANGULAR32 = 32,
+    INTRA_ANGULAR33 = 33,
+    INTRA_ANGULAR34 = 34,
+    INTRA_WEDGE = 35,
+    INTRA_CONTOUR = 36,
+    INTRA_SINGLE = 37,
+};
+
+
 #pragma pack(push, 1)
 
 /* HEVC configuration item see 14496-15 */
@@ -641,9 +684,32 @@ struct pps {
     // pps extension 4bits
     // uint8_t pps_extension_data_flag:1;
 
+
+    uint32_t * CtbAddrTsToRs;
+    uint32_t * CtbAddrRsToTs;
+    int ** MinTbAddrZs;
 };
 
 
+struct residual_coding {
+    int transform_skip_flag[4];
+    int explicit_rdpcm_flag[4];
+    int explicit_rdpcm_dir_flag[4];
+
+    int last_sig_coeff_x_prefix;
+    int last_sig_coeff_y_prefix;
+    int last_sig_coeff_x_suffix;
+    int last_sig_coeff_y_suffix;
+
+    int coded_sub_block_flag;
+
+    int sig_coeff_flag;
+    int coeff_abs_level_greater1_flag[4];
+    int coeff_abs_level_greater2_flag[4];
+    int coeff_sign_flag[4];
+
+    int coeff_abs_level_remaining[4];
+};
 
 #define EXTENDED_SAR 255
 //see annex E
@@ -961,14 +1027,21 @@ struct slice_segment_header {
     uint8_t colour_plane_id:2;
 
     uint32_t slice_pic_order_cnt_lsb;
-
+    
+    uint8_t short_term_ref_pic_set_sps_flag;
     struct st_ref_pic_set *st;
 
     uint32_t short_term_ref_pic_set_idx;
+    int CurrRpsIdx;
+
     GUE(num_long_term_sps);
     GUE(num_long_term_pics);
 
+    uint8_t *PocLsbLt;
+    uint8_t *UsedByCurrPicLt;
     struct slice_long_term* terms;
+
+    int* DeltaPocMsbCycleLt;
 
     uint8_t inter_layer_pred_enabled_flag;
     uint32_t num_inter_layer_ref_pics_minus1;
@@ -988,8 +1061,19 @@ struct slice_segment_header {
     GUE(num_ref_idx_l0_active_minus1);
     GUE(num_ref_idx_l1_active_minus1);
 
+    int DeltaPocS0[64][64];
+    int DeltaPocS1[64][64];
+    int UsedByCurrPicS0[64][64];
+    int UsedByCurrPicS1[64][64];
+    int NumPositivePics[64];
+    int NumNegativePics[64];
+    int NumDeltaPocs[64];
+    int NumPicTotalCurr;
+
     uint8_t ref_pic_list_modification_flag_l0;
     uint32_t *list_entry_l0;
+
+    uint8_t ref_pic_list_modification_flag_l1;
     uint32_t *list_entry_l1;
 
     uint8_t mvd_l1_zero_flag:1;
@@ -998,6 +1082,7 @@ struct slice_segment_header {
     GUE(collocated_ref_idx);
 
     uint8_t slice_ic_enabled_flag;
+    uint8_t slice_ic_disabled_merge_zero_idx_flag;
 
     GUE(five_minus_max_num_merge_cand);
     uint8_t use_integer_mv_flag:1;
@@ -1026,6 +1111,7 @@ struct slice_segment_header {
 
     GUE(poc_msb_cycle_val);
 
+    struct residual_coding *rc[64];
 
     //Coding Tree Block
     int SubWidthC, SubHeightC;
@@ -1061,6 +1147,9 @@ struct slice_segment_header {
 
     //palette_predictor_entries
     struct palette_predictor_entries ppe;
+
+
+    int ** ScanOrder[6][4];
 };
 
 
@@ -1118,7 +1207,7 @@ struct cross_comp_pred {
 
 struct trans_unit {
     uint8_t tu_residual_act_flag[64][64];
-
+    int TransCoeffLevel[64][64][3][64][64]; //3 for color index, 0 for Y, 1 for Cb, 2 for Cr
     struct cross_comp_pred ccp;
 };
 
@@ -1129,6 +1218,26 @@ struct trans_tree {
     uint32_t cbf_luma[64][64][3];
 };
 
+
+struct intra_mode_ext {
+    uint8_t no_dim_flag;
+    uint8_t depth_intra_mode_idx_flag;
+    uint8_t wedge_full_tab_idx;
+};
+
+
+struct cu_extension {
+    uint8_t skip_intra_mode_idx;
+    uint8_t dbbp_flag;
+    uint8_t dc_only_flag;
+    uint8_t iv_res_pred_weight_idx;
+    uint8_t illu_comp_flag;
+
+    //depth_dcs
+    uint8_t depth_dc_present_flag;
+    uint8_t depth_dc_abs[3];
+    uint8_t depth_dc_sign_flag[8];
+};
 
 struct cu {
     uint8_t cu_transquant_bypass_flag;
@@ -1146,12 +1255,23 @@ struct cu {
     struct pcm_sample *pcm;
     //pcm_alignment_zero_bit
     uint8_t prev_intra_luma_pred_flag[64][64];
+
+    struct intra_mode_ext intra_ext[64][64];
+
     uint8_t mpm_idx[64][64];
     uint8_t rem_intra_luma_pred_mode[64][64];
     uint8_t intra_chroma_pred_mode[64][64];
     uint8_t rqt_root_cbf;
-    
+
+    uint8_t IntraPredModeY[64][64];
+    int IntraPredModeC;
+
+    int candIntraPredModeA;
+    int candIntraPredModeB;
+    int candModeList[3];
+     
     int CtDepth[64][64];
+    struct cu_extension ext[64][64];
 
     struct predication_unit pu[8][8];
 
@@ -1171,19 +1291,7 @@ struct chroma_qp_offset {
 };
 
 
-struct intra_mode_ext {
-    uint8_t no_dim_flag;
-    uint8_t depth_intra_mode_idx_flag;
-    uint8_t wedge_full_tab_idx;
-};
 
-struct cu_extension {
-    uint8_t skip_intra_mode_idx;
-    uint8_t dbbp_flag;
-    uint8_t dc_only_flag;
-    uint8_t iv_res_pred_weight_idx;
-    uint8_t illu_comp_flag;
-};
 
 struct hevc_param_set {
     struct vps *vps;

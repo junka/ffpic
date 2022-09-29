@@ -23,6 +23,13 @@ uint32_t divceil(uint32_t a, uint32_t div);
 #define ABS(a)  ((a) > 0? (a): -(a))
 
 
+static inline void swap(int *a, int *b)
+{
+    *a ^= *b;
+    *b ^= *a;
+    *a ^= *b;
+}
+
 /* keep input v between 0 to M */
 static inline int clamp(int v, int M)
 {

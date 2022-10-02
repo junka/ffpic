@@ -7,7 +7,6 @@ extern "C" {
 #endif
 
 
-
 #define _format_printf(format_index, first_arg) \
     __attribute__((format(printf, format_index, first_arg)))
 
@@ -94,6 +93,7 @@ static void __attribute__((constructor))__##name(void) {    \
 
 void vlog_init(void);
 void vlog_uninit(void);
+void vlog_dump(FILE *f);
 
 #ifdef __cplusplus
 }

@@ -112,6 +112,7 @@ _vlog(uint32_t level, uint32_t logtype, const char *format, va_list ap)
 
     if (logtype >= vlogs.dynamic_types_len)
         return -1;
+
     if (!vlog_can_log(logtype, level))
         return 0;
 
@@ -175,7 +176,6 @@ static int
 vlog_lookup(const char *name)
 {
     size_t i;
-
     for (i = 0; i < vlogs.dynamic_types_len; i++) {
         if (vlogs.dynamic_types[i].name == NULL)
             continue;
@@ -216,6 +216,7 @@ vlog_register(const char *name)
         (vlogs.dynamic_types_len + 1));
     if (new_dynamic_types == NULL)
         return -1;
+
     vlogs.dynamic_types = new_dynamic_types;
 
     ret = __vlog_register(name, vlogs.dynamic_types_len);
@@ -276,9 +277,6 @@ void
 vlog_init(void)
 {
     vlog_set_global_level(VLOG_DEBUG);
-
-    vlogs.dynamic_types = NULL;
-    vlogs.dynamic_types_len = 0;
 
     default_log_stream = stdout;
 }

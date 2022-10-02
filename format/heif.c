@@ -72,14 +72,14 @@ read_hvcc_box(FILE *f, struct hvcC_box *b)
     b->avgframerate = SWAP(b->avgframerate);
     b->nal_arrays = malloc(b->num_of_arrays * sizeof(struct nal_arr));
 
-    VDBG(heif, "hvcC: general_profile_idc %d, flags 0x%x\n", b->general_profile_idc,
+    VDBG(heif, "hvcC: general_profile_idc %d, flags 0x%x", b->general_profile_idc,
                 b->general_profile_compatibility_flags);
-    VDBG(heif, "hvcC: num_of_arrays %d\n", b->num_of_arrays);
+    VDBG(heif, "hvcC: num_of_arrays %d", b->num_of_arrays);
     for (int i = 0; i < b->num_of_arrays; i ++) {
         fread(b->nal_arrays + i, 1, 1, f);
         fread(&b->nal_arrays[i].numNalus, 2, 1, f);
         b->nal_arrays[i].numNalus = SWAP(b->nal_arrays[i].numNalus);
-        VDBG(heif, "nalu: numNalus %d, type %d\n", b->nal_arrays[i].numNalus, b->nal_arrays[i].nal_unit_type);
+        VDBG(heif, "nalu: numNalus %d, type %d", b->nal_arrays[i].numNalus, b->nal_arrays[i].nal_unit_type);
         b->nal_arrays[i].nals = malloc(b->nal_arrays[i].numNalus * sizeof(struct nalus));
         for (int j = 0; j < b->nal_arrays[i].numNalus; j ++) {
             fread(&b->nal_arrays[i].nals[j].unit_length, 2, 1, f);
@@ -129,7 +129,7 @@ read_ipco_box(FILE *f, struct ipco_box *b)
             default:
                 break;
         }
-        VDBG(heif, "ipco left %d\n", s);
+        VDBG(heif, "ipco left %d", s);
     }
     return b->size;
 }
@@ -175,7 +175,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
     struct box b;
     uint32_t type = read_full_box(f, meta, -1);
     if (type != TYPE2UINT("meta")) {
-        VERR(heif, "error, it is not a meta after ftyp\n");
+        VERR(heif, "error, it is not a meta after ftyp");
         return;
     }
     int size = meta->size -= 12;
@@ -205,7 +205,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
             break;
         }
         size -= b.size;
-        VDBG(heif, "%s, left %d\n", UINT2TYPE(type), size);
+        VDBG(heif, "%s, left %d", UINT2TYPE(type), size);
     }
     
 }
@@ -293,7 +293,7 @@ HEIF_load(const char *filename) {
             break;
         }
         size -= b.size;
-        VDBG(heif, "%s, read %d, left %d\n", UINT2TYPE(type), b.size, size);
+        VDBG(heif, "%s, read %d, left %d", UINT2TYPE(type), b.size, size);
     }
 
     // extract some info from meta box
@@ -309,7 +309,7 @@ HEIF_load(const char *filename) {
     }
 
     // process mdata
-    VDBG(heif, "mdat_num %d\n", h->mdat_num);
+    VINFO(heif, "mdat_num %d", h->mdat_num);
     decode_items(h, f, h->mdat);
 
     fclose(f);

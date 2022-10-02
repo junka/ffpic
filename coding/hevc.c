@@ -4,10 +4,12 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include "vlog.h"
 #include "utils.h"
 #include "hevc.h"
 #include "cabac.h"
 
+VLOG_REGISTER(hevc, DEBUG);
 
 static void
 rbsp_trailing_bits(struct bits_vec *v)
@@ -88,7 +90,7 @@ static void
 parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         uint8_t profilepresentFlag, uint8_t maxNumSubLayersMinus1)
 {
-    printf("profile flag %d, num %d\n", profilepresentFlag, maxNumSubLayersMinus1);
+    VDBG(hevc, "profile flag %d, num %d\n", profilepresentFlag, maxNumSubLayersMinus1);
     if (profilepresentFlag) {
         ptl->general_profile_space = READ_BITS(v, 2);
         ptl->general_tier_flag = READ_BIT(v);
@@ -96,7 +98,7 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         for (int i = 0; i < 32; i ++) {
             ptl->general_profile_compatibility_flag |= (READ_BIT(v) << i);
         }
-        printf("general_profile: idc %d, flag 0x%x\n", ptl->general_profile_idc, ptl->general_profile_compatibility_flag);
+        VDBG(hevc, "general_profile: idc %d, flag 0x%x\n", ptl->general_profile_idc, ptl->general_profile_compatibility_flag);
         ptl->general_progressive_source_flag = READ_BIT(v);
         ptl->general_interlaced_source_flag = READ_BIT(v);
         ptl->general_non_packed_constraint_flag = READ_BIT(v);
@@ -125,7 +127,7 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         } else if (JUDGE_PROFILE(ptl->general_profile, 2)) {
             SKIP_BITS(v, 7);
             ptl->general_one_picture_only_constraint_flag = READ_BIT(v);
-            printf("one_picture_only_constraint %d\n", ptl->general_one_picture_only_constraint_flag);
+            VDBG(hevc, "one_picture_only_constraint %d\n", ptl->general_one_picture_only_constraint_flag);
             SKIP_BITS(v, 35);
         } else {
             SKIP_BITS(v, 43);
@@ -136,7 +138,7 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
             JUDGE_PROFILE(ptl->general_profile, 11))
         {
             ptl->general_inbld_flag = READ_BIT(v);
-            printf("general_inbld_flag %d\n", ptl->general_inbld_flag);
+            VDBG(hevc, "general_inbld_flag %d\n", ptl->general_inbld_flag);
         } else {
             SKIP_BITS(v, 1);
         }
@@ -741,7 +743,7 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
     struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
     struct sps *sps = malloc(sizeof(struct sps));
     sps->sps_video_parameter_set_id = READ_BITS(v, 4);
-    printf("sps: sps_video_parameter_set_id %d\n", sps->sps_video_parameter_set_id);
+    VDBG(hevc, "sps: sps_video_parameter_set_id %d\n", sps->sps_video_parameter_set_id);
     if (h->nuh_layer_id == 0) {
         sps->sps_max_sub_layer_minus1 = READ_BITS(v, 3);
     } else {
@@ -760,12 +762,12 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
         //almost must go here
         sps->sps_temporal_id_nesting_flag = READ_BIT(v);
         // when sps_temporal_id_nesting_flag should be 1 if sps_max_sub_layers_minus1 is 0
-        printf("sps_max_sub_layer_minus1 %d\n", sps->sps_max_sub_layer_minus1);
+        VDBG(hevc, "sps_max_sub_layer_minus1 %d\n", sps->sps_max_sub_layer_minus1);
         parse_profile_tier_level(v, &sps->sps_profile_tier_level, 1, sps->sps_max_sub_layer_minus1);
     }
     sps->sps_seq_parameter_set_id = GOL_UE(v);
     //less than 16
-    printf("sps: sps_seq_parameter_set_id %d\n", sps->sps_seq_parameter_set_id);
+    VDBG(hevc, "sps: sps_seq_parameter_set_id %d\n", sps->sps_seq_parameter_set_id);
     
     if (MultiLayerExtSpsFlag) {
         // uint8_t update_rep_format_flag = READ_BIT(v);
@@ -777,11 +779,11 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
         if (sps->chroma_format_idc == CHROMA_444) {
             sps->separate_colour_plane_flag = READ_BIT(v);
         }
-        printf("chroma_format_idc %d, separate_colour_plane_flag %d\n",
+        VDBG(hevc, "chroma_format_idc %d, separate_colour_plane_flag %d\n",
             sps->chroma_format_idc, sps->separate_colour_plane_flag);
         sps->pic_width_in_luma_samples = GOL_UE(v);
         sps->pic_height_in_luma_samples = GOL_UE(v);
-        printf("pic_width_in_luma_samples %d, pic_height_in_luma_samples %d\n",
+        VDBG(hevc, "pic_width_in_luma_samples %d, pic_height_in_luma_samples %d\n",
             sps->pic_width_in_luma_samples, sps->pic_height_in_luma_samples);
         // sps->conformance_window_flag = READ_BIT(v);
         if (READ_BIT(v)) {
@@ -792,7 +794,7 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
         }
         sps->bit_depth_luma_minus8 = GOL_UE(v);
         sps->bit_depth_chroma_minus8 = GOL_UE(v);
-        printf("bit_depth_luma_minus8 %d, bit_depth_chroma_minus8 %d\n",
+        VDBG(hevc, "bit_depth_luma_minus8 %d, bit_depth_chroma_minus8 %d\n",
             sps->bit_depth_luma_minus8, sps->bit_depth_chroma_minus8);
     }
 
@@ -1879,13 +1881,13 @@ parse_vps_3d_extension(struct bits_vec *v, struct vps *vps, struct vps_3d_extens
 static struct vps *
 parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
 {
-    printf("vps: len %d\n", len);
+    VDBG(hevc, "vps: len %d\n", len);
     // hexdump(stdout, "vps: ", data, len);
     uint8_t* p = data;
     struct vps *vps = malloc(sizeof(struct vps));
     struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
     vps->vps_video_parameter_set_id = READ_BITS(v, 4);
-    printf("vps id %d\n", vps->vps_video_parameter_set_id);
+    VDBG(hevc, "vps id %d\n", vps->vps_video_parameter_set_id);
     vps->vps_base_layer_internal_flag = READ_BIT(v);
     vps->vps_base_layer_available_flag = READ_BIT(v);
     vps->vps_max_layers_minus1 = READ_BITS(v, 6);
@@ -1894,14 +1896,14 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
 
     uint16_t vps_reserved_0xffff_16bits = READ_BITS(v, 16);
     if (vps_reserved_0xffff_16bits != 0xFFFF) {
-        printf("reserved bits 0x%x\n", vps_reserved_0xffff_16bits);
+        VDBG(hevc, "reserved bits 0x%x\n", vps_reserved_0xffff_16bits);
     }
 
     parse_profile_tier_level(v, &vps->vps_profile_tier_level, 1, vps->vps_max_sub_layers_minus1);
-    printf("vps_max_sub_layers_minus1 %d\n", vps->vps_max_sub_layers_minus1);
+    VDBG(hevc, "vps_max_sub_layers_minus1 %d\n", vps->vps_max_sub_layers_minus1);
 
     vps->vps_sub_layer_ordering_info_present_flag = READ_BIT(v);
-    printf("vps_sub_layer_ordering_info_present_flag %d\n", vps->vps_sub_layer_ordering_info_present_flag);
+    VDBG(hevc, "vps_sub_layer_ordering_info_present_flag %d\n", vps->vps_sub_layer_ordering_info_present_flag);
 
     for (int i = vps->vps_sub_layer_ordering_info_present_flag ? 0: vps->vps_max_sub_layers_minus1;
             i <= vps->vps_max_sub_layers_minus1; i ++) {
@@ -1913,8 +1915,8 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
     vps->vps_max_layer_id = READ_BITS(v, 6);
     vps->vps_num_layer_sets_minus1 = GOL_UE(v);
 
-    printf("vps_max_layer_id %d\n", vps->vps_max_layer_id);
-    printf("vps_num_layer_sets_minus1 %d\n", vps->vps_num_layer_sets_minus1);
+    VDBG(hevc, "vps_max_layer_id %d\n", vps->vps_max_layer_id);
+    VDBG(hevc, "vps_num_layer_sets_minus1 %d\n", vps->vps_num_layer_sets_minus1);
 
     for (int i = 1; i <= vps->vps_num_layer_sets_minus1; i ++) {
         int n = 0;
@@ -2085,9 +2087,9 @@ parse_slice_segment_header(struct hevc_nalu_header *headr, uint8_t *data, uint16
         slice->no_output_of_prior_pics_flag = READ_BIT(v);
     }
     slice->slice_pic_parameter_set_id = GOL_UE(v);
-    printf("first_slice_segment_in_pic_flag %d\n", first_slice_segment_in_pic_flag);
-    printf("slice_pic_parameter_set_id %d\n", slice->slice_pic_parameter_set_id);
-    printf("no_output_of_prior_pics_flag %d\n", slice->no_output_of_prior_pics_flag);
+    VDBG(hevc, "first_slice_segment_in_pic_flag %d\n", first_slice_segment_in_pic_flag);
+    VDBG(hevc, "slice_pic_parameter_set_id %d\n", slice->slice_pic_parameter_set_id);
+    VDBG(hevc, "no_output_of_prior_pics_flag %d\n", slice->no_output_of_prior_pics_flag);
 
     calc_sps_param(sps, slice);
     uint8_t dependent_slice_segment_flag = 0;
@@ -2116,10 +2118,7 @@ parse_slice_segment_header(struct hevc_nalu_header *headr, uint8_t *data, uint16
             // slice_reserved_flag[ i ] = READ_BIT(v);
             SKIP_BITS(v, 1);
         }
-        // if (pps->num_extra_slice_header_bits)
-        //     SKIP_BITS(v, pps->num_extra_slice_header_bits);
         slice->slice_type = GOL_UE(v);
-        printf("slice_type %d\n", slice->slice_type);
         if (pps->output_flag_present_flag) {
             slice->pic_output_flag = READ_BIT(v);
         }
@@ -2187,17 +2186,10 @@ parse_slice_segment_header(struct hevc_nalu_header *headr, uint8_t *data, uint16
                 slice_temporal_mvp_enabled_flag = READ_BIT(v);
             }
         }
-        // if (CurrRpsIdx < sps->num_short_term_ref_pic_sets) {
-        //     slice->NumNegativePics[CurrRpsIdx] = sps->sps_st_ref[CurrRpsIdx].num_negative_pics;
-        //     slice->NumPositivePics[CurrRpsIdx] = sps->sps_st_ref[CurrRpsIdx].num_positive_pics;
-        // } else {
-        //     slice->NumNegativePics[CurrRpsIdx] = slice->st->num_negative_pics;
-        //     slice->NumPositivePics[CurrRpsIdx] = slice->st->num_positive_pics;
-        // }
-        
 
         struct st_ref_pic_set *st;
         if (!slice->short_term_ref_pic_set_sps_flag) {
+            slice->st = malloc(sizeof(struct st_ref_pic_set));
             st = slice->st;
         } else {
             st = sps->sps_st_ref + slice->short_term_ref_pic_set_idx;
@@ -2485,7 +2477,7 @@ parse_slice_segment_header(struct hevc_nalu_header *headr, uint8_t *data, uint16
     }
 
     byte_alignment(v);
-    // hexdump(stdout, "left", "", v->ptr, 32);
+    hexdump(stdout, "left", "", v->ptr, 32);
     bits_vec_free(v);
     return v->ptr - v->start;
 }
@@ -4282,7 +4274,7 @@ parse_nalu(uint8_t *data, uint16_t len)
 {
     struct hevc_nalu_header h;
     h = *(struct hevc_nalu_header*)data;
-    printf("f %d type %d, layer id %d, tid %d\n", h.forbidden_zero_bit, 
+    VDBG(hevc, "f %d type %d, layer id %d, tid %d\n", h.forbidden_zero_bit,
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id_plus1);
     assert(h.forbidden_zero_bit == 0);
 
@@ -4304,7 +4296,7 @@ parse_nalu(uint8_t *data, uint16_t len)
         }
     }
 
-    hexdump(stdout, "rbsp: ", "", rbsp, len - 2);
+    // hexdump(stdout, "rbsp: ", "", rbsp, len - 2);
     uint32_t SliceAddrRs;
     struct hevc_param_set hps = {
         .vps = first_vps,

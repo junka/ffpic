@@ -234,7 +234,6 @@ read_item(HEIF * h, FILE *f, uint32_t id)
 void
 decode_hvc1(HEIF * h, uint8_t *data, uint64_t len)
 {
-    // printf("len %llu and sample len %d\n", len , sample_len);
     // hexdump(stdout, "mdat ", "", data, 256);
     uint8_t *p = data;
     while (len) {
@@ -257,7 +256,6 @@ decode_items(HEIF * h, FILE *f, struct mdat_box *b)
             // printf("length %lld, %s\n", h->items[h->meta.iinf.item_infos[i].item_id-1].item->extents[0].extent_length,
             //     h->items[h->meta.iinf.item_infos[i].item_id-1].data);
         } else {
-            printf("item_type %s\n", UINT2TYPE(h->meta.iinf.item_infos[i].item_type));
             //take it as real coded data
             decode_hvc1(h, h->items[h->meta.iinf.item_infos[i].item_id-1].data,
                 h->items[h->meta.iinf.item_infos[i].item_id-1].length);
@@ -287,7 +285,6 @@ HEIF_load(const char *filename) {
             read_meta_box(f, &h->meta);
             break;
         case TYPE2UINT("mdat"):
-            printf("mdat\n");
             h->mdat_num ++;
             h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
             read_mdat_box(f, h->mdat + h->mdat_num - 1);
@@ -296,7 +293,7 @@ HEIF_load(const char *filename) {
             break;
         }
         size -= b.size;
-        printf("%s, read %d, left %d\n", UINT2TYPE(type), b.size, size);
+        VDBG(heif, "%s, read %d, left %d\n", UINT2TYPE(type), b.size, size);
     }
 
     // extract some info from meta box
@@ -312,6 +309,7 @@ HEIF_load(const char *filename) {
     }
 
     // process mdata
+    VDBG(heif, "mdat_num %d\n", h->mdat_num);
     decode_items(h, f, h->mdat);
 
     fclose(f);

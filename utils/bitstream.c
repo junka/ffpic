@@ -131,18 +131,23 @@ bits_vec_read_bits(struct bits_vec *v, int n)
 void
 bits_vec_skip_bits(struct bits_vec *v, int n)
 {
-    uint8_t skip  = 0;
-    while (skip < n) {
+    uint8_t skip = 0;
+    int bytes = n / 8;
+    while (skip < bytes) {
         v->ptr ++;
-        skip += 8;
+        skip += 1;
     }
-    v->offset = 8 - (skip - n - v->offset);
+    v->offset += n%8;
+    if (v->offset >= 8) {
+        v->ptr ++;
+         v->offset -= 8;
+    }
 }
 
 int
 bits_vec_aligned(struct bits_vec *v)
 {
-    if (v->offset == 8) {
+    if (v->offset == 0) {
         return 1;
     }
     return 0;

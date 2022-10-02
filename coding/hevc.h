@@ -862,8 +862,10 @@ struct pcm {
 //see 7.3.2.2 sequence parameter set RBSP syntax
 struct sps {
     uint8_t sps_video_parameter_set_id:4;
-    uint8_t sps_max_sub_layer_minus1:3; //less than 7
+    uint8_t sps_ext_or_max_sub_layers_minus1:3;
     uint8_t sps_temporal_id_nesting_flag:1;
+
+    uint8_t sps_max_sub_layer_minus1; //less than 7
 
     struct profile_tier_level sps_profile_tier_level;
 

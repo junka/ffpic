@@ -44,7 +44,7 @@ TGA_probe(const char *filename)
         extra_size += header.color_map_length * (header.color_map_entry_size >> 3);
     }
     //judge by section size
-    if (header.bits_depth>>3 && header.bits_depth%8 == 0) 
+    if (header.bits_depth>>3 > 0 && header.bits_depth%8 == 0) 
         return 0;
    
     return -EINVAL;

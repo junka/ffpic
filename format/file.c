@@ -67,9 +67,9 @@ file_ops_init(void)
     TIFF_init();
     PNM_init();
     JPG_init();
+    HEIF_init();
     TGA_init();
     WEBP_init();
-    HEIF_init();
     ICO_init();
     JP2_init();
     EXR_init();

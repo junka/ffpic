@@ -80,6 +80,9 @@ ViewIdVal(struct vps* vps, int picX)
 }
 
 
+/* See Annex A: Profiles, tiers and levels*/
+#define JUDGE_PROFILE(name, value) ((name##_idc == value) || (name##_compatibility_flag & (1 << value)))
+
 // see 7.3.3 
 static void
 parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
@@ -91,24 +94,17 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         ptl->general_tier_flag = READ_BIT(v);
         ptl->general_profile_idc = READ_BITS(v, 5);
         for (int i = 0; i < 32; i ++) {
-            ptl->general_profile_compatibility_flag |= READ_BIT(v) << i;
+            ptl->general_profile_compatibility_flag |= (READ_BIT(v) << i);
         }
-        printf("general_profile_idc %d\n", ptl->general_profile_idc);
-        printf("general_profile_compatibility_flag 0x%x\n", ptl->general_profile_compatibility_flag);
-        int k = 0;
+        printf("general_profile: idc %d, flag 0x%x\n", ptl->general_profile_idc, ptl->general_profile_compatibility_flag);
         ptl->general_progressive_source_flag = READ_BIT(v);
         ptl->general_interlaced_source_flag = READ_BIT(v);
         ptl->general_non_packed_constraint_flag = READ_BIT(v);
         ptl->general_frame_only_constraint_flag = READ_BIT(v);
-        k += 4;
-        if (ptl->general_profile_idc == 4 || (ptl->general_profile_compatibility_flag & (1 << 4)) ||
-            ptl->general_profile_idc == 5 || (ptl->general_profile_compatibility_flag & (1 << 5)) ||
-            ptl->general_profile_idc == 6 || (ptl->general_profile_compatibility_flag & (1 << 6)) ||
-            ptl->general_profile_idc == 7 || (ptl->general_profile_compatibility_flag & (1 << 7)) ||
-            ptl->general_profile_idc == 8 || (ptl->general_profile_compatibility_flag & (1 << 8)) ||
-            ptl->general_profile_idc == 9 || (ptl->general_profile_compatibility_flag & (1 << 9)) ||
-            ptl->general_profile_idc == 10 || (ptl->general_profile_compatibility_flag & (1 << 10)) ||
-            ptl->general_profile_idc == 11 || (ptl->general_profile_compatibility_flag & (1 << 11)))
+        if (JUDGE_PROFILE(ptl->general_profile, 4) || JUDGE_PROFILE(ptl->general_profile, 5) ||
+            JUDGE_PROFILE(ptl->general_profile, 6) || JUDGE_PROFILE(ptl->general_profile, 7) ||
+            JUDGE_PROFILE(ptl->general_profile, 8) || JUDGE_PROFILE(ptl->general_profile, 9) ||
+            JUDGE_PROFILE(ptl->general_profile, 10) || JUDGE_PROFILE(ptl->general_profile, 11))
         {
             ptl->general_max_12bit_constraint_flag = READ_BIT(v);
             ptl->general_max_10bit_constraint_flag = READ_BIT(v);
@@ -119,42 +115,31 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
             ptl->general_intra_constraint_flag = READ_BIT(v);
             ptl->general_one_picture_only_constraint_flag = READ_BIT(v);
             ptl->general_lower_bit_rate_constraint_flag = READ_BIT(v);
-            k += 9;
-            if (ptl->general_profile_idc == 5 || (ptl->general_profile_compatibility_flag & (1 << 5)) ||
-                ptl->general_profile_idc == 9 || (ptl->general_profile_compatibility_flag & (1 << 9)) ||
-                ptl->general_profile_idc == 10 || (ptl->general_profile_compatibility_flag & (1 << 10)) ||
-                ptl->general_profile_idc == 11 || (ptl->general_profile_compatibility_flag & (1 << 11))) {
+            if (JUDGE_PROFILE(ptl->general_profile, 5) || JUDGE_PROFILE(ptl->general_profile, 9) ||
+                JUDGE_PROFILE(ptl->general_profile, 10) || JUDGE_PROFILE(ptl->general_profile, 11)) {
                 ptl->general_max_14bit_constraint_flag = READ_BIT(v);
                 SKIP_BITS(v, 33);
-                k += 34;
             } else {
                 SKIP_BITS(v, 34);
-                k += 34;
             }
-        } else if (ptl->general_profile_idc == 2 || (ptl->general_profile_compatibility_flag & (1 << 2))) {
+        } else if (JUDGE_PROFILE(ptl->general_profile, 2)) {
             SKIP_BITS(v, 7);
             ptl->general_one_picture_only_constraint_flag = READ_BIT(v);
+            printf("one_picture_only_constraint %d\n", ptl->general_one_picture_only_constraint_flag);
             SKIP_BITS(v, 35);
-            k += 43;
         } else {
             SKIP_BITS(v, 43);
-            k += 43;
         }
-        if (ptl->general_profile_idc == 1 || (ptl->general_profile_compatibility_flag & (1 << 1)) ||
-            ptl->general_profile_idc == 2 || (ptl->general_profile_compatibility_flag & (1 << 2)) ||
-            ptl->general_profile_idc == 3 || (ptl->general_profile_compatibility_flag & (1 << 3)) ||
-            ptl->general_profile_idc == 4 || (ptl->general_profile_compatibility_flag & (1 << 4)) ||
-            ptl->general_profile_idc == 5 || (ptl->general_profile_compatibility_flag & (1 << 5)) ||
-            ptl->general_profile_idc == 9 || (ptl->general_profile_compatibility_flag & (1 << 9)) ||
-            ptl->general_profile_idc == 11 || (ptl->general_profile_compatibility_flag & (1 << 11)))
+        if (JUDGE_PROFILE(ptl->general_profile, 1) || JUDGE_PROFILE(ptl->general_profile, 2) ||
+            JUDGE_PROFILE(ptl->general_profile, 3) || JUDGE_PROFILE(ptl->general_profile, 4) ||
+            JUDGE_PROFILE(ptl->general_profile, 5) || JUDGE_PROFILE(ptl->general_profile, 9) ||
+            JUDGE_PROFILE(ptl->general_profile, 11))
         {
             ptl->general_inbld_flag = READ_BIT(v);
             printf("general_inbld_flag %d\n", ptl->general_inbld_flag);
         } else {
             SKIP_BITS(v, 1);
         }
-        k += 1;
-        printf("read flag bits %d\n", k);
         ptl->general_level_idc = READ_BITS(v, 8);
         for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
             ptl->sub_layer_flag[i].sub_layer_profile_present_flag = READ_BIT(v);
@@ -164,8 +149,6 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
             for (int i = maxNumSubLayersMinus1; i < 8; i ++) {
                 SKIP_BITS(v, 2);
             }
-        }
-        if (maxNumSubLayersMinus1 > 0) {
             ptl->sublayers = malloc(maxNumSubLayersMinus1 * sizeof(struct sub_layer));
             for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
                 if (ptl->sub_layer_flag[i].sub_layer_profile_present_flag) {
@@ -179,47 +162,39 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
                     ptl->sublayers[i].sub_layer_interlaced_source_flag = READ_BIT(v);
                     ptl->sublayers[i].sub_layer_non_packed_constraint_flag = READ_BIT(v);
                     ptl->sublayers[i].sub_layer_frame_only_constraint_flag = READ_BIT(v);
-                    if (ptl->sublayers[i].sub_layer_profile_idc == 4 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 4)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 5 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 5)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 6 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 6)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 7 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 7)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 8 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 8)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 9 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 9)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 10 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 10)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 11 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 11))) 
+                    if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 6) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 7) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 8) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
                     {
                         ptl->sublayers[i].sub_layer_max_12bit_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_max_10bit_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_max_8bit_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_max_422chroma_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_max_420chroma_constraint_flag = READ_BIT(v);
+                        ptl->sublayers[i].sub_layer_max_monochrome_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_intra_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
                         ptl->sublayers[i].sub_layer_lower_bit_rate_constraint_flag = READ_BIT(v);
-                        if (ptl->sublayers[i].sub_layer_profile_idc == 5 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 5)) ||
-                            ptl->sublayers[i].sub_layer_profile_idc == 9 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 9)) ||
-                            ptl->sublayers[i].sub_layer_profile_idc == 10 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 10)) ||
-                            ptl->sublayers[i].sub_layer_profile_idc == 11 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 11)))
+                        if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                            JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
                         {
                             ptl->sublayers[i].sub_layer_max_14bit_constraint_flag = READ_BIT(v);
                             SKIP_BITS(v, 33);
                         } else {
                             SKIP_BITS(v, 34);
                         }
-                    } else if (ptl->sublayers[i].sub_layer_profile_idc == 2 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 2))) {
+                    } else if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2)) {
                         SKIP_BITS(v, 7);
                         ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
                         SKIP_BITS(v, 35);
                     } else {
                         SKIP_BITS(v, 43);
                     }
-                    if (ptl->sublayers[i].sub_layer_profile_idc == 1 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 1)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 2 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 2)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 3 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 3)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 4 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 4)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 5 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 5)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 9 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 9)) ||
-                        ptl->sublayers[i].sub_layer_profile_idc == 11 || (ptl->sublayers[i].sub_layer_profile_compatibility_flag & (1 << 11)))
+                    if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 1) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 3) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
                     {
                         ptl->sublayers[i].sub_layer_inbld_flag = READ_BIT(v);
                     } else {
@@ -767,15 +742,21 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
     struct sps *sps = malloc(sizeof(struct sps));
     sps->sps_video_parameter_set_id = READ_BITS(v, 4);
     printf("sps: sps_video_parameter_set_id %d\n", sps->sps_video_parameter_set_id);
-    // if nuh_layer_id = 0 , else it means sps_ext_or_max_sub_layers_minus1
-    sps->sps_max_sub_layer_minus1 = READ_BITS(v, 3);
-    if (h->nuh_layer_id != 0) {
+    if (h->nuh_layer_id == 0) {
+        sps->sps_max_sub_layer_minus1 = READ_BITS(v, 3);
+    } else {
+        sps->sps_ext_or_max_sub_layers_minus1 = READ_BITS(v, 3);
+        //nuh_layer_id != 0 means the value is sps_ext_or_max_sub_layers_minus1
         //sps_max_sub_layer_minus1 should less than 7, otherwise get from vps
-        sps->sps_max_sub_layer_minus1 = (sps->sps_max_sub_layer_minus1 == 7 ) ? vps->vps_max_sub_layers_minus1 : sps->sps_max_sub_layer_minus1;
+        if (sps->sps_ext_or_max_sub_layers_minus1 == 7) {
+            sps->sps_max_sub_layer_minus1 = vps->vps_max_sub_layers_minus1;
+        } else {
+            sps->sps_max_sub_layer_minus1 = sps->sps_ext_or_max_sub_layers_minus1;
+        }
     }
-    assert(sps->sps_max_sub_layer_minus1 > 7);
-    int multilayer_ext_sps_flag = (h->nuh_layer_id != 0 && sps->sps_max_sub_layer_minus1 == 7);
-    if (!multilayer_ext_sps_flag) {
+    assert(sps->sps_max_sub_layer_minus1 < 7);
+    int MultiLayerExtSpsFlag = (h->nuh_layer_id != 0 && sps->sps_max_sub_layer_minus1 == 7);
+    if (!MultiLayerExtSpsFlag) {
         //almost must go here
         sps->sps_temporal_id_nesting_flag = READ_BIT(v);
         // when sps_temporal_id_nesting_flag should be 1 if sps_max_sub_layers_minus1 is 0
@@ -786,7 +767,7 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
     //less than 16
     printf("sps: sps_seq_parameter_set_id %d\n", sps->sps_seq_parameter_set_id);
     
-    if (multilayer_ext_sps_flag) {
+    if (MultiLayerExtSpsFlag) {
         // uint8_t update_rep_format_flag = READ_BIT(v);
         if (READ_BIT(v)) {
             sps->sps_rep_format_idx = READ_BITS(v, 8);
@@ -817,7 +798,7 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
 
     sps->log2_max_pic_order_cnt_lsb_minus4 = GOL_UE(v);
     //should be less than 12
-    if (LIKELY(!multilayer_ext_sps_flag)) {
+    if (LIKELY(!MultiLayerExtSpsFlag)) {
         // uint8_t sps_sub_layer_ordering_info_present_flag = READ_BIT(v);
         if (READ_BIT(v)) {
             // all sub layer
@@ -837,12 +818,10 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
     sps->max_transform_hierarchy_depth_intra = GOL_UE(v);
     
     // sps->scaling_list_enabled_flag = READ_BIT(v);
-    // if (sps->scaling_list_enabled_flag) {
     if (READ_BIT(v)) {
         // sps->sps_scaling_list_data_present_flag = READ_BIT(v);
-        // if (sps->sps_scaling_list_data_present_flag) {
         uint8_t sps_infer_scaling_list_flag = 0;
-        if (UNLIKELY(multilayer_ext_sps_flag)) {
+        if (UNLIKELY(MultiLayerExtSpsFlag)) {
             sps_infer_scaling_list_flag = READ_BIT(v);
         }
         if (UNLIKELY(sps_infer_scaling_list_flag)) {
@@ -1920,7 +1899,9 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
 
     parse_profile_tier_level(v, &vps->vps_profile_tier_level, 1, vps->vps_max_sub_layers_minus1);
     printf("vps_max_sub_layers_minus1 %d\n", vps->vps_max_sub_layers_minus1);
+
     vps->vps_sub_layer_ordering_info_present_flag = READ_BIT(v);
+    printf("vps_sub_layer_ordering_info_present_flag %d\n", vps->vps_sub_layer_ordering_info_present_flag);
 
     for (int i = vps->vps_sub_layer_ordering_info_present_flag ? 0: vps->vps_max_sub_layers_minus1;
             i <= vps->vps_max_sub_layers_minus1; i ++) {
@@ -1932,6 +1913,7 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
     vps->vps_max_layer_id = READ_BITS(v, 6);
     vps->vps_num_layer_sets_minus1 = GOL_UE(v);
 
+    printf("vps_max_layer_id %d\n", vps->vps_max_layer_id);
     printf("vps_num_layer_sets_minus1 %d\n", vps->vps_num_layer_sets_minus1);
 
     for (int i = 1; i <= vps->vps_num_layer_sets_minus1; i ++) {
@@ -1951,7 +1933,6 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
         vps->vps_timing_info = malloc(sizeof(struct vps_timing_info));
         parse_vps_timing_info(v, vps, vps->vps_timing_info);
     }
-
     // vps->vps_extension_flag = READ_BIT(v);
     if (READ_BIT(v)) {
         while (!BYTE_ALIGNED(v)) {
@@ -4303,9 +4284,9 @@ parse_nalu(uint8_t *data, uint16_t len)
     h = *(struct hevc_nalu_header*)data;
     printf("f %d type %d, layer id %d, tid %d\n", h.forbidden_zero_bit, 
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id_plus1);
-    
-    // hexdump(stdout, "nalu: ", data, len);
-    uint8_t *rbsp = malloc(len);
+    assert(h.forbidden_zero_bit == 0);
+
+    uint8_t *rbsp = malloc(len - 2);
     
     // See 7.3.1.1
     uint16_t nrbsp = 0;
@@ -4322,6 +4303,8 @@ parse_nalu(uint8_t *data, uint16_t len)
             p ++;
         }
     }
+
+    hexdump(stdout, "rbsp: ", "", rbsp, len - 2);
     uint32_t SliceAddrRs;
     struct hevc_param_set hps = {
         .vps = first_vps,

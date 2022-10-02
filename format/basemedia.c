@@ -91,11 +91,18 @@ int
 read_ftyp(FILE *f, void *d)
 {
     struct ftyp_box *ftyp = (struct ftyp_box*)d;
-    fread(ftyp, 12, 1, f);
+    int len;
+    len = fread(ftyp, 12, 1, f);
+    if (len < 1) {
+        return -1;
+    }
     ftyp->size = SWAP(ftyp->size);
     if (ftyp->size > 12) {
         ftyp->compatible_brands = malloc(((ftyp->size - 12)));
-        fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
+        len = fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
+        if (len < ((ftyp->size - 12)>>2)) {
+            return -1;
+        }
     }
     return ftyp->size;
 }

@@ -13,12 +13,12 @@ uint32_t
 golomb_decode_unsigned_value(struct bits_vec *v, int kexp)
 {
     uint32_t code = 0; 
-    uint8_t zero_count = -1;
+    int zero_count = -1;
     uint8_t bit_count = 0;
     uint8_t bit = 0;
 
     /* count leading zero bits */
-    while (bit == 0) {
+    while (bit == 0 && zero_count < 32) {
         bit = READ_BIT(v);
         zero_count ++;
     }

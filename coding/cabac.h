@@ -5,19 +5,26 @@
 extern "C"{
 #endif
 
-#define STATE_NUM  ((1 << 6) * 2)
+#define STATE_BITS (6)
+#define STATE_NUM  ((1 << STATE_BITS) * 2) // *2 for MPS = [0|1]
 
 typedef struct cabac_dec {
     uint64_t value;
     uint32_t range;     //[127, 254]
     int count;
+    uint8_t state;  //state need 6 bits, put mps or lps at the least bit
     struct bits_vec *bits;
+    uint8_t* LPSTable[64];
+    uint8_t* RenormTable;
 } cabac_dec;
 
+cabac_dec * cabac_dec_init(struct bits_vec*);
 
-uint32_t cabac_dec_bit(struct bits_vec *bits, int prob);
+int cabac_dec_bin(cabac_dec *br);
 
-#define CABAC(v) cabac_dec_bit(v, 0)
+cabac_dec *cabac_lookup(struct bits_vec *v);
+
+#define CABAC(v) cabac_dec_bin(cabac_lookup(v))
 
 #ifdef __cplusplus
 }

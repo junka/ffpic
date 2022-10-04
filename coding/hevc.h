@@ -150,7 +150,6 @@ enum slice_type {
     SLICE_TYPE_I = 2,
 };
 
-
 struct hevc_nalu_header {
 // #ifdef LITTLE_ENDIAN
 //     uint16_t nuh_temporal_id_plus1:3;
@@ -994,7 +993,11 @@ struct sao {
     uint32_t sao_band_position[3][64][64];
     uint32_t sao_eo_class_luma;
     uint32_t sao_eo_class_chroma;
+
+    uint32_t SaoTypeIdx[3][64][64];
 };
+
+
 
 struct slice_long_term {
     uint8_t lt_idx_sps;
@@ -1026,11 +1029,12 @@ struct slice_segment_header {
 
     GUE(slice_type);
     uint8_t pic_output_flag:1;
-    uint8_t colour_plane_id:2;
+    uint8_t colour_plane_id:2; // 0-2 means: Y, Cb, Cr
 
     uint32_t slice_pic_order_cnt_lsb;
     
     uint8_t short_term_ref_pic_set_sps_flag;
+
     struct st_ref_pic_set *st;
 
     uint32_t short_term_ref_pic_set_idx;
@@ -1044,6 +1048,8 @@ struct slice_segment_header {
     struct slice_long_term* terms;
 
     int* DeltaPocMsbCycleLt;
+
+    uint8_t slice_temporal_mvp_enabled_flag;
 
     uint8_t inter_layer_pred_enabled_flag;
     uint32_t num_inter_layer_ref_pics_minus1;
@@ -1146,6 +1152,8 @@ struct slice_segment_header {
     int CuQpDeltaVal;
     int IsCuChromaQpOffsetCoded;
 
+    int Log2MinCuQpDeltaSize;
+    int Log2MinCuChromaQpOffsetSize;
 
     //palette_predictor_entries
     struct palette_predictor_entries ppe;
@@ -1293,17 +1301,36 @@ struct chroma_qp_offset {
 };
 
 
+struct quad_tree {
+    struct cu *cu;
+    uint8_t split_cu_flag;
+    struct quad_tree *n;
+    struct quad_tree *r1;
+    struct quad_tree *t1;
+    struct quad_tree *rt1;
+};
+
+struct ctu {
+    struct sao *sao;
+    struct quad_tree *cqt;
+};
 
 
 struct hevc_param_set {
+    int vps_num;
     struct vps *vps;
+
+    int sps_num;
     struct sps *sps;
+
+    int pps_num;
     struct pps *pps;
 };
 
 struct hevc_slice {
     struct hevc_nalu_header *nalu;
     struct slice_segment_header *slice;
+    struct ctu *ctu;
 };
 
 #pragma pack(pop)

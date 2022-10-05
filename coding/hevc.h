@@ -1226,6 +1226,13 @@ struct trans_tree {
     uint32_t cbf_cb[64][64][3];
     uint32_t cbf_cr[64][64][3];
     uint32_t cbf_luma[64][64][3];
+
+    struct trans_tree *t;
+    struct trans_tree *d;
+    struct trans_tree *r;
+    struct trans_tree *rd;
+
+    struct trans_unit *tu;
 };
 
 
@@ -1330,6 +1337,7 @@ struct hevc_param_set {
 struct hevc_slice {
     struct hevc_nalu_header *nalu;
     struct slice_segment_header *slice;
+    struct rps *rps;
     struct ctu *ctu;
 };
 

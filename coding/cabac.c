@@ -136,6 +136,7 @@ cabac_dec_init(struct bits_vec *v)
     dec->value = READ_BITS(v, 8) << 8;
     dec->value |= READ_BITS(v, 8);
     dec->range = 510;
+    dec->bypass = 0;
 
     for (int i = 0; i < 64; i ++) {
         dec->LPSTable[i] = LPSTable[i];
@@ -148,6 +149,20 @@ cabac_dec_init(struct bits_vec *v)
     }
     dec_list[dec_num++] = dec;
     return dec;
+}
+
+//see Figure 9-7
+static void
+renormD(cabac_dec *dec, uint32_t scaledRange)
+{
+    if (scaledRange < (256 << 7)) {
+        dec->range = scaledRange >> 6;
+        dec->value += dec->value;
+        if (++dec->count == 0) {
+            dec->count = -8;
+            dec->value += READ_BITS(dec->bits, 8);
+        }
+    }
 }
 
 void
@@ -199,14 +214,7 @@ cabac_dec_terminate(cabac_dec *dec)
         binVal = 1;
     } else {
         binVal = 0;
-        if (scaledRange < (256 << 7)) {
-            dec->range = scaledRange >> 6;
-            dec->value += dec->value;
-            if (++dec->count == 0) {
-                dec->count = -8;
-                dec->value += READ_BITS(dec->bits, 8);
-            }
-        }
+        renormD(dec, scaledRange);
     }
     return binVal;
 }
@@ -224,23 +232,16 @@ cabac_dec_decision(cabac_dec *dec)
         //MPS (Most Probable Symbol)
         binVal = dec->state & 0x1;
         dec->state = NextStateMPS[state];
-        if (scaledRange < (256 << 7)) {
-            dec->range = scaledRange >> 6;
-            dec->value += dec->value;
-            if (++dec->count == 0) {
-                dec->count = -8;
-                dec->value += READ_BITS(dec->bits, 8);
-            }
-        }
+        renormD(dec, scaledRange);
     } else {
         //LPS (Least Probable Symbol)
         binVal = 1 - dec->state & 0x1;
         int numbits = dec->RenormTable[rangelps>>3];
+        dec->state = NextStateLPS[state];
         dec->value = (dec->value - scaledRange) << numbits;
         dec->range = rangelps << numbits;
-        dec->state = NextStateLPS[state];
-
         dec->count += numbits;
+    
         if (dec->count >= 0) {
             dec->value += READ_BITS(dec->bits, 8) << dec->count;
             dec->count -= 8;
@@ -253,8 +254,9 @@ cabac_dec_decision(cabac_dec *dec)
 int
 cabac_dec_bin(cabac_dec *dec)
 {
-    if (!dec) {
-        return 1;
+    if (dec->bypass) {
+        return cabac_dec_bypass(dec);
     }
-    return 0;
+
+    return cabac_dec_decision(dec);
 }

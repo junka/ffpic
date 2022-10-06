@@ -958,7 +958,7 @@ enum rps_marking {
 
 
 static int
-PicOrderCnt(struct slice_segment_header *slice, struct sps *sps, int picX, bool IRAP)
+PicOrderCnt(struct hevc_slice *hslice, struct sps *sps, int picX, bool IRAP)
 {
     /* Random access point pictures, where a decoder may start decoding a coded video sequence.
       These are referred to as Intra Random Access Pictures (IRAP). Three IRAP picture types exist:
@@ -966,7 +966,9 @@ PicOrderCnt(struct slice_segment_header *slice, struct sps *sps, int picX, bool 
       The decoding process for a coded video sequence always starts at an IRAP. */
     int prevTid0Pic = 0;//has TemporalId == 0 and not RASL, RADL, SLNR
     int PicOrderCntMsb;
+    int PicOrderCntVal = 0;
 
+    struct slice_segment_header *slice = hslice->slice;
     //see 8.3.1
     int prevPicOrderCntMsb = 0;// = PicOrderCntMsb;
     int prevPicOrderCntLsb = 0;
@@ -985,16 +987,21 @@ PicOrderCnt(struct slice_segment_header *slice, struct sps *sps, int picX, bool 
         } else {
             PicOrderCntMsb = prevPicOrderCntMsb;
         }
+        //for BLA 
+        uint16_t pic_type = hslice->nalu->nal_unit_type;
+        if (pic_type == BLA_N_LP ||pic_type == BLA_W_LP || pic_type == BLA_W_RADL) {
+            PicOrderCntMsb = 0;
+        }
+        //see (8-2)
+        PicOrderCntVal = PicOrderCntMsb + slice->slice_pic_order_cnt_lsb;
     }
-    //see (8-2)
-    int PicOrderCntVal = PicOrderCntMsb + slice->slice_pic_order_cnt_lsb;
     return PicOrderCntVal;
 }
 
 static int
-DiffPicOrderCnt(struct slice_segment_header *slice, struct sps *sps, int picA, int picB)
+DiffPicOrderCnt(struct hevc_slice *hslice, struct sps *sps, int picA, int picB)
 {
-    return PicOrderCnt(slice, sps, picA, true) - PicOrderCnt(slice, sps, picB, true);
+    return PicOrderCnt(hslice, sps, picA, true) - PicOrderCnt(hslice, sps, picB, true);
 }
 
 static bool
@@ -1012,15 +1019,17 @@ is_ref_pic_in_dpb(int picX, int PicOrderCntVal, int Poc, int layerid, int currPi
  for reference picture list construction 
 */
 static struct rps *
-process_reference_picture_set( bool idr, struct slice_segment_header *slice, struct hevc_nalu_header *headr, struct hevc_param_set * hps)
+process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_param_set * hps)
 {
+    struct slice_segment_header *slice = hslice->slice;
+    struct hevc_nalu_header *headr = hslice->nalu;
     struct rps *rps = calloc(1, sizeof(*rps));
     int currPicLayerId = headr->nuh_layer_id;
     int picX = 0;
 
     //see (7-8)
     int MaxPicOrderCntLsb = 2 << (hps->sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
-    int PicOrderCntVal = PicOrderCnt(slice, hps->sps, picX, false);
+    int PicOrderCntVal = PicOrderCnt(hslice, hps->sps, picX, false);
     /* Five lists of picture order count values are constructed to derive the RPS.
      These five lists are PocStCurrBefore, PocStCurrAfter, PocStFoll, PocLtCurr and PocLtFoll,
      with NumPocStCurrBefore, NumPocStCurrAfter, NumPocStFoll, NumPocLtCurr and NumPocLtFoll
@@ -1183,8 +1192,10 @@ process_gerneration_of_one_unavailable_picture()
 /*see 8.3.4
 This process is invoked at the beginning of the decoding process for each P or B slice */
 static void
-process_reference_picture_lists_construction(struct rps *rps, struct slice_segment_header *slice, struct hevc_param_set * hps)
+process_reference_picture_lists_construction(struct hevc_slice *hslice, struct hevc_param_set * hps)
 {
+    struct rps *rps = hslice->rps;
+    struct slice_segment_header *slice = hslice->slice;
     if (slice->slice_type == SLICE_TYPE_I) {
         return ;
     }
@@ -1253,8 +1264,10 @@ process_collocated_picture_and_no_backward_predication_flag(struct slice_segment
 
 //I.8.3.5, when the current slice is a P or B slice.
 static void
-process_target_reference_index_for_residual_predication(struct slice_segment_header *slice, struct hevc_param_set * hps, struct rps *rps)
+process_target_reference_index_for_residual_predication(struct hevc_slice *hslice, struct hevc_param_set * hps)
 {
+    struct rps *rps = hslice->rps;
+    struct slice_segment_header *slice = hslice->slice;
     if (slice->slice_type == SLICE_TYPE_I) {
         return;
     }
@@ -1268,7 +1281,7 @@ process_target_reference_index_for_residual_predication(struct slice_segment_hea
         int minPocDiff = (1 << 15) - 1;
         if (x == 0) {
             for (int i = 0; i <= slice->num_ref_idx_l0_active_minus1; i ++) {
-                int pocDiff = ABS(DiffPicOrderCnt(slice, sps, CurrPic, rps->RefPicList0[i]));
+                int pocDiff = ABS(DiffPicOrderCnt(hslice, sps, CurrPic, rps->RefPicList0[i]));
                 if (pocDiff !=0 && pocDiff < minPocDiff) {
                     minPocDiff = pocDiff;
                     RpRefIdxL0 = 0;
@@ -1277,7 +1290,7 @@ process_target_reference_index_for_residual_predication(struct slice_segment_hea
             }
         } else if (x == 1) {
             for (int i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++) {
-                int pocDiff = ABS(DiffPicOrderCnt(slice, sps, CurrPic, rps->RefPicList1[i]));
+                int pocDiff = ABS(DiffPicOrderCnt(hslice, sps, CurrPic, rps->RefPicList1[i]));
                 if (pocDiff !=0 && pocDiff < minPocDiff) {
                     minPocDiff = pocDiff;
                     RpRefIdxL1 = 0;
@@ -2651,7 +2664,7 @@ parse_cu_extension(struct bits_vec *v, struct hevc_slice *hslice,
     int DbbpEnabledFlag = sps->sps_3d_ext[DepthFlag].dbbp_enabled_flag && slice->in_comp_pred_flag;
 
     int picx = 0;
-    int PicOrderCntVal = PicOrderCnt(slice, sps, picx, (headr->nal_unit_type >= BLA_W_LP && headr->nal_unit_type <= RSV_IRAP_VCL23));
+    int PicOrderCntVal = PicOrderCnt(hslice, sps, picx, (headr->nal_unit_type >= BLA_W_LP && headr->nal_unit_type <= RSV_IRAP_VCL23));
     
     //see I-29
     int InterDcOnlyEnabledFlag = sps->sps_3d_ext[DepthFlag].inter_dc_only_enabled_flag;
@@ -4373,14 +4386,15 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 
     /* invoke at the beginning of the decoding process */
     hslice->rps = process_reference_picture_set((headr->nal_unit_type == IDR_W_RADL || headr->nal_unit_type == IDR_N_LP),
-                                  slice, headr, hps);
-    process_reference_picture_lists_construction(hslice->rps, slice, hps);
-    process_target_reference_index_for_residual_predication(slice, hps, hslice->rps);
+                                  hslice, hps);
+    process_reference_picture_lists_construction(hslice, hps);
+    process_target_reference_index_for_residual_predication(hslice, hps);
 
     //see 7.4.7.1 slice_segment_address
     uint32_t CtbAddrInRs = slice->slice_segment_address;
     uint32_t CtbAddrInTs = pps->CtbAddrRsToTs[CtbAddrInRs];
     do {
+        bits_vec_dump(v);
         printf("CtbAddrInTs %u, CtbAddrInRs %u\n", CtbAddrInTs, CtbAddrInRs);
         struct ctu * ctu = coding_tree_unit(v, hslice, hps, CtbAddrInTs, CtbAddrInRs, SliceAddrRs, TileId);
         end_of_slice_segment_flag = CABAC(v);
@@ -4390,7 +4404,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
                 (pps->entropy_coding_sync_enabled_flag && (CtbAddrInRs % slice->PicWidthInCtbsY == 0 ||
                 TileId[CtbAddrInTs] != TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]])))) {
             uint8_t end_of_subset_one_bit = CABAC(v); //should be equal to 1
-            bits_vec_dump(v);
+
             assert(end_of_subset_one_bit == 1);
             byte_alignment(v);
         }

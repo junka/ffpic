@@ -16,6 +16,7 @@ typedef struct cabac_dec {
     struct bits_vec *bits;
     uint8_t* LPSTable[64];
     uint8_t* RenormTable;
+    int bypass;
 } cabac_dec;
 
 cabac_dec * cabac_dec_init(struct bits_vec*);

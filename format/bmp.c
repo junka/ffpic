@@ -41,6 +41,152 @@ BMP_probe(const char* filename)
     return -EINVAL;
 }
 
+int RLE8_decode(uint8_t *data)
+{
+    static int buffer_len = 0;
+    static uint8_t buffer[256];
+    static int n = 0;
+    if (data)
+        buffer[buffer_len++] = *data;
+
+    if (buffer_len < 2) {
+        return -1; /* buffering*/
+    }
+    uint8_t first = buffer[0];
+    uint8_t second = buffer[1];
+    if (first == 0) {
+        if (second > 2 && buffer_len < second + 4 - second % 4 + 2) {
+            return -1; /* buffering */
+        } else if (second == 2 && buffer_len < 4) {
+            return -1;
+        }
+    }
+
+    if (first > 0) {
+        /* Encoded Mode */
+        if (n == 0) {
+            n = first;
+        }
+        n --;
+        if (n == 0) {
+            buffer_len = 0;
+        }
+        return second;
+    }
+
+    /* Absolute Mode */
+    if (second > 2) {
+        if (n == 0) {
+            n = second;
+        }
+        n --;
+        if (n == 0) {
+            buffer_len = 0;
+        }
+        return buffer[1 + second - n];
+    }
+
+    /* escape */
+    switch (second) {
+        case 0:
+            /* end of line */
+            buffer_len = 0;
+            return -257;
+        case 1:
+            /* end of bitmap */
+            buffer_len = 0;
+            return -258;
+        case 2:
+            if (n == 0)
+                n = 2;
+            /*  delta */
+            n --;
+            if (n == 0) {
+                buffer_len = 0;
+            }
+            return - buffer[1+ 2 - n];
+        default:
+            break;
+    }
+    return -1;
+}
+
+
+int RLE4_decode(uint8_t *data)
+{
+    static int buffer_len = 0;
+    static uint8_t buffer[256];
+    static int n = 0;
+    if (data)
+        buffer[buffer_len++] = *data;
+
+    if (buffer_len < 2) {
+        return -1; /* buffering*/
+    }
+
+    uint8_t first = buffer[0];
+    uint8_t second = buffer[1];
+    uint8_t second_h = buffer[1] >> 4;
+    uint8_t second_l = buffer[1] & 0xf;
+
+    if (first == 0) {
+        if (second > 2 && buffer_len < second/2 + 4 - (second/2) % 4 + 2) {
+            return -1; /* buffering */
+        } else if (second == 2 && buffer_len < 4) {
+            return -1;
+        }
+    }
+
+    if (first > 0) {
+        /* Encoded Mode */
+        if (n == 0) {
+            n = first;
+        }
+        n --;
+        if (n == 0) {
+            buffer_len = 0;
+        }
+        return (first - n) % 2 ? second_h : second_l;
+    }
+
+    /* Absolute Mode */
+    if (second > 2) {
+        if (n == 0) {
+            n = second;
+        }
+        n --;
+        if (n == 0) {
+            buffer_len = 0;
+        }
+        return (buffer[1 + (second - n)/2 + (second - n) % 2] >> 4 * ((second - n) % 2))& 0xF;
+    }
+
+    /* escape */
+    switch (second) {
+        case 0:
+            /* end of line */
+            buffer_len = 0;
+            return -257;
+        case 1:
+            /* end of bitmap */
+            buffer_len = 0;
+            return -258;
+        case 2:
+            if (n == 0)
+                n = 2;
+            /*  delta */
+            n --;
+            if (n == 0) {
+                buffer_len = 0;
+            }
+            return - buffer[1+ 2 - n];
+        default:
+            break;
+    }
+
+    return -1;
+}
+
 static struct pic* 
 BMP_load(const char* filename)
 {
@@ -57,8 +203,7 @@ BMP_load(const char* filename)
             p->rmask = b->color.red_mask;
             p->gmask = b->color.green_mask;
             p->bmask = b->color.blue_mask;
-        }
-        else if (b->dib.compression == BI_ALPHABITFIELDS) {
+        } else if (b->dib.compression == BI_ALPHABITFIELDS) {
             fread(&b->color, 16, 1, f);
             p->amask = b->color.alpha_mask;
             p->rmask = b->color.red_mask;
@@ -92,13 +237,82 @@ BMP_load(const char* filename)
             fread(b->data + p->pitch * i, p->pitch, 1, f);
         }
     } else {
-        for (int i = upper; i >= bottom; i += delta) {
-            for(int j = 0; j < p->width; j ++) {
-                uint8_t px = fgetc(f);
-                b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
-                b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
-                b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
-                b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
+        if (b->dib.compression == BI_RLE8) {
+            int i = upper, j = 0;
+            int px;
+            uint8_t ret = fgetc(f);
+            px = RLE8_decode(&ret);
+            while (!feof(f)) {
+                while (px == -1) {
+                    ret = fgetc(f);
+                    px = RLE8_decode(&ret);
+                }
+                if (px < -1) {
+                    if (px == -257) {
+                        i += delta;
+                        j = 0;
+                    } else if (px == -258) {
+                        break;
+                    } else {
+                        j -= px;
+                        px = RLE8_decode(NULL);
+                        i -= delta * (px);
+                    }
+                    ret = fgetc(f);
+                    px = RLE8_decode(&ret);
+                }
+
+                while (px >= 0) {
+                    b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
+                    b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
+                    b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
+                    b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
+                    j ++;
+                    px = RLE8_decode(NULL);
+                }
+            }
+        } else if (b->dib.compression == BI_RLE4) {
+            int i = upper, j = 0;
+            int px;
+            uint8_t ret = fgetc(f);
+            px = RLE4_decode(&ret);
+            while (!feof(f)) {
+                while (px == -1) {
+                    ret = fgetc(f);
+                    px = RLE4_decode(&ret);
+                }
+                if (px < -1) {
+                    if (px == -257) {
+                        i += delta;
+                        j = 0;
+                    } else if (px == -258) {
+                        break;
+                    } else {
+                        j -= px;
+                        px = RLE4_decode(NULL);
+                        i -= delta * (px);
+                    }
+                    ret = fgetc(f);
+                    px = RLE4_decode(&ret);
+                }
+                while (px >= 0) {
+                    b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
+                    b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
+                    b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
+                    b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
+                    j ++;
+                    px = RLE4_decode(NULL);
+                }
+            }
+        } else {
+            for (int i = upper; i >= bottom; i += delta) {
+                for(int j = 0; j < p->width; j ++) {
+                    uint8_t px = fgetc(f);
+                    b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
+                    b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
+                    b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
+                    b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
+                }
             }
         }
     }

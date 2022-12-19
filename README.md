@@ -19,21 +19,22 @@ this will include format probe
 
 #### File Format
 supported file formart is:
-| Name | Decoding| Comments |
-|:----:|:-------:|:--------:|
-| GIF | y | Graphaic Interchange Format |
-| PNG | y | Portable Network Graphics|
-| BMP |    y |    Microsoft BMP image |
-| PBM | y | Portable BitMap image |
-| PGM | y | Portable GrayMap image |
-| PPM | y | Portable PixelMap image |
-| PAM | y | Portable Arbitrary image |
-| TGA | y | Truevision raster graphic format|
-| TIFF | y | Tag Image File Format |
-| JPG | y | jpeg lossy image |
-| ICO | y | icon bitmap image |
-| EXR | y | OpenEXR image |
+| Name  | Decoding |             Comments             |
+| :---: | :------: | :------------------------------: |
+|  GIF  |    y     |   Graphaic Interchange Format    |
+|  PNG  |    y     |    Portable Network Graphics     |
+|  BMP  |    y     |       Microsoft BMP image        |
+|  PBM  |    y     |      Portable BitMap image       |
+|  PGM  |    y     |      Portable GrayMap image      |
+|  PPM  |    y     |     Portable PixelMap image      |
+|  PAM  |    y     |     Portable Arbitrary image     |
+|  TGA  |    y     | Truevision raster graphic format |
+| TIFF  |    y     |      Tag Image File Format       |
+|  JPG  |    y     |         jpeg lossy image         |
+|  ICO  |    y     |        icon bitmap image         |
+|  EXR  |    y     |          OpenEXR image           |
 
+[Format reference](http://www.martinreddy.net/gfx/2d-hi.html)
 
 ### display rgb data
 Tips on display:
@@ -44,4 +45,4 @@ So, a reorder is need for display.
 
 ### Samples
 
-take bmp, gif, etc samples from [https://filesamples.com/categories/image]
+take bmp, gif, etc samples from [filesamples](https://filesamples.com/categories/image)

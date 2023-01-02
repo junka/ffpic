@@ -15,12 +15,6 @@ static sdl_screen scrn = {
     .t = NULL,
 };
 
-static int 
-display_main(void *data)
-{
-    return 0;
-}
-
 
 int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch,
             uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
@@ -37,14 +31,16 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
 
     rect.w = width;
     rect.h = height;
-    rect.x = left;// + scrn.width/2 - width/2;
-    rect.y = top; // + scrn.height/2 - height/2;
+    rect.x = left;
+    rect.y = top;
 
     if (scrn.t == NULL) {
         scrn.t = texture;
         SDL_SetRenderTarget(scrn.r, scrn.t);
     } else {
-        SDL_RenderCopy(scrn.r, scrn.t, NULL, NULL);
+        SDL_RenderCopy(scrn.r, scrn.t, NULL, &rect);
+        // SDL_RenderClear(scrn.r);
+        // SDL_RenderPresent(scrn.r);
     }
     SDL_RenderCopy(scrn.r, texture, NULL, &rect);
     SDL_RenderPresent(scrn.r);
@@ -55,64 +51,9 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
     return 0;
 }
 
-static int 
-sdl_screen_init(const char* title, int w, int h)
-{
-    int ret;
-
-    ret = SDL_Init(SDL_INIT_EVERYTHING);
-    if (ret == -1) {
-        return -1;
-    }
-
-    // scrn.tid = SDL_CreateThread(display_main, "Display Thread", NULL);
-    scrn.w = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                w, h, SDL_WINDOW_SHOWN);
-    if (scrn.w == NULL) {
-        return -1;
-    }
-
-    scrn.r = SDL_CreateRenderer(scrn.w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (scrn.r == NULL) {
-        SDL_DestroyWindow(scrn.w);
-        return -1;
-    }
-
-    scrn.t = SDL_CreateTexture(scrn.r, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING, w, h);
-    if (scrn.t == NULL) {
-        SDL_DestroyRenderer(scrn.r);
-        SDL_DestroyWindow(scrn.w);
-        return -1;
-    }
-    
-    // scrn.width = w;
-    // scrn.height = h;
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-
-    SDL_SetRenderTarget(scrn.r, scrn.t);
-    SDL_SetRenderDrawBlendMode(scrn.r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(scrn.r, 0xFF, 0xFF, 0xFF, 0xFF);
-    SDL_RenderClear(scrn.r);
-    SDL_RenderPresent(scrn.r);
-    return 0;
-}
-
-static int 
-sdl_screen_uninit()
-{
-    SDL_Surface * ws = SDL_GetWindowSurface(scrn.w);
-    SDL_FreeSurface(ws);
-    SDL_DestroyTexture(scrn.t);
-    SDL_DestroyRenderer(scrn.r);
-    SDL_DestroyWindow(scrn.w);
-    SDL_Quit();
-    return 0;
-}
 
 void pic_poll_block(bool q)
 {
-    // int status;
-    // SDL_WaitThread(scrn.tid, &status);
     SDL_RenderClear(scrn.r);
     SDL_Event e;
     bool quit = false;
@@ -131,6 +72,60 @@ void pic_poll_block(bool q)
         }
     }
 }
+
+static int 
+sdl_screen_init(const char* title, int w, int h)
+{
+    int ret;
+
+    ret = SDL_Init(SDL_INIT_EVERYTHING);
+    if (ret == -1) {
+        return -1;
+    }
+
+    scrn.w = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                w, h, SDL_WINDOW_SHOWN);
+    if (scrn.w == NULL) {
+        return -1;
+    }
+
+    scrn.r = SDL_CreateRenderer(scrn.w, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (scrn.r == NULL) {
+        SDL_DestroyWindow(scrn.w);
+        return -1;
+    }
+
+    scrn.t = SDL_CreateTexture(scrn.r, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING, w, h);
+    if (scrn.t == NULL) {
+        SDL_DestroyRenderer(scrn.r);
+        SDL_DestroyWindow(scrn.w);
+        return -1;
+    }
+
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+
+    SDL_SetRenderTarget(scrn.r, scrn.t);
+    SDL_SetRenderDrawBlendMode(scrn.r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(scrn.r, 0xFF, 0xFF, 0xFF, 0xFF);
+    SDL_RenderClear(scrn.r);
+    SDL_RenderPresent(scrn.r);
+    pic_poll_block(true);
+
+    return 0;
+}
+
+static int 
+sdl_screen_uninit()
+{
+    SDL_Surface * ws = SDL_GetWindowSurface(scrn.w);
+    SDL_FreeSurface(ws);
+    SDL_DestroyTexture(scrn.t);
+    SDL_DestroyRenderer(scrn.r);
+    SDL_DestroyWindow(scrn.w);
+    SDL_Quit();
+    return 0;
+}
+
 
 display_t sdl_display = {
     .name = "SDL2",

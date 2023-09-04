@@ -34,9 +34,8 @@ ICO_probe(const char *filename)
 static struct pic* 
 ICO_load(const char *filename)
 {
-    struct pic *p = (struct pic *)malloc(sizeof(struct pic));
-    ICO *c = (ICO *)malloc(sizeof(ICO));
-    p->pic = c;
+    struct pic *p = pic_alloc(sizeof(ICO));
+    ICO *c = p->pic;
     p->depth = 32;
     FILE *f = fopen(filename, "rb");
     fread(&c->head, sizeof(struct ico_header), 1, f);
@@ -162,8 +161,7 @@ ICO_free(struct pic *p)
         free(c->images);
     if (c->dir)
         free(c->dir);
-    free(c);
-    free(p);
+    pic_free(p);
 }
 
 static void 

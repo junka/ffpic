@@ -244,8 +244,8 @@ PNG_load(const char* filename)
         "gIFx",
         "IEND"
     };
-    struct pic *p = calloc(1, sizeof(struct pic));
-    PNG * b = calloc(1, sizeof(PNG));
+    struct pic *p = pic_alloc(sizeof(struct pic));
+    PNG * b = p->pic;
 
     FILE *f = fopen(filename, "rb");
     fread(&b->sig, sizeof(struct png_file_header), 1, f);
@@ -486,7 +486,6 @@ PNG_load(const char* filename)
 
     PNG_unfilter(b, udata, b->size);
     free(udata);
-    p->pic = b;
     p->width = b->ihdr.width;
     p->height = b->ihdr.height;
     p->depth = calc_png_bits_per_pixel(b);
@@ -515,8 +514,7 @@ PNG_free(struct pic* p)
         free(b->freqs);
     if (b->data)
         free(b->data);
-    free(b);
-    free(p);
+    pic_free(p);
 }
 
 static void 

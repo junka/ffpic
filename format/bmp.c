@@ -190,9 +190,9 @@ int RLE4_decode(uint8_t *data)
 static struct pic* 
 BMP_load(const char* filename)
 {
-    BMP * b = calloc(sizeof(BMP), 1);
+    struct pic *p = pic_alloc(sizeof(BMP));
+    BMP *b = p->pic;
     FILE *f = fopen(filename, "rb");
-    struct pic *p = calloc(sizeof(struct pic), 1);
     fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);
     fread(&b->dib, sizeof(struct bmp_info_header), 1, f);
     /* FIXME: header length and later struct */
@@ -226,7 +226,6 @@ BMP_load(const char* filename)
     p->height = b->dib.height;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     b->data = malloc(b->dib.height * p->pitch);
-    p->pic = b;
 
     int upper = b->dib.height > 0 ? b->dib.height -1 : 0;
     int bottom = b->dib.height > 0 ? 0 : 1 - b->dib.height;
@@ -328,8 +327,7 @@ BMP_free(struct pic* p)
     if(bmp->palette)
         free(bmp->palette);
     free(bmp->data);
-    free(bmp);
-    free(p);
+    pic_free(p);
 }
 
 static void 

@@ -77,3 +77,16 @@ file_ops_init(void)
     SVG_init();
     AVIF_init();
 }
+
+struct pic *pic_alloc(size_t size)
+{
+    struct pic *p = calloc(1, sizeof(struct pic));
+    p->pic = calloc(1, size);
+    return p;
+}
+
+void pic_free(struct pic *p)
+{
+    free(p->pic);
+    free(p);
+}

@@ -288,9 +288,8 @@ read_pam_data(PNM *m, FILE *f)
 static struct pic* 
 PNM_load(const char *filename)
 {
-    struct pic * p = calloc(sizeof(struct pic), 1);
-    PNM *m = (PNM *)calloc(sizeof(PNM), 1);
-    p->pic = m;
+    struct pic * p = pic_alloc(sizeof(PNM));
+    PNM *m = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&m->pn, sizeof(struct file_header), 1, f);
     fgetc(f);
@@ -363,8 +362,7 @@ PNM_free(struct pic *p)
 {
     PNM *m = (PNM *)p->pic;
     free(m->data);
-    free(m);
-    free(p);
+    pic_free(p);
 }
 
 

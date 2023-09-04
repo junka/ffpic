@@ -715,10 +715,9 @@ read_sos(JPG* j, FILE *f)
 static struct pic* 
 JPG_load(const char *filename)
 {
-    struct pic *p = calloc(1, sizeof(struct pic));
-    JPG *j = calloc(1, sizeof(JPG));
+    struct pic *p = pic_alloc(sizeof(JPG));
+    JPG *j = p->pic;
     j->data = NULL;
-    p->pic = j;
     FILE *f = fopen(filename, "rb");
     uint16_t soi, m, len;
     fread(&soi, 2, 1, f);
@@ -809,8 +808,7 @@ JPG_free(struct pic *p)
     if (j->data) {
         free(j->data);
     }
-    free(j);
-    free(p);
+    pic_free(p);
 }
 
 static void 

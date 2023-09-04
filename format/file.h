@@ -34,6 +34,9 @@ struct pic {
     void *pic;
 };
 
+struct pic *pic_alloc(size_t size);
+void pic_free(struct pic *p);
+
 void file_ops_register(struct file_ops* ops);
 
 struct file_ops* file_probe(const char *filename);

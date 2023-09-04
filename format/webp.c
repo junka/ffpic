@@ -2559,9 +2559,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 static struct pic* 
 WEBP_load(const char *filename)
 {
-    struct pic *p = calloc(1, sizeof(struct pic));
-    WEBP *w = calloc(1, sizeof(WEBP));
-    p->pic = w;
+    struct pic *p = pic_alloc(sizeof(WEBP));
+    WEBP *w = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&w->header, sizeof(w->header), 1, f);
     uint32_t chead;
@@ -2640,10 +2639,7 @@ WEBP_load(const char *filename)
 void 
 WEBP_free(struct pic * p)
 {
-    WEBP * w = (WEBP *)p->pic;
-
-    free(w);
-    free(p);
+    pic_free(p);
 }
 
 void 

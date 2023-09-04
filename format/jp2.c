@@ -473,9 +473,8 @@ read_next_box(JP2 *j, FILE *f, int len)
 static struct pic* 
 JP2_load(const char *filename)
 {
-    struct pic *p = malloc(sizeof(struct pic));
-    JP2 *j = malloc(sizeof(JP2));
-    p->pic = j;
+    struct pic *p = pic_alloc(sizeof(JP2));
+    JP2 *j = p->pic;
     struct jp2_signature_box h;
     FILE * f = fopen(filename, "rb");
     fseek(f, 0 , SEEK_END);
@@ -505,8 +504,7 @@ JP2_free(struct pic *p)
         if (j->jp2h.ihdr.comps)
             free(j->jp2h.ihdr.comps);
     }
-    free(j);
-    free(p);
+    pic_free(p);
 }
 
 static void

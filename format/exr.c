@@ -181,9 +181,8 @@ read_pixel(FILE *f, int type)
 static struct pic* 
 EXR_load(const char* filename)
 {
-    struct pic * p = malloc(sizeof(struct pic));
-    EXR * e = malloc(sizeof(EXR));
-    p->pic = e;
+    struct pic * p = pic_alloc(sizeof(EXR));
+    EXR * e = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&e->h, sizeof(struct exr_header), 1, f);
 
@@ -255,8 +254,7 @@ EXR_free(struct pic* p)
         free(e->chnls);
     if (e->data)
         free(e->data);
-    free(e);
-    free(p);
+    pic_free(p);
 }
 
 

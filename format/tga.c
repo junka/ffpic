@@ -134,9 +134,8 @@ read_compress_data(TGA *t, FILE *f)
 static struct pic* 
 TGA_load(const char *filename)
 {
-    struct pic *p = calloc(1, sizeof(struct pic));
-    TGA *t = malloc(sizeof(TGA));
-    p->pic = t;
+    struct pic *p = pic_alloc(sizeof(TGA));
+    TGA *t = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&t->head, sizeof(struct tga_header), 1, f);
     p->depth = 32;
@@ -172,8 +171,7 @@ TGA_free(struct pic *p)
     TGA *t = (TGA *)p->pic;
     if(t->cmap)
         free(t->cmap);
-    free(t);
-    free(p);
+    pic_free(p);
 }
 
 static void 

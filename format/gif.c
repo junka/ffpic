@@ -207,9 +207,8 @@ void read_contents(GIF* gif, FILE* file) {
     }
 }
 
-GIF* read_gif(FILE* f) {
+void read_gif(FILE* f, GIF *gif) {
 
-    GIF* gif = (GIF*)malloc(sizeof(GIF));
     gif->graphic_count = 0;
     gif->extension_count = 0;
     gif->graphics = NULL;
@@ -225,13 +224,13 @@ GIF* read_gif(FILE* f) {
     }
     read_contents(gif, f);
 
-    return gif;
 }
 
 struct pic* GIF_load(const char* filename) {
-    struct pic *p = malloc(sizeof(struct pic));
+    struct pic *p = pic_alloc(sizeof(GIF));
     FILE* file = fopen(filename, "rb");
-    GIF* gif = read_gif(file);
+    GIF* gif = p->pic;
+    read_gif(file, gif);
     fclose(file);
     p->pic = gif;
     p->width = gif->ls_dsc.screen_witdh;
@@ -398,8 +397,7 @@ void GIF_free(struct pic *p) {
     if (gif->ls_dsc.global_color_table_flag)
         free(gif->global_ct);
 
-    free(gif);
-    free(p);
+    pic_free(p);
 }
 static struct file_ops gif_ops = {
     .name = "GIF",

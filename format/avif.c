@@ -4,9 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "vlog.h"
 #include "file.h"
 #include "avif.h"
 
+VLOG_REGISTER(avif, DEBUG);
 
 static int
 AVIF_probe(const char *filename)
@@ -16,7 +18,7 @@ AVIF_probe(const char *filename)
         printf("fail to open %s\n", filename);
         return -ENOENT;
     }
-    struct avif_ftyp h;
+    struct ftyp_box h;
     int len = fread(&h, sizeof(h), 1, f);
     if (len < 1) {
         fclose(f);
@@ -32,12 +34,7 @@ AVIF_probe(const char *filename)
 
 static struct pic* 
 AVIF_load(const char *filename) {
-    AVIF * a = calloc(1, sizeof(AVIF));
-    struct pic *p = calloc(1, sizeof(struct pic));
-    p->pic = a;
-    FILE *f = fopen(filename, "rb");
-    fclose(f);
-
+    struct pic* p = HEIF_load(filename);
     return p;
 }
 
@@ -45,17 +42,22 @@ static void
 AVIF_free(struct pic *p)
 {
     AVIF * a = (AVIF *)p->pic;
-    
-    free(a);
-    free(p);
+    pic_free(p);
 }
 
 
 static void
 AVIF_info(FILE *f, struct pic* p)
 {
+    AVIF * h = (AVIF *)p->pic;
     fprintf(f, "AVIF file format:\n");
     fprintf(f, "-----------------------\n");
+    char *s1 = UINT2TYPE(h->ftyp.minor_version);
+    char *s2 = UINT2TYPE(h->ftyp.compatible_brands[1]);
+    fprintf(f, "\tbrand: %s, compatible %s\n", s1, s2);
+    free(s1);
+    free(s2);
+    fprintf(f, "\theight: %d, width: %d\n", p->height, p->width);
 }
 
 

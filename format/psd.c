@@ -301,9 +301,8 @@ read_image_data(PSD *s, FILE *f)
 static struct pic* 
 PSD_load(const char* filename)
 {
-    struct pic * p = malloc(sizeof(struct pic));
-    PSD * s = malloc(sizeof(PSD));
-    p->pic = s;
+    struct pic * p = pic_alloc(sizeof(PSD));
+    PSD * s = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&s->h, sizeof(struct psd_file_header), 1, f);
     s->h.height = ntohl(s->h.height);
@@ -351,8 +350,7 @@ PSD_free(struct pic* p)
         free(s->layer.info.records);
         free(s->layer.info.chan_data);
     }
-    free(s);
-    free(p);
+    pic_free(p);
 }
 
 

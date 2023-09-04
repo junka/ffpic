@@ -6,19 +6,15 @@ extern "C" {
 #endif
 
 #include "basemedia.h"
-
-
-struct avif_ftyp {
-    uint32_t len;
-    uint32_t major_brand;
-    uint32_t minor_version;
-    uint8_t *extended_compatible;
-};
-
+#include "heif.h"
 
 typedef struct {
+    struct ftyp_box ftyp;
+    struct meta_box meta;
+    int mdat_num;
+    struct mdat_box *mdat;
 
-
+    struct heif_item *items;
 } AVIF;
 
 

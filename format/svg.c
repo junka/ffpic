@@ -521,9 +521,8 @@ SVG_probe(const char *filename)
 static struct pic* 
 SVG_load(const char *filename)
 {
-    struct pic * p = malloc(sizeof(struct pic));
-    SVG * s = malloc(sizeof(SVG));
-    p->pic = s;
+    struct pic * p = malloc(sizeof(SVG));
+    SVG * s = p->pic;
     FILE *f = fopen(filename, "r");
     read_xml(s, f);
 
@@ -534,8 +533,7 @@ static void
 SVG_free(struct pic *p)
 {
     SVG * s = (SVG *)p->pic;
-    free(s);
-    free(p);
+    pic_free(p);
 }
 
 static void

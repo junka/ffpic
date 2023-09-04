@@ -347,9 +347,9 @@ tiff_compose_image_from_de(TIFF *t)
 static struct pic*
 TIFF_load(const char *filename)
 {
-    TIFF * t = (TIFF *)calloc(1, sizeof(TIFF));
+    struct pic *p = pic_alloc(sizeof(TIFF));
+    TIFF *t = p->pic;
     t->ifd = NULL;
-    struct pic *p = calloc(1, sizeof(struct pic));
     FILE *f = fopen(filename, "rb");
     p->pic = t;
     p->depth = 32;
@@ -390,8 +390,7 @@ TIFF_free(struct pic * p)
     if (t->ifd)
         free(t->ifd);
 
-    free(t);
-    free(p);
+    pic_free(p);
 }
 
 static void

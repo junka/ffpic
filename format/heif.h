@@ -157,6 +157,7 @@ typedef struct {
 
 void HEIF_init(void);
 
+struct pic* HEIF_load(const char *filename);
 
 #ifdef __cplusplus
 }

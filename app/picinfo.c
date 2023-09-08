@@ -20,14 +20,17 @@ int main(int argc, const char *argv[])
     struct file_ops *ops = file_probe(filename);
     if (ops == NULL) {
         printf("file format is not supported\n");
-        return 0;
+        goto exit;
     }
     struct pic *p = file_load(ops, filename);
+    if (!p) {
+        goto exit;
+    }
 
     file_info(ops, p);
 
     file_free(ops, p);
-    
+exit:
     vlog_uninit();
     return 0;
 }

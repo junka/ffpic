@@ -5,6 +5,9 @@
 extern "C" {
 #endif
 
+#include <stdlib.h>
+#include <stdint.h>
+
 /* this needs special care */
 enum bits_order {
     BITS_LSB = 0,   /* bool decoder order */

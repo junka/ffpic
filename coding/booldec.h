@@ -4,6 +4,7 @@
 #ifdef __cplusplus
 extern "C"{
 #endif
+#include <stdint.h>
 
 #define BOOL_VALUE_SIZE ((int)sizeof(size_t) * CHAR_BIT)
 
@@ -27,12 +28,17 @@ uint32_t bool_dec_bit(bool_dec *br, int probability);
 
 uint32_t bool_dec_bits(bool_dec *br, int nums);
 
+/* similar to bool_dec_bits but cosume one more bit as sign */
+uint32_t bool_dec_signed_bits(bool_dec *br, int nums);
+
 uint32_t bool_dec_bit_alt(bool_dec *br, int probability);
 
 uint32_t bool_dec_bit_half(bool_dec *br, int v);
 
 #define BOOL_BIT(br)  bool_dec_bit(br, 0x80)
 #define BOOL_BITS(br, n) bool_dec_bits(br, n)
+#define BOOL_SBITS(br, n) bool_dec_signed_bits(br, n)
+
 #define BOOL_DECODE(br, p) bool_dec_bit(br, p)
 #define BOOL_DECODE_ALT(br, p) bool_dec_bit_alt(br, p)
 #define BOOL_SIGNED(br, v)  bool_dec_bit_half(br, v)

@@ -6,6 +6,11 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#if __APPLE__
+#include <machine/endian.h>
+#else
+#include <endian.h>
+#endif
 
 uint16_t host_order_16(uint16_t a);
 uint32_t host_order_32(uint32_t a);

@@ -4425,8 +4425,8 @@ parse_slice_segment_layer(struct hevc_nalu_header *headr, uint8_t *data, uint16_
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
 
     int left = v->ptr - v->start;
-    printf("slice left: %d\n", left);
-    hexdump(stdout, "left", "", v->ptr, 32);
+    // printf("slice left: %d\n", left);
+    // hexdump(stdout, "left", "", v->ptr, 32);
     cabac_dec *d = cabac_dec_init(v);
     parse_slice_segment_data(v, &hslice, hps, SliceAddrRs);
     rbsp_trailing_bits(v);
@@ -4438,11 +4438,11 @@ parse_slice_segment_layer(struct hevc_nalu_header *headr, uint8_t *data, uint16_
 struct hevc_param_set hps;
 
 void
-parse_nalu(uint8_t *data, uint16_t len)
+parse_nalu(uint8_t *data, int len)
 {
     struct hevc_nalu_header h;
     h = *(struct hevc_nalu_header*)data;
-    VDBG(hevc, "f %d type %d, layer id %d, tid %d", h.forbidden_zero_bit,
+    VDBG(hevc, "len %d f %d type %d, layer id %d, tid %d", len, h.forbidden_zero_bit,
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id_plus1);
     assert(h.forbidden_zero_bit == 0);
 

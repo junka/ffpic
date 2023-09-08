@@ -1,13 +1,15 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
 
-#include "webp.h"
-#include "file.h"
+#include "bitstream.h"
 #include "booldec.h"
+#include "file.h"
 #include "utils.h"
 #include "vlog.h"
+#include "webp.h"
 
 VLOG_REGISTER(webp, DEBUG);
 
@@ -354,34 +356,33 @@ static void
 read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec *br)
 {
     s->segmentation_enabled = BOOL_BIT(br);
+    VDBG(webp, "segmentation_enabled :%d", s->segmentation_enabled);
     if (s->segmentation_enabled) {
         s->update_mb_segmentation_map = BOOL_BIT(br);
         s->update_segment_feature_data = BOOL_BIT(br);
+        VDBG(webp, "update_mb_segmentation_map :%d, update_segment_feature_data %d",
+             s->update_mb_segmentation_map, s->update_segment_feature_data);
         if (s->update_segment_feature_data) {
             s->segment_feature_mode = BOOL_BIT(br);
             for (int i = 0; i < NUM_MB_SEGMENTS; i ++) {
                 s->quant[i].quantizer_update = BOOL_BIT(br);
                 if (s->quant[i].quantizer_update) {
-                    s->quant[i].quantizer_update_value = BOOL_BITS(br, 7);
-                    if (BOOL_BIT(br)) {
-                        s->quant[i].quantizer_update_value *= -1;
-                    }
+                  s->quant[i].quantizer_update_value = BOOL_SBITS(br, 7);
+                } else {
+                    s->quant[i].quantizer_update_value = 0;
                 }
             }
             for (int i = 0; i < NUM_MB_SEGMENTS; i ++) {
                 s->lf[i].loop_filter_update = BOOL_BIT(br);
                 if (s->lf[i].loop_filter_update) {
-                    s->lf[i].lf_update_value = BOOL_BITS(br, 6);
-                    if (BOOL_BIT(br)) {
-                        s->lf[i].lf_update_value *= -1;
-                    }
+                    s->lf[i].lf_update_value = BOOL_SBITS(br, 6);
                 } else {
                     s->lf[i].lf_update_value = 0;
                 }
             }
         }
         if (s->update_mb_segmentation_map) {
-            for (int i = 0; i < MB_FEATURE_TREE_PROBS; i ++) {
+            for (int i = 0; i < 3; i ++) {
                 if (BOOL_BIT(br)) {
                     s->segment_prob[i] = BOOL_BITS(br, 8);
                 }
@@ -400,24 +401,18 @@ read_mb_lf_adjustments(struct vp8_mb_lf_adjustments *d, struct bool_dec *br)
     if (d->loop_filter_adj_enable) {
         d->mode_ref_lf_delta_update_flag = BOOL_BIT(br);
         if (d->mode_ref_lf_delta_update_flag) {
-            for (int i = 0; i < NUM_REF_LF_DELTAS; i ++) {
+            for (int i = 0; i < 4; i ++) {
                 // d->mode_ref_lf_delta_update[i].ref_frame_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
-                    d->mode_ref_lf_delta_update[i] = BOOL_BITS(br, 6);
-                    if (BOOL_BIT(br)) {
-                        d->mode_ref_lf_delta_update[i] *= -1;
-                    }
+                    d->mode_ref_lf_delta_update[i] = BOOL_SBITS(br, 6);
                 } else {
                     d->mode_ref_lf_delta_update[i] = 0;
                 }
             }
-            for (int i = 0; i < NUM_MODE_LF_DELTAS; i ++) {
+            for (int i = 0; i < 4; i ++) {
                 // d->mb_mode_delta_update[i].mb_mode_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
-                    d->mb_mode_delta_update[i] = BOOL_BITS(br, 6);
-                    if (BOOL_BIT(br)) {
-                        d->mb_mode_delta_update[i] *= -1;
-                    }
+                    d->mb_mode_delta_update[i] = BOOL_SBITS(br, 6);
                 } else {
                     d->mb_mode_delta_update[i] = 0;
                 }
@@ -432,7 +427,6 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     /* all partions info | partition 1| partition 2 */
     int log2_nbr_of_dct_partitions = BOOL_BITS(br, 2);
     int num = (1 << log2_nbr_of_dct_partitions) - 1;
-    // bits_vec_dump(v);
 
     uint8_t size[3 * MAX_PARTI_NUM];
     if (num) {
@@ -455,36 +449,70 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
 }
 
 static void
-read_dequant_indice(int8_t *indice, struct bool_dec *br)
-{
-    if (BOOL_BIT(br)) {
-        *indice = BOOL_BITS(br, 4);
-        if (BOOL_BIT(br)) {
-            *indice *= -1;
-        }
-    }
-}
-
-static void
 read_dequantization(struct vp8_key_frame_header *kh, struct bool_dec *br)
 {
-
+    // 13.4 quant_indices
     kh->quant_indice.y_ac_qi = BOOL_BITS(br, 7);
+    kh->quant_indice.y_dc_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
 
-    read_dequant_indice(&kh->quant_indice.y_dc_delta, br);
-    read_dequant_indice(&kh->quant_indice.y2_dc_delta, br);
-    read_dequant_indice(&kh->quant_indice.y2_ac_delta, br);
-    read_dequant_indice(&kh->quant_indice.uv_dc_delta, br);
-    read_dequant_indice(&kh->quant_indice.uv_ac_delta, br);
+    kh->quant_indice.y2_dc_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
+    kh->quant_indice.y2_ac_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
+    kh->quant_indice.uv_dc_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
+    kh->quant_indice.uv_ac_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
 
+    /*
+        All residue signals are specified via a quantized 4x4 DCT applied to
+        the Y, U, V, or Y2 subblocks of a macroblock.  As detailed in
+        Section 14, before inverting the transform, each decoded coefficient
+        is multiplied by one of six dequantization factors, the choice of
+        which depends on the plane (Y, chroma = U or V, Y2) and coefficient
+        position (DC = coefficient 0, AC = coefficients 1-15).  The six
+        values are specified using 7-bit indices into six corresponding fixed
+        tables (the tables are given in Section 14).
+   */
+
+    // from section 14.1 Dequantization
+    static const int dc_qlookup[128] = {
+        4,   5,   6,   7,   8,   9,   10,  10,  11,  12,  13,  14,  15,
+        16,  17,  17,  18,  19,  20,  20,  21,  21,  22,  22,  23,  23,
+        24,  25,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,
+        36,  37,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  46,
+        47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,
+        60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,
+        73,  74,  75,  76,  76,  77,  78,  79,  80,  81,  82,  83,  84,
+        85,  86,  87,  88,  89,  91,  93,  95,  96,  98,  100, 101, 102,
+        104, 106, 108, 110, 112, 114, 116, 118, 122, 124, 126, 128, 130,
+        132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157,
+    };
+
+    static const int ac_qlookup[128] = {
+        4,   5,   6,   7,   8,   9,   10,  11,  12,  13,  14,  15,  16,
+        17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
+        30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,
+        43,  44,  45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,
+        56,  57,  58,  60,  62,  64,  66,  68,  70,  72,  74,  76,  78,
+        80,  82,  84,  86,  88,  90,  92,  94,  96,  98,  100, 102, 104,
+        106, 108, 110, 112, 114, 116, 119, 122, 125, 128, 131, 134, 137,
+        140, 143, 146, 149, 152, 155, 158, 161, 164, 167, 170, 173, 177,
+        181, 185, 189, 193, 197, 201, 205, 209, 213, 217, 221, 225, 229,
+        234, 239, 245, 249, 254, 259, 264, 269, 274, 279, 284,
+    };
+    /*
+        Lookup values from the above two tables are directly used in the DC
+        and AC coefficients in Y1, respectively.  For Y2 and chroma, values
+        from the above tables undergo either scaling or clamping before the
+        multiplies. 
+    */
+    // section 20.4 scaling and clamping processes
+    
 }
 
 static void
-read_proba(struct vp8_key_frame_header *kh, struct bool_dec *br)
+read_token_proba_update(struct vp8_key_frame_header *kh, struct bool_dec *br)
 {
-    // Paragraph 13
+    // from Token Probality Updates 13.4
     static const uint8_t
-        CoeffsUpdateProba[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS] = {
+        coeff_update_probs[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS] = {
     { { { 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255 },
         { 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255 },
         { 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255 }
@@ -619,8 +647,8 @@ read_proba(struct vp8_key_frame_header *kh, struct bool_dec *br)
     }
     };
 
-    /*13.5*/
-    static const uint8_t def_coeffsProba0[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS] = 
+    /*   Default Token Probability Table 13.5*/
+    static const uint8_t default_coeff_probs[NUM_TYPES][NUM_BANDS][NUM_CTX][NUM_PROBAS] = 
     {
         {
             {
@@ -793,7 +821,8 @@ read_proba(struct vp8_key_frame_header *kh, struct bool_dec *br)
     };
 
     kh->refresh_entropy_probs = BOOL_BIT(br);
-    /*if not keyframe 9.7, 9.8
+    /*if not keyframe 9.7, 9.8, 
+    * since we only process webp, ignore them
     {
     |   refresh_golden_frame                            | L(1)  |
     |   refresh_alternate_frame                         | L(1)  |
@@ -808,39 +837,40 @@ read_proba(struct vp8_key_frame_header *kh, struct bool_dec *br)
     | }   
    */
 
-    /* DCT Coefficient Probability Update 9.9 */
+    /* DCT Coefficient Probability Update 9.9 , 13.4 */
     for (int i = 0; i < NUM_TYPES; i ++) {
         for (int j = 0; j < NUM_BANDS ; j ++) {
             for (int k = 0; k < NUM_CTX; k ++) {
                 for (int l = 0; l < NUM_PROBAS; l ++) {
-                    if (BOOL_DECODE(br, CoeffsUpdateProba[i][j][k][l])) {
+                    if (BOOL_DECODE(br, coeff_update_probs[i][j][k][l])) {
                         kh->coeff_prob[i][j].probas[k][l] = BOOL_BITS(br, 8);
                     } else {
-                        kh->coeff_prob[i][j].probas[k][l] = def_coeffsProba0[i][j][k][l];
+                        kh->coeff_prob[i][j].probas[k][l] = default_coeff_probs[i][j][k][l];
                     }
                 }
             }
         }
     }
-
 }
 
-#include "bitstream.h"
 static void
 read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
 {
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    printf("width %d, height %d\n", width, height);
+    VDBG(webp, "width in MB block uint:%d", (width + 15) >> 4);
+    VDBG(webp, "height in MB block uint:%d", (height + 15) >> 4);
 
     w->k.cs_and_clamp.color_space = BOOL_BIT(br);
     w->k.cs_and_clamp.clamp = BOOL_BIT(br);
     VDBG(webp, "cs %d, clamp %d", w->k.cs_and_clamp.color_space, w->k.cs_and_clamp.clamp);
-    
-    /*READ Segment-Based Adjustments 9.3 */
+
+    /* READ Segment-Based Adjustments 9.3 */
     read_vp8_segmentation_adjust(&w->k.segmentation, br);
 
-    /*Loop Filter Type and Levels 9.4*/
+    /* Loop Filter Type and Levels 9.4 */
     w->k.filter_type = BOOL_BIT(br);
     w->k.loop_filter_level = BOOL_BITS(br, 6);
     w->k.sharpness_level = BOOL_BITS(br, 3);
@@ -849,13 +879,12 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
     read_mb_lf_adjustments(&w->k.mb_lf_adjustments, br);
 
     /*Token Partition and Partition Data Offsets 9.5*/
-
     read_token_partition(w, br, f);
 
     /* READ Dequantization Indices 9.6 */
     read_dequantization(&w->k, br);
 
-    read_proba(&w->k ,br);
+    read_token_proba_update(&w->k ,br);
 
     /* 9.11 */
     w->k.mb_no_skip_coeff = BOOL_BIT(br);
@@ -2556,68 +2585,34 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     free(c.m);
 }
 
-static struct pic* 
-WEBP_load(const char *filename)
+int WEBP_read_frame(WEBP *w, FILE *f)
 {
-    struct pic *p = pic_alloc(sizeof(WEBP));
-    WEBP *w = p->pic;
-    FILE *f = fopen(filename, "rb");
-    fread(&w->header, sizeof(w->header), 1, f);
-    uint32_t chead;
-    fread(&chead, 4, 1, f);
-    uint32_t chunk_size;
-    if (chead == CHUNCK_HEADER("VP8X")) {
-        fseek(f, -4, SEEK_CUR);
-        fread(&w->vp8x, sizeof(struct webp_vp8x), 1, f);
-    } else if (chead == CHUNCK_HEADER("VP8 ")) {
-        //VP8 data chuck
-        
-    } else if (chead == CHUNCK_HEADER("VP8L")) {
-        //VP8 lossless chuck
-        VINFO(webp, "VP8L\n");
-        return NULL;
-    }
-    fread(&chunk_size, 4, 1, f);
-    unsigned char b[3];
-    fread(b, 3, 1, f);
-    w->fh.frame_type = b[0] & 0x1;
-    w->fh.version = (b[0] >> 1) & 0x7;
-    w->fh.show_frame = (b[0] >> 4) & 0x1;
-    w->fh.size_h = (b[0] >> 5) & 0x7;
-    w->fh.size = b[2] << 8 | b[1];
+    unsigned char b[3]; // code for I frame 10byte， P frame 3byte.
+    fread(&w->fh, sizeof(w->fh), 1, f);
+
     if (w->fh.frame_type != KEY_FRAME) {
         VERR(webp, "not a key frame for vp8\n");
-        free(w);
-        free(p);
-        fclose(f);
-        return NULL;
+        return -1;
     }
 
     /* key frame, more info */
-    uint8_t keyfb[7];
-    fread(keyfb, 7, 1, f);
-    if (keyfb[0] != 0x9d || keyfb[1] != 0x01 || keyfb[2] != 0x2a) {
+    fread(&w->fi, 7, 1, f);
+    if (w->fi.start1 != 0x9d || w->fi.start2 != 0x01 || w->fi.start3 != 0x2a) {
         VERR(webp, "not a valid start code for vp8\n");
+        return -1;
     }
-    w->fi.start1 = keyfb[0];
-    w->fi.start2 = keyfb[1];
-    w->fi.start3 = keyfb[2];
-    w->fi.horizontal = keyfb[4] >> 6;
-    w->fi.width = (keyfb[4] << 8 | keyfb[3]) & 0x3fff;
-    w->fi.vertical = keyfb[6] >> 6;
-    w->fi.height = (keyfb[6] << 8 | keyfb[5]) & 0x3fff;
+    int partition0_size = ((int)w->fh.size_h | w->fh.size << 3);
 
-    int partition0_size = (((int)w->fh.size << 3) | w->fh.size_h);
     uint8_t *buf = malloc(partition0_size);
     fread(buf, partition0_size, 1, f);
-    VDBG(webp, "partion0_size %d", partition0_size);
+
     struct bool_dec *first_bt = bool_dec_init(buf, partition0_size);
 
     read_vp8_ctl_partition(w, first_bt, f);
 
     bool_dec *bt[MAX_PARTI_NUM];
 
-    for (int i = 0; i < w->k.nbr_partitions; i ++) {
+    for (int i = 0; i < w->k.nbr_partitions; i++) {
         uint8_t *parts = malloc(w->p[i].len);
         fseek(f, w->p[i].start, SEEK_SET);
         fread(parts, 1, w->p[i].len, f);
@@ -2625,14 +2620,83 @@ WEBP_load(const char *filename)
         // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_dec_init(parts, w->p[i].len);
     }
-    fclose(f);
-    
+
     vp8_decode(w, first_bt, bt);
 
     bool_dec_free(first_bt);
-    for (int i = 0; i < w->k.nbr_partitions; i ++) { 
+    for (int i = 0; i < w->k.nbr_partitions; i++) {
         bool_dec_free(bt[i]);
     }
+    return 0;
+}
+
+static struct pic* 
+WEBP_load(const char *filename)
+{
+    struct pic *p = pic_alloc(sizeof(WEBP));
+    WEBP *w = p->pic;
+    FILE *f = fopen(filename, "rb");
+    // read riff 12 bytes header
+    fread(&w->header, sizeof(w->header), 1, f);
+    if (w->header.riff != CHUNCK_HEADER("RIFF") ||
+        w->header.webp != CHUNCK_HEADER("WEBP")) {
+        pic_free(p);
+        fclose(f);
+        return NULL;
+    }
+
+    uint32_t chead;
+    uint32_t chunk_size;
+    while (!feof(f)) {
+        fread(&chead, 4, 1, f);
+        if (chead == CHUNCK_HEADER("VP8X")) {
+            fseek(f, -4, SEEK_CUR);
+            fread(&w->vp8x, sizeof(struct webp_vp8x), 1, f);
+            if (w->vp8x.size != sizeof(struct webp_vp8x) - 8) {
+                pic_free(p);
+                fclose(f);
+                return NULL;
+            }
+            p->height = READ_UINT24(w->vp8x.canvas_height);
+            p->width = READ_UINT24(w->vp8x.canvas_width);
+        } else if (chead == CHUNCK_HEADER("ALPH")) {
+            fseek(f, -4, SEEK_CUR);
+            fread(&w->alpha, sizeof(struct webp_alpha), 1, f);
+            if (w->alpha.size != sizeof(struct webp_alpha) - 8) {
+                pic_free(p);
+                fclose(f);
+                return NULL;
+            }
+        } else if (chead == CHUNCK_HEADER("VP8 ")) {
+            //VP8 data chuck
+            fseek(f, -4, SEEK_CUR);
+            fread(&w->vp8, sizeof(struct webp_vp8), 1, f);
+            if (WEBP_read_frame(w, f) < 0) {
+                pic_free(p);
+                fclose(f);
+                return NULL;
+            }
+            break;
+        } else if (chead == CHUNCK_HEADER("VP8L")) {
+            // VP8 lossless chuck
+            fseek(f, -4, SEEK_CUR);
+            fread(&w->vp8l, sizeof(struct webp_vp8l), 1, f);
+            VINFO(webp, "VP8L\n");
+            if (WEBP_read_frame(w, f) < 0) {
+                pic_free(p);
+                fclose(f);
+                return NULL;
+            }
+            break;
+        } else {
+            // skip other chuck as optional
+            fread(&chunk_size, 4, 1, f);
+            fseek(f, chunk_size, SEEK_CUR);
+        }
+    }
+
+    fclose(f);
+
     return p;
 }
 
@@ -2642,20 +2706,28 @@ WEBP_free(struct pic * p)
     pic_free(p);
 }
 
-void 
+void
 WEBP_info(FILE *f, struct pic* p)
 {
     WEBP * w = (WEBP *)p->pic;
-    fprintf(f, "WEBP file format:\n");
+    fprintf(f, "%s file format:\n",
+            ((w->header.webp == CHUNCK_HEADER("WEBP")) ? "WEBP" : "unknown"));
     fprintf(f, "\tfile size: %d\n", w->header.file_size);
     fprintf(f, "----------------------------------\n");
     if (w->vp8x.vp8x == CHUNCK_HEADER("VP8X")) {
+        fprintf(f, "Chunk VP8X length %d:\n", w->vp8x.size);
         fprintf(f, "\tVP8X icc %d, alpha %d, exif %d, xmp %d, animation %d\n",
             w->vp8x.icc, w->vp8x.alpha, w->vp8x.exif_metadata, w->vp8x.xmp_metadata, w->vp8x.animation);
         fprintf(f, "\tVP8X canvas witdth %d, height %d\n", READ_UINT24(w->vp8x.canvas_width),
             READ_UINT24(w->vp8x.canvas_height));
     }
-    int size = w->fh.size_h | (w->fh.size << 3);
+    if (w->vp8.vp8 == CHUNCK_HEADER("VP8 ")) {
+        fprintf(f, "Chunk VP8  length %d:\n", w->vp8.size);
+    }
+    if (w->vp8l.vp8l == CHUNCK_HEADER("VP8L")) {
+        fprintf(f, "Chunk VP8L length %d:\n", w->vp8l.size);
+    }
+    int size = ((int)w->fh.size_h | w->fh.size << 3);
     fprintf(f, "\t%s: version %d, partition0_size %d\n", w->fh.frame_type == KEY_FRAME? "I frame":"P frame", w->fh.version, size);
     if (w->fh.frame_type == KEY_FRAME) {
         fprintf(f, "\tscale horizon %d, vertical %d\n", w->fi.horizontal, w->fi.vertical);
@@ -2709,8 +2781,7 @@ WEBP_info(FILE *f, struct pic* p)
     }
 #endif
     fprintf(f, "\tprob_skip_false %d\n", w->k.prob_skip_false);
-
-}
+    }
 
 static struct file_ops webp_ops = {
     .name = "WEBP",

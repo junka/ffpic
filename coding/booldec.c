@@ -147,3 +147,14 @@ bool_dec_bits(bool_dec *br, int nums)
     }
     return v;
 }
+
+uint32_t
+bool_dec_signed_bits(bool_dec *br, int nums)
+{
+    uint32_t v = BOOL_BITS(br, nums);
+    if (BOOL_BIT(br)) {
+        return -v;
+    } else {
+        return v;
+    }
+}

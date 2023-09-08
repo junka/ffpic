@@ -1343,7 +1343,7 @@ struct hevc_slice {
 
 #pragma pack(pop)
 
-void parse_nalu(uint8_t *data, uint16_t len);
+void parse_nalu(uint8_t *data, int len);
 
 #ifdef __cplusplus
 }

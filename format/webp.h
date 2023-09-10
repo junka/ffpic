@@ -13,12 +13,6 @@ extern "C" {
 
 #pragma pack(push, 1)
 
-struct riff_chunck {
-    uint32_t fourcc;
-    uint32_t size;
-    uint32_t payload;
-};
-
 struct webp_header {
     uint32_t riff;  /* RIFF ascii code */
     uint32_t file_size;
@@ -246,18 +240,15 @@ struct vp8_key_frame_header {
 
 };
 
-struct quant {
-    uint8_t dqm_y1[NUM_MB_SEGMENTS][2];
-    uint8_t dqm_y2[NUM_MB_SEGMENTS][2];
-    uint8_t dqm_uv[NUM_MB_SEGMENTS][2];
-    int uv_quant[NUM_MB_SEGMENTS];
-};
-
 struct macro_block {
+    uint8_t segment_id;
+    uint8_t mb_skip_coeff;
+    // uint8_t is_inter_mb; // never
+    uint8_t intra_y_mode;  // intra_y_mode is B_PRED, mb is 4x4
+    uint8_t intra_uv_mode; // chroma prediction mode
+
     int16_t coeffs[384];   // 384 coeffs = (16+4+4) * 4*4
-    uint8_t is_i4x4;       // true if intra4x4
     uint8_t imodes[16];    // one 16x16 mode (#0) or sixteen 4x4 modes
-    uint8_t uvmode;        // chroma prediction mode
     // bit-wise info about the content of each sub-4x4 blocks (in decoding order).
     // Each of the 4x4 blocks for y/u/v is associated with a 2b code according to:
     //   code=0 -> no coefficient
@@ -268,8 +259,6 @@ struct macro_block {
     uint32_t non_zero_y;
     uint32_t non_zero_uv;
     uint8_t dither;      // local dithering strength (deduced from non_zero_*)
-    uint8_t skip;
-    uint8_t segment;
 };
 
 struct vp8mb {
@@ -278,12 +267,12 @@ struct vp8mb {
 };
 
 
-
 #pragma pack(pop)
 
 
 // intra prediction modes
 enum {
+    // 4 * 4 intra modes
     B_DC_PRED = 0,   // 4x4 modes
     B_TM_PRED = 1,
     B_VE_PRED = 2,
@@ -297,7 +286,8 @@ enum {
     NUM_BMODES = B_HU_PRED + 1 - B_DC_PRED,  // = 10
 };
 
-enum {    // Luma16 or UV modes
+enum {
+    // 16X16 intra mode: Luma16 or UV modes
     DC_PRED = B_DC_PRED,
     V_PRED = B_VE_PRED,
     H_PRED = B_HE_PRED,

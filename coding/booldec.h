@@ -30,6 +30,7 @@ uint32_t bool_dec_bits(bool_dec *br, int nums);
 
 /* similar to bool_dec_bits but cosume one more bit as sign */
 uint32_t bool_dec_signed_bits(bool_dec *br, int nums);
+int bool_dec_tree(struct bool_dec *br, const int8_t *t, const uint8_t *p);
 
 uint32_t bool_dec_bit_alt(bool_dec *br, int probability);
 

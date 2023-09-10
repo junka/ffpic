@@ -400,7 +400,7 @@ decode_data_unit(struct jpg_decoder *d)
     return true;
 }
 
-int 
+static int 
 init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
 {
     if (comp_id >= j->sof.components_num)
@@ -421,13 +421,13 @@ init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
     return 0;
 }
 
-void 
+static void
 reset_decoder(struct jpg_decoder *d)
 {
     d->prev_dc = 0;
 }
 
-void
+static void
 destroy_decoder(struct jpg_decoder *d)
 {
     huffman_cleanup(d->dc);
@@ -550,7 +550,7 @@ read_next_rst_marker(struct jpg_decoder *d)
 void
 JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
-    // each component owns a decoder
+    // each component owns a decoder, could be CMYK
     struct jpg_decoder *d[4];
     int yn = j->sof.colors[0].horizontal * j->sof.colors[0].vertical;
 

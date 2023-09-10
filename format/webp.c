@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <assert.h>
 
 #include "bitstream.h"
 #include "booldec.h"
@@ -389,7 +390,7 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
             }
         }
     } else {
-        s->update_mb_segmentation_map = 0;
+        s->update_mb_segmentation_map = 1;
         s->update_segment_feature_data = 0;
     }
 }
@@ -427,6 +428,11 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     /* all partions info | partition 1| partition 2 */
     int log2_nbr_of_dct_partitions = BOOL_BITS(br, 2);
     int num = (1 << log2_nbr_of_dct_partitions) - 1;
+    /*  If the number of data partitions is
+    greater than 1, the size of each partition (except the last) is
+    written in 3 bytes (24 bits).  The size of the last partition is the
+    remainder of the data not used by any of the previous partitions.
+    */
 
     uint8_t size[3 * MAX_PARTI_NUM];
     if (num) {
@@ -436,6 +442,7 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     for (int i = 0; i < num; i ++)
     {
         int partsize = size[i*3] | size[i*3 + 1] << 8 | size[i*3 + 2] << 16;
+        VDBG(webp, "partsize %d\n", partsize);
         w->p[i].start = next_part;
         w->p[i].len = partsize;
 
@@ -448,9 +455,35 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     w->k.nbr_partitions = num + 1;
 }
 
-static void
-read_dequantization(struct vp8_key_frame_header *kh, struct bool_dec *br)
+/* similar to jpeg decoder, four components */
+struct WEBP_decoder {
+    uint16_t y1_dc;
+    uint16_t y1_ac;
+    uint16_t y2_dc;
+    uint16_t y2_ac;
+    uint16_t uv_dc;
+    uint16_t uv_ac;
+
+    uint16_t quant;
+    uint16_t uv_quant; // for dithering
+};
+
+static int
+init_decoder(WEBP *w, struct WEBP_decoder *d, uint8_t comp)
 {
+    return 0;
+}
+
+static void
+destroy_decoder(struct WEBP_decoder *d)
+{
+    free(d);
+}
+
+static void read_dequantization(WEBP *w, struct vp8_key_frame_header *kh,
+                                struct bool_dec *br) {
+    struct WEBP_decoder d[4];// different segment has different parameters
+
     // 13.4 quant_indices
     kh->quant_indice.y_ac_qi = BOOL_BITS(br, 7);
     kh->quant_indice.y_dc_delta = (BOOL_BIT(br)) ? BOOL_SBITS(br, 4) : 0;
@@ -472,7 +505,7 @@ read_dequantization(struct vp8_key_frame_header *kh, struct bool_dec *br)
    */
 
     // from section 14.1 Dequantization
-    static const int dc_qlookup[128] = {
+    static const uint16_t dc_qlookup[128] = {
         4,   5,   6,   7,   8,   9,   10,  10,  11,  12,  13,  14,  15,
         16,  17,  17,  18,  19,  20,  20,  21,  21,  22,  22,  23,  23,
         24,  25,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,
@@ -485,7 +518,7 @@ read_dequantization(struct vp8_key_frame_header *kh, struct bool_dec *br)
         132, 134, 136, 138, 140, 143, 145, 148, 151, 154, 157,
     };
 
-    static const int ac_qlookup[128] = {
+    static const uint16_t ac_qlookup[128] = {
         4,   5,   6,   7,   8,   9,   10,  11,  12,  13,  14,  15,  16,
         17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
         30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,
@@ -504,7 +537,39 @@ read_dequantization(struct vp8_key_frame_header *kh, struct bool_dec *br)
         multiplies. 
     */
     // section 20.4 scaling and clamping processes
-    
+    // see dequant_init and ac_q and dc_q
+    for (int i = 0; i < (w->k.segmentation.segmentation_enabled ? 4 : 1); i++) {
+        uint16_t quant = kh->quant_indice.y_ac_qi;
+        if (w->k.segmentation.segmentation_enabled) {
+            if(!w->k.segmentation.update_mb_segmentation_map) {
+                quant += w->k.segmentation.quant[i].quantizer_update_value;
+            } else {
+                quant = w->k.segmentation.quant[i].quantizer_update_value;
+            }
+        }
+        d[i].y1_dc = dc_qlookup[clamp(quant + kh->quant_indice.y_dc_delta, 127)];
+        d[i].y1_ac = ac_qlookup[clamp(quant, 127)];
+
+        d[i].y2_dc =
+            dc_qlookup[clamp(quant + kh->quant_indice.y2_dc_delta, 127)] * 2;
+        d[i].y2_ac =
+            ac_qlookup[clamp(quant + kh->quant_indice.y2_ac_delta, 127)] * 155 / 100;
+
+        d[i].uv_dc =
+            dc_qlookup[clamp(quant + kh->quant_indice.uv_dc_delta, 127)];
+        d[i].uv_ac =
+            ac_qlookup[clamp(quant + kh->quant_indice.uv_ac_delta, 127)];
+
+        if (d[i].y2_dc > 132) {
+            d[i].y2_dc = 132;
+        }
+        if (d[i].y2_ac < 8) {
+            d[i].y2_ac = 8;
+        }
+        d[i].quant = quant;
+        // for dithering
+        d[i].uv_quant = quant + kh->quant_indice.uv_ac_delta;
+    }
 }
 
 static void
@@ -821,8 +886,8 @@ read_token_proba_update(struct vp8_key_frame_header *kh, struct bool_dec *br)
     };
 
     kh->refresh_entropy_probs = BOOL_BIT(br);
-    /*if not keyframe 9.7, 9.8, 
-    * since we only process webp, ignore them
+    /*if not keyframe 9.7, 9.8,
+    * since we only process  static webp, ignore them
     {
     |   refresh_golden_frame                            | L(1)  |
     |   refresh_alternate_frame                         | L(1)  |
@@ -834,7 +899,7 @@ read_token_proba_update(struct vp8_key_frame_header *kh, struct bool_dec *br)
     |   sign_bias_alternate                             | L(1)  |
     |   refresh_entropy_probs                           | L(1)  |
     |   refresh_last                                    | L(1)  |
-    | }   
+    | }
    */
 
     /* DCT Coefficient Probability Update 9.9 , 13.4 */
@@ -859,7 +924,6 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    printf("width %d, height %d\n", width, height);
     VDBG(webp, "width in MB block uint:%d", (width + 15) >> 4);
     VDBG(webp, "height in MB block uint:%d", (height + 15) >> 4);
 
@@ -882,11 +946,11 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
     read_token_partition(w, br, f);
 
     /* READ Dequantization Indices 9.6 */
-    read_dequantization(&w->k, br);
+    read_dequantization(w, &w->k, br);
 
     read_token_proba_update(&w->k ,br);
 
-    /* 9.11 */
+    /* section 9.11 */
     w->k.mb_no_skip_coeff = BOOL_BIT(br);
     if (w->k.mb_no_skip_coeff) {
         w->k.prob_skip_false = BOOL_BITS(br, 8);
@@ -971,7 +1035,7 @@ get_large_value(struct bool_dec *bt, const uint8_t* const p)
 /* Returns the position of the last non-zero coeff plus one */
 static int
 vp8_get_coeff_fast(struct bool_dec *bt, int16_t *out,
-                    const VP8BandProbas * const bands[], int n, int ctx, uint8_t *dq)
+                    const VP8BandProbas * const bands[], int n, int ctx, uint16_t indice)
 {
     const uint8_t* p = bands[n]->probas[ctx];
     for (; n < 16; ++n) {
@@ -992,7 +1056,7 @@ vp8_get_coeff_fast(struct bool_dec *bt, int16_t *out,
             v = get_large_value(bt, p);
             p = bands[n+1]->probas[2];
         }
-        out[kZigzag[n]] = BOOL_SIGNED(bt, v) * dq[n > 0];
+        out[kZigzag[n]] = BOOL_SIGNED(bt, v) * indice;
         //do both zigzag and dequantation here
     
     }
@@ -1027,130 +1091,6 @@ vp8_get_coeff_alt(struct bool_dec *bt, uint8_t *out,
     }
     return 0;
 }
-
-// Paragraph 11.5
-static const uint8_t kf_bmode_prob[NUM_BMODES][NUM_BMODES][NUM_BMODES - 1] = {
-    {
-        { 231, 120, 48, 89, 115, 113, 120, 152, 112 },
-        { 152, 179, 64, 126, 170, 118, 46, 70, 95 },
-        { 175, 69, 143, 80, 85, 82, 72, 155, 103 },
-        { 56, 58, 10, 171, 218, 189, 17, 13, 152 },
-        { 114, 26, 17, 163, 44, 195, 21, 10, 173 },
-        { 121, 24, 80, 195, 26, 62, 44, 64, 85 },
-        { 144, 71, 10, 38, 171, 213, 144, 34, 26 },
-        { 170, 46, 55, 19, 136, 160, 33, 206, 71 },
-        { 63, 20, 8, 114, 114, 208, 12, 9, 226 },
-        { 81, 40, 11, 96, 182, 84, 29, 16, 36 }
-    },
-    {
-        { 134, 183, 89, 137, 98, 101, 106, 165, 148 },
-        { 72, 187, 100, 130, 157, 111, 32, 75, 80 },
-        { 66, 102, 167, 99, 74, 62, 40, 234, 128 },
-        { 41, 53, 9, 178, 241, 141, 26, 8, 107 },
-        { 74, 43, 26, 146, 73, 166, 49, 23, 157 },
-        { 65, 38, 105, 160, 51, 52, 31, 115, 128 },
-        { 104, 79, 12, 27, 217, 255, 87, 17, 7 },
-        { 87, 68, 71, 44, 114, 51, 15, 186, 23 },
-        { 47, 41, 14, 110, 182, 183, 21, 17, 194 },
-        { 66, 45, 25, 102, 197, 189, 23, 18, 22 }
-    },
-    {
-        { 88, 88, 147, 150, 42, 46, 45, 196, 205 },
-        { 43, 97, 183, 117, 85, 38, 35, 179, 61 },
-        { 39, 53, 200, 87, 26, 21, 43, 232, 171 },
-        { 56, 34, 51, 104, 114, 102, 29, 93, 77 },
-        { 39, 28, 85, 171, 58, 165, 90, 98, 64 },
-        { 34, 22, 116, 206, 23, 34, 43, 166, 73 },
-        { 107, 54, 32, 26, 51, 1, 81, 43, 31 },
-        { 68, 25, 106, 22, 64, 171, 36, 225, 114 },
-        { 34, 19, 21, 102, 132, 188, 16, 76, 124 },
-        { 62, 18, 78, 95, 85, 57, 50, 48, 51 }
-    },
-    {
-        { 193, 101, 35, 159, 215, 111, 89, 46, 111 },
-        { 60, 148, 31, 172, 219, 228, 21, 18, 111 },
-        { 112, 113, 77, 85, 179, 255, 38, 120, 114 },
-        { 40, 42, 1, 196, 245, 209, 10, 25, 109 },
-        { 88, 43, 29, 140, 166, 213, 37, 43, 154 },
-        { 61, 63, 30, 155, 67, 45, 68, 1, 209 },
-        { 100, 80, 8, 43, 154, 1, 51, 26, 71 },
-        { 142, 78, 78, 16, 255, 128, 34, 197, 171 },
-        { 41, 40, 5, 102, 211, 183, 4, 1, 221 },
-        { 51, 50, 17, 168, 209, 192, 23, 25, 82 }
-    },
-    {
-        { 138, 31, 36, 171, 27, 166, 38, 44, 229 },
-        { 67, 87, 58, 169, 82, 115, 26, 59, 179 },
-        { 63, 59, 90, 180, 59, 166, 93, 73, 154 },
-        { 40, 40, 21, 116, 143, 209, 34, 39, 175 },
-        { 47, 15, 16, 183, 34, 223, 49, 45, 183 },
-        { 46, 17, 33, 183, 6, 98, 15, 32, 183 },
-        { 57, 46, 22, 24, 128, 1, 54, 17, 37 },
-        { 65, 32, 73, 115, 28, 128, 23, 128, 205 },
-        { 40, 3, 9, 115, 51, 192, 18, 6, 223 },
-        { 87, 37, 9, 115, 59, 77, 64, 21, 47 }
-    },
-    {
-        { 104, 55, 44, 218, 9, 54, 53, 130, 226 },
-        { 64, 90, 70, 205, 40, 41, 23, 26, 57 },
-        { 54, 57, 112, 184, 5, 41, 38, 166, 213 },
-        { 30, 34, 26, 133, 152, 116, 10, 32, 134 },
-        { 39, 19, 53, 221, 26, 114, 32, 73, 255 },
-        { 31, 9, 65, 234, 2, 15, 1, 118, 73 },
-        { 75, 32, 12, 51, 192, 255, 160, 43, 51 },
-        { 88, 31, 35, 67, 102, 85, 55, 186, 85 },
-        { 56, 21, 23, 111, 59, 205, 45, 37, 192 },
-        { 55, 38, 70, 124, 73, 102, 1, 34, 98 }
-    },
-    {
-        { 125, 98, 42, 88, 104, 85, 117, 175, 82 },
-        { 95, 84, 53, 89, 128, 100, 113, 101, 45 },
-        { 75, 79, 123, 47, 51, 128, 81, 171, 1 },
-        { 57, 17, 5, 71, 102, 57, 53, 41, 49 },
-        { 38, 33, 13, 121, 57, 73, 26, 1, 85 },
-        { 41, 10, 67, 138, 77, 110, 90, 47, 114 },
-        { 115, 21, 2, 10, 102, 255, 166, 23, 6 },
-        { 101, 29, 16, 10, 85, 128, 101, 196, 26 },
-        { 57, 18, 10, 102, 102, 213, 34, 20, 43 },
-        { 117, 20, 15, 36, 163, 128, 68, 1, 26 }
-    },
-    {
-        { 102, 61, 71, 37, 34, 53, 31, 243, 192 },
-        { 69, 60, 71, 38, 73, 119, 28, 222, 37 },
-        { 68, 45, 128, 34, 1, 47, 11, 245, 171 },
-        { 62, 17, 19, 70, 146, 85, 55, 62, 70 },
-        { 37, 43, 37, 154, 100, 163, 85, 160, 1 },
-        { 63, 9, 92, 136, 28, 64, 32, 201, 85 },
-        { 75, 15, 9, 9, 64, 255, 184, 119, 16 },
-        { 86, 6, 28, 5, 64, 255, 25, 248, 1 },
-        { 56, 8, 17, 132, 137, 255, 55, 116, 128 },
-        { 58, 15, 20, 82, 135, 57, 26, 121, 40 }
-    },
-    {
-        { 164, 50, 31, 137, 154, 133, 25, 35, 218 },
-        { 51, 103, 44, 131, 131, 123, 31, 6, 158 },
-        { 86, 40, 64, 135, 148, 224, 45, 183, 128 },
-        { 22, 26, 17, 131, 240, 154, 14, 1, 209 },
-        { 45, 16, 21, 91, 64, 222, 7, 1, 197 },
-        { 56, 21, 39, 155, 60, 138, 23, 102, 213 },
-        { 83, 12, 13, 54, 192, 255, 68, 47, 28 },
-        { 85, 26, 85, 85, 128, 128, 32, 146, 171 },
-        { 18, 11, 7, 63, 144, 171, 4, 4, 246 },
-        { 35, 27, 10, 146, 174, 171, 12, 26, 128 }
-    },
-    {
-        { 190, 80, 35, 99, 180, 80, 126, 54, 45 },
-        { 85, 126, 47, 87, 176, 51, 41, 20, 32 },
-        { 101, 75, 128, 139, 118, 146, 116, 128, 85 },
-        { 56, 41, 15, 176, 236, 85, 37, 9, 62 },
-        { 71, 30, 17, 119, 118, 255, 17, 18, 138 },
-        { 101, 38, 60, 138, 55, 70, 43, 26, 142 },
-        { 146, 36, 19, 30, 171, 255, 97, 27, 20 },
-        { 138, 45, 61, 62, 219, 1, 81, 188, 64 },
-        { 32, 41, 20, 117, 151, 142, 20, 21, 163 },
-        { 112, 19, 12, 61, 195, 128, 48, 4, 24 }
-    }
-};
 
 static void
 transformWHT_C(const int16_t* in, int16_t* out)
@@ -1191,7 +1131,8 @@ NzCodeBits(uint32_t nz_coeffs, int nz, int dc_nz)
 
 
 static int
-vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_block *block, bool_dec *bt, struct quant *qt)
+vp8_decode_residual_block(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb,
+                   struct macro_block *block, bool_dec *bt, struct WEBP_decoder *d)
 {
     static const uint8_t kBands[16 + 1] = {
         0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7,
@@ -1214,10 +1155,10 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
             bands[t][b] = &w->k.coeff_prob[t][kBands[b]];
         }
     }
-    if (!block->is_i4x4) {
+    if (block->intra_y_mode != B_PRED) {
         int16_t dc[16] = {0};
         const int ctx = mb->nz_dc + left_mb->nz_dc;
-        const int nz = vp8_get_coeff_fast(bt, dc, bands[1], 0, ctx, qt->dqm_y2[block->segment]);
+        const int nz = vp8_get_coeff_fast(bt, dc, bands[1], 0, ctx, d->y2_dc);
         mb->nz_dc = left_mb->nz_dc = (nz > 0);
         if (nz > 1) {   // more than just the DC -> perform the full transform
             transformWHT_C(dc, dst);
@@ -1242,7 +1183,7 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
         for (x = 0; x < 4; ++x) {
             const int ctx = l + (tnz & 1);
             // printf("tnz %d, lnz %d, ctx %d\n", tnz, lnz, ctx);
-            const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, qt->dqm_y1[block->segment]);
+            const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, d->y1_dc);
             l = (nz > first);
             tnz = (tnz >> 1) | (l << 7);
             nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1263,7 +1204,7 @@ vp8_residuals(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb, struct macro_blo
             int l = lnz & 1;
             for (x = 0; x < 2; ++x) {
                 const int ctx = l + (tnz & 1);
-                const int nz = vp8_get_coeff_fast(bt, dst, bands[2], 0, ctx, qt->dqm_uv[block->segment]);
+                const int nz = vp8_get_coeff_fast(bt, dst, bands[2], 0, ctx, d->uv_dc);
                 l = (nz > 0);
                 tnz = (tnz >> 1) | (l << 3);
                 nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
@@ -1297,148 +1238,287 @@ typedef struct {  // filter specs
 static VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
 static int 
-vp8_decode_MB(WEBP *w, struct vp8mb *left, struct vp8mb *mb, struct macro_block *block, bool_dec *bt,
-             struct quant *qt, VP8FInfo *finfo)
+vp8_decode_residual_data(WEBP *w, struct vp8mb *left, struct vp8mb *mb, struct macro_block *block, bool_dec *bt,
+             struct WEBP_decoder *d, VP8FInfo *finfo)
 {
-    int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
-        w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
+    // int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
+    //     w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
     // 0=off, 1=simple, 2=complex
     // struct macro_block *left_mb = mb - 1;
 
-    int skip = w->k.mb_no_skip_coeff ? block->skip : 0;
-    if (!skip) {
-        skip = vp8_residuals(w, left, mb, block, bt, qt);
-    } else {
-        left->nz = mb->nz = 0;
-        if (!block->is_i4x4) {
-            left->nz_dc = mb->nz_dc = 0;
+    if (block->mb_skip_coeff) {
+        if (block->intra_y_mode != B_PRED) {
+            // Y2
+            vp8_decode_residual_block(w, left, mb, block, bt, d);
         }
-        block->non_zero_y = 0;
-        block->non_zero_uv = 0;
-        block->dither = 0;
+        // 16Y 4U 4V
+        for (int i = 0; i < 24; i++) {
+            vp8_decode_residual_block(w, left, mb, block, bt, d);
+        }
     }
-    if (filter_type) {
-        *finfo = fstrengths[block->segment][block->is_i4x4];
-        finfo->f_inner |= !skip;
-    }
+    // else {
+    //     left->nz = mb->nz = 0;
+    //     if (block->intra_y_mode != B_PRED) {
+    //         left->nz_dc = mb->nz_dc = 0;
+    //     }
+    //     block->non_zero_y = 0;
+    //     block->non_zero_uv = 0;
+    //     block->dither = 0;
+    // }
+    // if (filter_type) {
+    //     *finfo = fstrengths[block->segment_id][block->intra_y_mode==B_PRED];
+    //     finfo->f_inner |= !skip;
+    // }
     return 0;
 }
-static const int8_t kYModesIntra4[18] = {
-    -B_DC_PRED, 1,
-        -B_TM_PRED, 2,
-            -B_VE_PRED, 3,
-                4, 6,
-                    -B_HE_PRED, 5,
-                        -B_RD_PRED, -B_VR_PRED,
-                -B_LD_PRED, 7,
-                    -B_VL_PRED, 8,
-                        -B_HD_PRED, -B_HU_PRED
-};
 
-
-void
-vp8_intramode(WEBP *w, bool_dec *bt, struct macro_block *mbs)
+static int
+above_block_mode(const struct macro_block *this,
+                 const struct macro_block *above,
+                 unsigned int b)
 {
-    int width = ((w->fi.width + 3) >> 2) << 2;
-    int height = w->fi.height;
-    int intra_size = (width + 15) >> 2;
-    uint8_t left[4], *tops, *top;
-    tops = malloc(intra_size);
-    struct macro_block *mb;
-
-    for (int y = 0; y < (height + 15) >> 4; y ++) {
-        memset(left, 0, 4 * sizeof(uint8_t));
-        for (int x = 0; x < (width + 15) >> 4; x ++) {
-            mb = mbs + y *((width + 15) >> 4) + x;
-            top = tops + 4 * x;
-            if (w->k.segmentation.update_mb_segmentation_map) {
-                mb->segment = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
-                    BOOL_DECODE(bt, w->k.segmentation.segment_prob[1]) :
-                    BOOL_DECODE(bt, w->k.segmentation.segment_prob[2]) + 2;
-            } else {
-                mb->segment = 0;
-            }
-            // printf("%x, %ld\n", mb->segment, bt->bits->len - (bt->bits->ptr - bt->bits->start));
-            if (w->k.mb_no_skip_coeff) {
-                mb->skip = BOOL_DECODE(bt, w->k.prob_skip_false);
-            }
-            mb->is_i4x4 = !BOOL_DECODE(bt, 145);
-            // printf("y %d, x %d, is 4x4 %d\n", y, x, mb->is_i4x4);
-            if (!mb->is_i4x4) {
-                const int ymode = BOOL_DECODE(bt, 156) ?
-                    (BOOL_DECODE(bt, 128) ? TM_PRED : H_PRED) :
-                    (BOOL_DECODE(bt, 163) ? V_PRED : DC_PRED);
-                mb->imodes[0] = ymode;
-                memset(top, ymode, 4 * sizeof(*top));
-                memset(left, ymode, 4 * sizeof(*left));
-            } else {
-                uint8_t* modes = mb->imodes;
-                for (int i = 0; i < 4; i++) {
-                    int ymode = left[i];
-                    for (int j = 0; j < 4; j ++) {
-                        const uint8_t* const prob = kf_bmode_prob[top[j]][ymode];
-                        // printf("top %d, ymode %d, prob %d\n", top[j], ymode, prob[0]);
-                        int a = kYModesIntra4[BOOL_DECODE(bt, prob[0])];
-                        while (a > 0) {
-                            a = kYModesIntra4[2 * a + BOOL_DECODE(bt, prob[a])];
-                        }
-                        ymode = -a;
-                        top[j] = ymode;
-                    }
-                    memcpy(modes, top, 4 *sizeof(*top));
-                    modes += 4;
-                    left[i] = ymode;
-                }
-            }
-            mb->uvmode = !BOOL_DECODE(bt, 142) ? DC_PRED
-                        : !BOOL_DECODE(bt, 114) ? V_PRED
-                        : BOOL_DECODE(bt, 183) ? TM_PRED : H_PRED;
+    if (b < 4) {
+        switch (above->intra_y_mode) {
+        case DC_PRED:
+            return B_DC_PRED;
+        case V_PRED:
+            return B_VE_PRED;
+        case H_PRED:
+            return B_HE_PRED;
+        case TM_PRED:
+            return B_TM_PRED;
+        case B_PRED:
+            return above->imodes[b + 12];
+        default:
+            assert(0);
         }
     }
-    free(tops);
+
+    return this->imodes[b - 4];
 }
 
+static int
+left_block_mode(const struct macro_block *this,
+                const struct macro_block *left, unsigned int b)
+{
+    if (!(b & 3)) {
+        switch (left->intra_y_mode) {
+        case DC_PRED:
+            return B_DC_PRED;
+        case V_PRED:
+            return B_VE_PRED;
+        case H_PRED:
+            return B_HE_PRED;
+        case TM_PRED:
+            return B_TM_PRED;
+        case B_PRED:
+            return left->imodes[b + 3];
+        default:
+            assert(0);
+        }
+    }
 
+    return this->imodes[b - 1];
+}
 
-// Paragraph 14.1
-static const uint8_t kDcTable[128] = {
-    4,     5,   6,   7,   8,   9,  10,  10,
-    11,   12,  13,  14,  15,  16,  17,  17,
-    18,   19,  20,  20,  21,  21,  22,  22,
-    23,   23,  24,  25,  25,  26,  27,  28,
-    29,   30,  31,  32,  33,  34,  35,  36,
-    37,   37,  38,  39,  40,  41,  42,  43,
-    44,   45,  46,  46,  47,  48,  49,  50,
-    51,   52,  53,  54,  55,  56,  57,  58,
-    59,   60,  61,  62,  63,  64,  65,  66,
-    67,   68,  69,  70,  71,  72,  73,  74,
-    75,   76,  76,  77,  78,  79,  80,  81,
-    82,   83,  84,  85,  86,  87,  88,  89,
-    91,   93,  95,  96,  98, 100, 101, 102,
-    104, 106, 108, 110, 112, 114, 116, 118,
-    122, 124, 126, 128, 130, 132, 134, 136,
-    138, 140, 143, 145, 148, 151, 154, 157
-};
+static void
+vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mbs, int y, int x)
+{
+    // prepare a fake left mb when ymode is B_PRED
+    struct macro_block fake_left = {
+        .intra_y_mode = 0,
+    };
+    int width = ((w->fi.width + 3) >> 2) << 2;
+    int intra_size = (width + 15) >> 2;
+    struct macro_block *mb;
 
-static const uint16_t kAcTable[128] = {
-    4,     5,   6,   7,   8,   9,  10,  11,
-    12,   13,  14,  15,  16,  17,  18,  19,
-    20,   21,  22,  23,  24,  25,  26,  27,
-    28,   29,  30,  31,  32,  33,  34,  35,
-    36,   37,  38,  39,  40,  41,  42,  43,
-    44,   45,  46,  47,  48,  49,  50,  51,
-    52,   53,  54,  55,  56,  57,  58,  60,
-    62,   64,  66,  68,  70,  72,  74,  76,
-    78,   80,  82,  84,  86,  88,  90,  92,
-    94,   96,  98, 100, 102, 104, 106, 108,
-    110, 112, 114, 116, 119, 122, 125, 128,
-    131, 134, 137, 140, 143, 146, 149, 152,
-    155, 158, 161, 164, 167, 170, 173, 177,
-    181, 185, 189, 193, 197, 201, 205, 209,
-    213, 217, 221, 225, 229, 234, 239, 245,
-    249, 254, 259, 264, 269, 274, 279, 284
-};
+    int cols = (width + 15) >> 4;
+    mb = mbs + y * cols + x;
+    // see 9.3.5, section 10, ref section 20.11
+    if (w->k.segmentation.update_mb_segmentation_map) {
+        mb->segment_id = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
+            BOOL_DECODE(bt, w->k.segmentation.segment_prob[1]) :
+            BOOL_DECODE(bt, w->k.segmentation.segment_prob[2]) + 2;
+    } else {
+        mb->segment_id = 0;
+    }
+    // see section 11, section 9.11
+    mb->mb_skip_coeff =
+        (w->k.mb_no_skip_coeff) ? BOOL_DECODE(bt, w->k.prob_skip_false) : 0;
 
+    // we have key frame only, is_inter_mb = 1
+    // see section 11.2 or decode_kf_mb_mode
+    const int8_t kf_ymode_tree[8] = {
+        -B_PRED, 2,         /* root: B_PRED = "0", "1" subtree */
+        4, 6,               /* "1" subtree has 2 descendant subtrees */
+        -DC_PRED, -V_PRED,  /* "10" subtree: DC_PRED = "100",
+                                                    V_PRED = "101" */
+        -H_PRED, -TM_PRED   /* "11" subtree: H_PRED = "110",
+                                                   TM_PRED = "111" */
+    };
+
+    const uint8_t kf_ymode_prob[4] = {145, 156, 163, 128};
+    int intra_y_mode = bool_dec_tree(bt, kf_ymode_tree, kf_ymode_prob);
+    mb->intra_y_mode = intra_y_mode;
+    mb->imodes[0] = intra_y_mode;
+    if (intra_y_mode == B_PRED) {
+        // Paragraph 11.5
+        static const uint8_t
+            kf_bmode_prob[NUM_BMODES][NUM_BMODES][NUM_BMODES - 1] = {
+                {
+                    {231, 120, 48, 89, 115, 113, 120, 152, 112},
+                    {152, 179, 64, 126, 170, 118, 46, 70, 95},
+                    {175, 69, 143, 80, 85, 82, 72, 155, 103},
+                    {56, 58, 10, 171, 218, 189, 17, 13, 152},
+                    {114, 26, 17, 163, 44, 195, 21, 10, 173},
+                    {121, 24, 80, 195, 26, 62, 44, 64, 85},
+                    {144, 71, 10, 38, 171, 213, 144, 34, 26},
+                    {170, 46, 55, 19, 136, 160, 33, 206, 71},
+                    {63, 20, 8, 114, 114, 208, 12, 9, 226},
+                    {81, 40, 11, 96, 182, 84, 29, 16, 36}
+                },
+                {
+                    {134, 183, 89, 137, 98, 101, 106, 165, 148},
+                    {72, 187, 100, 130, 157, 111, 32, 75, 80},
+                    {66, 102, 167, 99, 74, 62, 40, 234, 128},
+                    {41, 53, 9, 178, 241, 141, 26, 8, 107},
+                    {74, 43, 26, 146, 73, 166, 49, 23, 157},
+                    {65, 38, 105, 160, 51, 52, 31, 115, 128},
+                    {104, 79, 12, 27, 217, 255, 87, 17, 7},
+                    {87, 68, 71, 44, 114, 51, 15, 186, 23},
+                    {47, 41, 14, 110, 182, 183, 21, 17, 194},
+                    {66, 45, 25, 102, 197, 189, 23, 18, 22}
+                },
+                {
+                    {88, 88, 147, 150, 42, 46, 45, 196, 205},
+                    {43, 97, 183, 117, 85, 38, 35, 179, 61},
+                    {39, 53, 200, 87, 26, 21, 43, 232, 171},
+                    {56, 34, 51, 104, 114, 102, 29, 93, 77},
+                    {39, 28, 85, 171, 58, 165, 90, 98, 64},
+                    {34, 22, 116, 206, 23, 34, 43, 166, 73},
+                    {107, 54, 32, 26, 51, 1, 81, 43, 31},
+                    {68, 25, 106, 22, 64, 171, 36, 225, 114},
+                    {34, 19, 21, 102, 132, 188, 16, 76, 124},
+                    {62, 18, 78, 95, 85, 57, 50, 48, 51}
+                },
+                {
+                    {193, 101, 35, 159, 215, 111, 89, 46, 111},
+                    {60, 148, 31, 172, 219, 228, 21, 18, 111},
+                    {112, 113, 77, 85, 179, 255, 38, 120, 114},
+                    {40, 42, 1, 196, 245, 209, 10, 25, 109},
+                    {88, 43, 29, 140, 166, 213, 37, 43, 154},
+                    {61, 63, 30, 155, 67, 45, 68, 1, 209},
+                    {100, 80, 8, 43, 154, 1, 51, 26, 71},
+                    {142, 78, 78, 16, 255, 128, 34, 197, 171},
+                    {41, 40, 5, 102, 211, 183, 4, 1, 221},
+                    {51, 50, 17, 168, 209, 192, 23, 25, 82}
+                },
+                {
+                    {138, 31, 36, 171, 27, 166, 38, 44, 229},
+                    {67, 87, 58, 169, 82, 115, 26, 59, 179},
+                    {63, 59, 90, 180, 59, 166, 93, 73, 154},
+                    {40, 40, 21, 116, 143, 209, 34, 39, 175},
+                    {47, 15, 16, 183, 34, 223, 49, 45, 183},
+                    {46, 17, 33, 183, 6, 98, 15, 32, 183},
+                    {57, 46, 22, 24, 128, 1, 54, 17, 37},
+                    {65, 32, 73, 115, 28, 128, 23, 128, 205},
+                    {40, 3, 9, 115, 51, 192, 18, 6, 223},
+                    {87, 37, 9, 115, 59, 77, 64, 21, 47}
+                },
+                {
+                    {104, 55, 44, 218, 9, 54, 53, 130, 226},
+                    {64, 90, 70, 205, 40, 41, 23, 26, 57},
+                    {54, 57, 112, 184, 5, 41, 38, 166, 213},
+                    {30, 34, 26, 133, 152, 116, 10, 32, 134},
+                    {39, 19, 53, 221, 26, 114, 32, 73, 255},
+                    {31, 9, 65, 234, 2, 15, 1, 118, 73},
+                    {75, 32, 12, 51, 192, 255, 160, 43, 51},
+                    {88, 31, 35, 67, 102, 85, 55, 186, 85},
+                    {56, 21, 23, 111, 59, 205, 45, 37, 192},
+                    {55, 38, 70, 124, 73, 102, 1, 34, 98}
+                },
+                {
+                    {125, 98, 42, 88, 104, 85, 117, 175, 82},
+                    {95, 84, 53, 89, 128, 100, 113, 101, 45},
+                    {75, 79, 123, 47, 51, 128, 81, 171, 1},
+                    {57, 17, 5, 71, 102, 57, 53, 41, 49},
+                    {38, 33, 13, 121, 57, 73, 26, 1, 85},
+                    {41, 10, 67, 138, 77, 110, 90, 47, 114},
+                    {115, 21, 2, 10, 102, 255, 166, 23, 6},
+                    {101, 29, 16, 10, 85, 128, 101, 196, 26},
+                    {57, 18, 10, 102, 102, 213, 34, 20, 43},
+                    {117, 20, 15, 36, 163, 128, 68, 1, 26}
+                },
+                {
+                    {102, 61, 71, 37, 34, 53, 31, 243, 192},
+                    {69, 60, 71, 38, 73, 119, 28, 222, 37},
+                    {68, 45, 128, 34, 1, 47, 11, 245, 171},
+                    {62, 17, 19, 70, 146, 85, 55, 62, 70},
+                    {37, 43, 37, 154, 100, 163, 85, 160, 1},
+                    {63, 9, 92, 136, 28, 64, 32, 201, 85},
+                    {75, 15, 9, 9, 64, 255, 184, 119, 16},
+                    {86, 6, 28, 5, 64, 255, 25, 248, 1},
+                    {56, 8, 17, 132, 137, 255, 55, 116, 128},
+                    {58, 15, 20, 82, 135, 57, 26, 121, 40}
+                },
+                {
+                    {164, 50, 31, 137, 154, 133, 25, 35, 218},
+                    {51, 103, 44, 131, 131, 123, 31, 6, 158},
+                    {86, 40, 64, 135, 148, 224, 45, 183, 128},
+                    {22, 26, 17, 131, 240, 154, 14, 1, 209},
+                    {45, 16, 21, 91, 64, 222, 7, 1, 197},
+                    {56, 21, 39, 155, 60, 138, 23, 102, 213},
+                    {83, 12, 13, 54, 192, 255, 68, 47, 28},
+                    {85, 26, 85, 85, 128, 128, 32, 146, 171},
+                    {18, 11, 7, 63, 144, 171, 4, 4, 246},
+                    {35, 27, 10, 146, 174, 171, 12, 26, 128}
+                },
+                {
+                    {190, 80, 35, 99, 180, 80, 126, 54, 45},
+                    {85, 126, 47, 87, 176, 51, 41, 20, 32},
+                    {101, 75, 128, 139, 118, 146, 116, 128, 85},
+                    {56, 41, 15, 176, 236, 85, 37, 9, 62},
+                    {71, 30, 17, 119, 118, 255, 17, 18, 138},
+                    {101, 38, 60, 138, 55, 70, 43, 26, 142},
+                    {146, 36, 19, 30, 171, 255, 97, 27, 20},
+                    {138, 45, 61, 62, 219, 1, 81, 188, 64},
+                    {32, 41, 20, 117, 151, 142, 20, 21, 163},
+                    {112, 19, 12, 61, 195, 128, 48, 4, 24}
+                }
+            };
+
+        const int8_t bmode_tree[18] = {
+            -B_DC_PRED, 2,                          /* B_DC_PRED = "0" */
+            -B_TM_PRED, 4,                          /* B_TM_PRED = "10" */
+            -B_VE_PRED, 6,                          /* B_VE_PRED = "110" */
+            8,          12,
+            -B_HE_PRED, 10,                         /* B_HE_PRED = "11100" */
+            -B_RD_PRED, -B_VR_PRED,               /* B_RD_PRED = "111010",
+                                                               B_VR_PRED = "111011" */
+            -B_LD_PRED, 14,                       /* B_LD_PRED = "111110" */
+            -B_VL_PRED, 16,                       /* B_VL_PRED = "1111110" */
+            -B_HD_PRED, -B_HU_PRED                /* HD = "11111110",
+                                                               HU = "11111111" */
+        };
+        struct macro_block *above = mbs + (y - 1) * cols + x;
+        for (int i = 0; i < 16; i++) {
+            int a = above_block_mode(mb, above, i);
+            int l = left_block_mode(mb, (x > 0) ? (mb - 1 ) : &fake_left, i);
+            int intra_b_mode = bool_dec_tree(bt, bmode_tree, kf_bmode_prob[a][l]);
+            mb->imodes[i] = intra_b_mode;
+        }
+    }
+
+    const int8_t uv_mode_tree[6] = {
+        -DC_PRED, 2,      /* root: DC_PRED = "0", "1" subtree */
+        -V_PRED, 4,       /* "1" subtree:  V_PRED = "10", "11" subtree */
+        -H_PRED, -TM_PRED /* "11" subtree: H_PRED = "110",
+                                                   TM_PRED = "111" */
+    };
+    const uint8_t kf_uv_mode_prob[3] = {142, 114, 183};
+    mb->intra_uv_mode = bool_dec_tree(bt, uv_mode_tree, kf_uv_mode_prob);
+    // VDBG(webp, "y %d, x %d: ymode %d, uvmode %d", y, x, mb->intra_y_mode, mb->intra_uv_mode);
+}
 
 
 #define BPS      (32)
@@ -2037,7 +2117,7 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
         }
 
         // predict and add residuals
-        if (mb->is_i4x4) {   // 4x4
+        if (mb->intra_y_mode == B_PRED) { // 4x4
             uint32_t* const top_right = (uint32_t*)(y_dst - BPS + 16);
 
             if (y > 0) {
@@ -2056,7 +2136,7 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
                 VP8PredLuma4[mb->imodes[n]](dst);
                 DoTransform(bits, coeffs + n * 16, dst);
             }
-        } else {    // 16x16
+        } else { // 16x16
             const int pred_func = CheckMode(x, y, mb->imodes[0]);
             VP8PredLuma16[pred_func](y_dst);
             if (bits != 0) {
@@ -2065,10 +2145,10 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
                 }
             }
         }
-        
+
         // Chroma
         const uint32_t bits_uv = mb->non_zero_uv;
-        const int pred_func = CheckMode(x, y, mb->uvmode);
+        const int pred_func = CheckMode(x, y, mb->intra_uv_mode);
         VP8PredChroma8[pred_func](u_dst);
         VP8PredChroma8[pred_func](v_dst);
         DoUVTransform(bits_uv >> 0, coeffs + 16 * 16, u_dst);
@@ -2408,7 +2488,6 @@ finish_row(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
     return 0;
 }
 
-
 /* see 15.1 */
 static void
 precompute_filter(WEBP *w)
@@ -2469,79 +2548,43 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-
-    struct quant qt;
-
-    for (int i = 0; i < NUM_MB_SEGMENTS; ++i) {
-        int q;
-        if (w->k.segmentation.segmentation_enabled) {
-            q = w->k.segmentation.quant[i].quantizer_update_value;
-            if (!w->k.segmentation.segment_feature_mode) {
-                q += w->k.quant_indice.y_ac_qi;
-            }
-        } else {
-            if (i > 0) {
-                for (int c = 0; c < 2; c ++) {
-                    qt.dqm_y1[i][c] = qt.dqm_y1[0][c];
-                    qt.dqm_y2[i][c] = qt.dqm_y2[0][c];
-                    qt.dqm_uv[i][c] = qt.dqm_uv[0][c];
-                    qt.uv_quant[i] = qt.uv_quant[0];
-                }
-                continue;
-            } else {
-                q = w->k.quant_indice.y_ac_qi;
-            }
-        }
-
-        qt.dqm_y1[i][0] = kDcTable[clamp(q + w->k.quant_indice.y_dc_delta, 127)];
-        qt.dqm_y1[i][1] = kAcTable[clamp(q + 0, 127)];
-
-        qt.dqm_y2[i][0] = kDcTable[clamp(q + w->k.quant_indice.y2_dc_delta, 127)] * 2;
-        // For all x in [0..284], x*155/100 is bitwise equal to (x*101581) >> 16.
-        // The smallest precision for that is '(x*6349) >> 12' but 16 is a good
-        // word size.
-        qt.dqm_y2[i][1] = (kAcTable[clamp(q + w->k.quant_indice.y2_ac_delta, 127)] * 101581) >> 16;
-        if (qt.dqm_y2[i][1] < 8) qt.dqm_y2[i][1] = 8;
-
-        qt.dqm_uv[i][0] = kDcTable[clamp(q + w->k.quant_indice.uv_dc_delta, 117)];
-        qt.dqm_uv[i][1] = kAcTable[clamp(q + w->k.quant_indice.uv_ac_delta, 127)];
-
-        qt.uv_quant[i] = q + w->k.quant_indice.uv_ac_delta;   // for dithering strength evaluation
-    }
+    struct WEBP_decoder d;
 
     precompute_filter(w);
-#if 0
-    for (int s = 0; s < NUM_MB_SEGMENTS; ++s) {
-        for (int i4x4 = 0; i4x4 <= 1; ++i4x4) {
-        VP8FInfo* const fi = &fstrengths[s][i4x4];
-        printf("ilevel %d, inner %d,  limit %d, hev %d \n",
-            fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
-        }
-    }
-#endif
+
     struct macro_block *blocks = malloc(sizeof(struct macro_block)* (((width + 15) >> 4) * ((height + 15) >> 4)));
     
     struct vp8mb *mbs = malloc(sizeof(struct vp8mb)* (((width + 15) >> 4) + 1));
-    
-    vp8_intramode(w, br, blocks);
 
-    VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * ((width + 15) >> 4)* ((height + 15) >> 4));
+    int rows = (height + 15) >> 4;
+    int cols =  (width + 15) >> 4;
+    VDBG(webp, "rows %d, cols %d\n", rows, cols);
 
-    for (int y = 0; y < (height + 15) >> 4; y ++) {
-        // parse intra mode here or in advance
-        bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
+    // Section 19.3: Macroblock header & Data
+    for (int y = 0; y < rows; y++) {
+        // from first partition
+        for (int x = 0; x < cols; x++) {
+            vp8_decode_mb_header(w, br, blocks, y, x);
+        }
+        // bits_vec_dump(br->bits);
+        // printf("%ld\n", br->bits->len - (br->bits->ptr - br->bits->start));
 
-        //reset left part
-        struct vp8mb *left = mbs;
-        left->nz = 0;
-        left->nz_dc = 0;
+        for (int x = 0; x < cols; x++) {
+            VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * rows * cols);
 
-        for (int x = 0; x < (width + 15) >> 4; x ++) {
-            struct macro_block *block = blocks + y *((width + 15) >> 4) + x;
+            // parse intra mode here or in advance
+            bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
+
+            // reset left part
+            struct vp8mb *left = mbs;
+            left->nz = 0;
+            left->nz_dc = 0;
+
+            struct macro_block *block = blocks + y * cols + x;
             struct vp8mb *mb = mbs + 1 + x;
-            VP8FInfo *fi = finfos + y *((width + 15) >> 4) + x;
-            // printf("2 y %d, x %d, is 4x4 %d, tnz %d, lnz %d\n", y, x, block->is_i4x4, mb->nz, left->nz);
-            vp8_decode_MB(w, left, mb, block, bt, &qt, fi);
+            VP8FInfo *fi = finfos + y * cols + x;
+            // printf("2 y %d, x %d, is 4x4 %d, tnz %d, lnz %d\n", y, x, block->intra_y_mode, mb->nz, left->nz);
+            vp8_decode_residual_data(w, left, mb, block, bt, &d, fi);
         }
     }
 
@@ -2550,15 +2593,16 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int extra_rows = kFilterExtraRows[filter_type];
 
     cache c;
-    c.m = malloc((((width + 15) >> 4) * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
-    c.y_stride = ((width + 15) >> 4) * 16;
-    c.uv_stride = ((width + 15) >> 4) * 8;
+    c.m = malloc((cols * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
+    c.y_stride = cols * 16;
+    c.uv_stride = cols * 8;
     c.y = c.m + extra_rows * c.y_stride;
     c.u = c.y + 16 * c.y_stride + (extra_rows / 2) * c.uv_stride;
     c.v = c.u + 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride;
-    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n",  extra_rows * c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride,
-    // 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
-    //     (((width + 15) >> 4) * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
+    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n",  extra_rows *
+    // c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride, 8 *
+    // c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
+    //     (cols * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
 
 #if 0
     for (int j = 0; j < 24; j ++) {
@@ -2570,10 +2614,10 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 #endif
 
     /* reconstruct the row with filter */
-    for (int y = 0; y < (height + 15) >> 4; y ++) {
-        reconstruct_row(w, blocks, yuv_b, y, &c, finfos);
-        finish_row(w, filter_type, y, &c, finfos);
-    }
+    // for (int y = 0; y < (height + 15) >> 4; y ++) {
+    //     reconstruct_row(w, blocks, yuv_b, y, &c, finfos);
+    //     finish_row(w, filter_type, y, &c, finfos);
+    // }
 
     // for (int i = 0; i < ((width + 15) >> 4); i ++) {
     //     VP8FInfo *fi = finfos + i;
@@ -2610,19 +2654,27 @@ int WEBP_read_frame(WEBP *w, FILE *f)
 
     read_vp8_ctl_partition(w, first_bt, f);
 
+    /* Quato From 9.11:
+       The remainder of the first data partition consists of macroblock-level
+        prediction data. 
+       After the frame header is processed, all probabilities needed to decode
+        the prediction and residue data are known and will not change until the
+        next frame.
+    */
     bool_dec *bt[MAX_PARTI_NUM];
-
     for (int i = 0; i < w->k.nbr_partitions; i++) {
         uint8_t *parts = malloc(w->p[i].len);
         fseek(f, w->p[i].start, SEEK_SET);
         fread(parts, 1, w->p[i].len, f);
-        VDBG(webp, "part %d: len %d", i, w->p[i].len);
+        VDBG(webp, "part %d: len %d, 0x%x", i, w->p[i].len, parts[0]);
         // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_dec_init(parts, w->p[i].len);
     }
+    // bits_vec_dump(first_bt->bits);
 
     vp8_decode(w, first_bt, bt);
 
+    // free all decoders
     bool_dec_free(first_bt);
     for (int i = 0; i < w->k.nbr_partitions; i++) {
         bool_dec_free(bt[i]);
@@ -2753,7 +2805,7 @@ WEBP_info(FILE *f, struct pic* p)
         if (w->k.segmentation.update_mb_segmentation_map) {
             fprintf(f, "\tsegment prob:");
             for (int i = 0; i < 3; i ++) {
-                fprintf(f, "%d ", w->k.segmentation.segment_prob[i]);
+                fprintf(f, " %d", w->k.segmentation.segment_prob[i]);
             }
             fprintf(f, "\n");
         }

@@ -937,59 +937,32 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
 
 /* Residual decoding (Paragraph 13.2 / 13.3) */
 typedef enum {
-  DCT_0,    /* value 0 */
-  DCT_1,    /* 1 */
-  DCT_2,    /* 2 */
-  DCT_3,    /* 3 */
-  DCT_4,    /* 4 */
-  dct_cat1, /* range 5 - 6  (size 2) */
-  dct_cat2, /* 7 - 10   (4) */
-  dct_cat3, /* 11 - 18  (8) */
-  dct_cat4, /* 19 - 34  (16) */
-  dct_cat5, /* 35 - 66  (32) */
-  dct_cat6, /* 67 - 2048  (1982) */
-  dct_eob,  /* end of block */
+    DCT_0,    /* value 0 */
+    DCT_1,    /* 1 */
+    DCT_2,    /* 2 */
+    DCT_3,    /* 3 */
+    DCT_4,    /* 4 */
+    dct_cat1, /* range 5 - 6  (size 2) */
+    dct_cat2, /* 7 - 10   (4) */
+    dct_cat3, /* 11 - 18  (8) */
+    dct_cat4, /* 19 - 34  (16) */
+    dct_cat5, /* 35 - 66  (32) */
+    dct_cat6, /* 67 - 2048  (1982) */
+    dct_eob,  /* end of block */
 
-  num_dct_tokens /* 12 */
+    num_dct_tokens /* 12 */
 } dct_token;
 
-const int8_t coeff_tree[2 * (num_dct_tokens - 1)] = {
-    -dct_eob,  2, /* eob = "0"   */
-    -DCT_0,    4, /* 0   = "10"  */
-    -DCT_1,    6, /* 1   = "110" */
-    8,         12,       -DCT_2,
-    10,                /* 2   = "11100" */
-    -DCT_3,    -DCT_4, /* 3   = "111010", 4 = "111011" */
-    14,        16,       -dct_cat1,
-    -dct_cat2, /* cat1 =  "111100",
-                  cat2 = "111101" */
-    18,        20,       -dct_cat3,
-    -dct_cat4,           /* cat3 = "1111100",
-                            cat4 = "1111101" */
-    -dct_cat5, -dct_cat6 /* cat4 = "1111110",
-                            cat4 = "1111111" */
-};
-
-const int coeff_bands[16] = {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7};
-
-/* pCatn specify ranges of unsigned values whose width is 
-1, 2, 3, 4, 5, or 11 bits, respectively.  */
-static const uint8_t pCat1[] = { 159, 0};
-static const uint8_t pCat2[] = { 165, 145, 0};
-static const uint8_t pCat3[] = { 173, 148, 140, 0 };
-static const uint8_t pCat4[] = { 176, 155, 140, 135, 0 };
-static const uint8_t pCat5[] = { 180, 157, 141, 134, 130, 0 };
-static const uint8_t pCat6[] =
-  { 254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129, 0 };
-
-static const uint8_t* const pCat3456[] = { pCat3, pCat4, pCat5, pCat6 };
-
-static const uint8_t * pCat[] = {pCat1, pCat2, pCat3, pCat4, pCat5, pCat6};
-
-static const uint8_t kZigzag[16] = {
-  0, 1, 4, 8,  5, 2, 3, 6,  9, 12, 13, 10,  7, 11, 14, 15
-};
-
+/**
+ * The function DCTextra performs a bitwise operation on a series of boolean values and returns the
+ * result as a uint8_t.
+ * 
+ * @param bt The parameter "bt" is a pointer to a boolean decoder object. It is used to decode boolean
+ * values from a bitstream.
+ * @param p The parameter `p` is a pointer to an array of `uint8_t` values.
+ * 
+ * @return a value of type `uint8_t`.
+ */
 uint8_t DCTextra(bool_dec *bt, const uint8_t *p) {
     uint8_t v = 0;
     do {
@@ -998,52 +971,66 @@ uint8_t DCTextra(bool_dec *bt, const uint8_t *p) {
     return v;
 }
 
-// See section 13-2: https://datatracker.ietf.org/doc/html/rfc6386#section-13.2
-static int
-get_large_value(struct bool_dec *bt, const uint8_t* const p)
-{
-    int v;
-    if (!BOOL_DECODE(bt, p[3])) {
-        if (!BOOL_DECODE(bt, p[4])) {
-            v = 2;
-        } else {
-            v = 3 + BOOL_DECODE(bt, p[5]);
-        }
-    } else {
-    if (!BOOL_DECODE(bt, p[6])) {
-        if (!BOOL_DECODE(bt, p[7])) {
-            v = 5 + BOOL_DECODE(bt, 159);
-        } else {
-            // v = 7 + 2 * BOOL_DECODE(bt, 165);
-            // v += BOOL_DECODE(bt, 145);
-            BOOL_TREE(bt, coeff_tree, pCat2);
-        }
-    } else {
-        const uint8_t* tab;
-        const int bit1 = BOOL_DECODE(bt, p[8]);
-        const int bit0 = BOOL_DECODE(bt, p[9 + bit1]);
-        const int cat = 2 * bit1 + bit0;
-        v = 0;
-        for (tab = pCat3456[cat]; *tab; ++tab) {
-            v += v + BOOL_DECODE(bt, *tab);
-        }
-            v += 3 + (8 << cat);
-        }
-    }
-    return v;
-}
-
-
-/* Returns the position of the last non-zero coeff */
+/**
+ * The function `vp8_get_coefficients` decodes coefficients for a VP8 video frame.
+ * 
+ * @param bt A pointer to a struct bool_dec, which is a boolean decoder used for decoding coefficients
+ * in the VP8 video codec.
+ * @param out A pointer to an array of int16_t where the decoded coefficients will be stored.
+ * @param bands An array of pointers to VP8BandProbas structures. Each VP8BandProbas structure contains
+ * probability tables for each coefficient band.
+ * @param first The parameter "first" is the index of the first coefficient to be decoded. It indicates
+ * the starting point in the coefficient array where the decoding should begin.
+ * @param ctx The parameter "ctx" represents the context for coefficient decoding. It is used to
+ * determine the probability table to use for decoding the coefficient token.
+ * @param quant_dc The parameter "quant_dc" represents the quantization factor for the DC coefficient.
+ * It is used to scale the DC coefficient before encoding or decoding.
+ * @param quant_ac The parameter "quant_ac" represents the quantization factor for the AC coefficients.
+ * It is used to scale the absolute value of the coefficient before storing it in the "out" array.
+ * 
+ * @return the number of coefficients processed, which is always 16 in this case.
+ */
 static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
-                         const VP8BandProbas *const bands[], int first, int ctx,
-                         uint16_t quant_dc, uint16_t quant_ac)
+                                const VP8BandProbas *const bands[], int first,
+                                int ctx, uint16_t quant_dc, uint16_t quant_ac)
 {
     bool prevCoeffWasZero = false;
     int token = 0;
     int sign = 0;
     int absValue = 0;
-    int categoryBase[6] = {5, 7, 11, 19, 35, 67};
+    static int categoryBase[6] = {5, 7, 11, 19, 35, 67};
+    /* pCatn specify ranges of unsigned values whose width is
+     * 1, 2, 3, 4, 5, or 11 bits, respectively.
+     */
+    static const uint8_t pCat1[] = {159, 0};
+    static const uint8_t pCat2[] = {165, 145, 0};
+    static const uint8_t pCat3[] = {173, 148, 140, 0};
+    static const uint8_t pCat4[] = {176, 155, 140, 135, 0};
+    static const uint8_t pCat5[] = {180, 157, 141, 134, 130, 0};
+    static const uint8_t pCat6[] = {254, 254, 243, 230, 196, 177,
+                                    153, 140, 133, 130, 129, 0};
+
+    static const uint8_t *pCat[] = {pCat1, pCat2, pCat3, pCat4, pCat5, pCat6};
+
+    static const uint8_t kZigzag[16] = {0, 1,  4,  8,  5, 2,  3,  6,
+                                        9, 12, 13, 10, 7, 11, 14, 15};
+
+    static const int8_t coeff_tree[2 * (num_dct_tokens - 1)] = {
+        -dct_eob,  2, /* eob = "0"   */
+        -DCT_0,    4, /* 0   = "10"  */
+        -DCT_1,    6, /* 1   = "110" */
+        8,         12,       -DCT_2,
+        10,                /* 2   = "11100" */
+        -DCT_3,    -DCT_4, /* 3   = "111010", 4 = "111011" */
+        14,        16,       -dct_cat1,
+        -dct_cat2, /* cat1 =  "111100",
+                      cat2 = "111101" */
+        18,        20,       -dct_cat3,
+        -dct_cat4,           /* cat3 = "1111100",
+                                cat4 = "1111101" */
+        -dct_cat5, -dct_cat6 /* cat4 = "1111110",
+                                cat4 = "1111111" */
+    };
 
     for (int n = first; n < 16; ++n) {
         const uint8_t *p = bands[n]->probas[ctx];
@@ -1078,8 +1065,8 @@ static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
     return 16;
 }
 
-static void
-transformWHT_C(const int16_t* in, int16_t* out)
+//in out for 4*4
+static void IWHT_C(const int16_t* in, int16_t* out)
 {
     int tmp[16];
     int i;
@@ -1093,19 +1080,52 @@ transformWHT_C(const int16_t* in, int16_t* out)
         tmp[4  + i] = a3 + a2;
         tmp[12 + i] = a3 - a2;
     }
+    // pass two
     for (i = 0; i < 4; ++i) {
         const int dc = tmp[0 + i * 4] + 3;    // w/ rounder
         const int a0 = dc             + tmp[3 + i * 4];
         const int a1 = tmp[1 + i * 4] + tmp[2 + i * 4];
         const int a2 = tmp[1 + i * 4] - tmp[2 + i * 4];
         const int a3 = dc             - tmp[3 + i * 4];
-        out[ 0] = (a0 + a1) >> 3;
-        out[16] = (a3 + a2) >> 3;
-        out[32] = (a0 - a1) >> 3;
-        out[48] = (a3 - a2) >> 3;
-        out += 64;
+        out[4 * i + 0] = (a0 + a1) >> 3;
+        out[4 * i + 1] = (a3 + a2) >> 3;
+        out[4 * i + 2] = (a0 - a1) >> 3;
+        out[4 * i + 3] = (a3 - a2) >> 3;
+        // out += 64;
     }
 }
+
+#if 0
+static void IDCT_C(const int16_t *in, int16_t *out)
+{
+    const int c1 = 20091;
+    const int c2 = 35468;
+    int tmp[16];
+    int i;
+    for (i = 0; i < 4; ++i) {
+        const int a0 = in[0 + i] + in[8 + i];
+        const int a1 = in[0 + i] - in[8 + i];
+        const int a2 = ((in[4 + i] * c2) >> 16) - in[12 + i] - ((in[12 + i] * c1) >> 16);
+        const int a3 = in[4 + i] + ((in[4 + i] * c1) >> 16) - ((in[12 + i] * c2) >> 16);
+        tmp[0 + i] = a0 + a3;
+        tmp[12 + i] = a1 - a3;
+        tmp[4 + i] = a2 + a3;
+        tmp[8 + i] = a2 - a3;
+    }
+    for (i = 0; i < 4; ++i) {
+        const int dc = tmp[0 + i * 4] + 3; // w/ rounder
+        const int a0 = tmp[0 + i * 4] + tmp[2 + i * 4];
+        const int a1 = tmp[0 + i * 4] - tmp[2 + i * 4];
+        const int a2 = (tmp[1 + i * 4] * c2 >> 16) - tmp[3 + i * 4] - (tmp[3 + i * 4] * c1 >> 16);
+        const int a3 = tmp[1 + i * 4] + (tmp[1 + i * 4] * c1 >> 16) + (tmp[3 + i * 4] * c2 >> 16);
+        out[4 * i] = (a0 + a3 + 4) >> 3;
+        out[4 * i + 3] = (a0 - a3 + 4) >> 3;
+        out[4 * i + 1] = (a1 + a2 + 4) >> 3;
+        out[4 * i + 2] = (a1 - a2 + 4) >> 3;
+        // out += 64;
+    }
+}
+#endif
 
 struct context {
     int ctx[9];
@@ -1128,6 +1148,10 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
                                      struct context *left, struct context *top,
                                      bool_dec *bt) 
 {
+
+    static const int coeff_bands[16] = {0, 1, 2, 3, 6, 4, 5, 6,
+                                 6, 6, 6, 6, 6, 6, 6, 7};
+
     const VP8BandProbas *bands[NUM_TYPES][16];
     int16_t* dst = block->coeffs;
     memset(dst, 0, 384 * sizeof(*dst));
@@ -1146,16 +1170,13 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
     if (block->intra_y_mode != B_PRED) {
         int16_t dc[16] = {0};
         int ctx = top[block->x].ctx[0] + left->ctx[0];
-        // VDBG(webp, "ctx1 %d", ctx);
         const int nz = vp8_get_coefficients(bt, dc, bands[1], 0, ctx, d->y2_dc, d->y2_ac);
-        // for (int i = 0; i < 16; i++) {
-        //     printf("%d ", dc[i]);
-        // }
-        // printf("\n");
-        // assert(0);
         top[block->x].ctx[0] = left->ctx[0] = ((nz > 0) ? 1 : 0);
         if (nz > 1) {   // more than just the DC -> perform the full transform
-            transformWHT_C(dc, dst);
+            IWHT_C(dc, dst);
+            for (int i = 0; i < 16; i += 1) {
+                dst[i * 16] = dst[i];
+            }
         } else {        // only DC is non-zero -> inlined simplified transform
             const int dc0 = (dc[0] + 3) >> 3;
             for (int i = 0; i < 16; i += 1) {
@@ -1169,13 +1190,19 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
         ac_proba = bands[3];
     }
 
-    //16Y
+    // 16Y
+    // int16_t dc[16] = {0};
     for (int y = 0; y < 4; ++y) {
         uint8_t l = left->ctx[y+1];
         for (int x = 0; x < 4; ++x) {
             int ctx = top[block->x].ctx[x + 1] + l;
-            // VDBG(webp, "ctx2 %d", ctx);
             const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
+            // if (nz > 1) {
+            //     IDCT_C(dc, dst);
+            // }
+            // for (int i = 0; i < 16; i ++) {
+            //     dst[(x + y * 4) * 16 + i] = dc[i];
+            // }
             dst += 16;
             l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
         }
@@ -1183,15 +1210,20 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
     }
 
     //4U 4V
+    // memset(dc, 0, 16 * 2);
     for (int ch = 5; ch <= 7; ch += 2) {
         for (int y = 0; y < 2; ++y) {
             uint8_t l = left->ctx[y + ch];
             for (int x = 0; x < 2; ++x) {
-
                 int ctx = l + top[block->x].ctx[x + ch];
-                // VDBG(webp, "ctx3 %d", ctx);
                 const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
-
+                // if (nz > 1) {
+                //     IDCT_C(dc, dst);
+                // }
+                // for (int i = 0; i < 16; i++) {
+                //     dst[(x + y * 2 + ((ch == 5) ? 16 : 20)) * 16 + i] = dc[i];
+                // }
+                dst += 16;
                 l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;
             }
             left->ctx[y+ch] = l;
@@ -1219,8 +1251,6 @@ static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
   // 0=off, 1=simple, 2=complex
 
   // see section 19.3
-  // if (block->mb_skip_coeff)
-  //         VDBG(webp, "skip %d", block->mb_skip_coeff);
   if (!block->mb_skip_coeff) {
         vp8_decode_residual_block(w, block, left, top, bt);
     } else {
@@ -1235,6 +1265,7 @@ static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
             top[block->x].ctx[i] = 0;
         }
         block->dither = 0;
+        // memset(block->coeffs, 0, 384 * sizeof(int16_t));
     }
 
     // if (filter_type) {
@@ -1320,7 +1351,7 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
 
     // we have key frame only, is_inter_mb = 1
     // see section 11.2 or decode_kf_mb_mode
-    const int8_t kf_ymode_tree[8] = {
+    static const int8_t kf_ymode_tree[8] = {
         -B_PRED, 2,         /* root: B_PRED = "0", "1" subtree */
         4, 6,               /* "1" subtree has 2 descendant subtrees */
         -DC_PRED, -V_PRED,  /* "10" subtree: DC_PRED = "100",
@@ -1328,150 +1359,127 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
         -H_PRED, -TM_PRED   /* "11" subtree: H_PRED = "110",
                                                    TM_PRED = "111" */
     };
+    static const uint8_t kf_bmode_prob[NUM_BMODES][NUM_BMODES][NUM_BMODES - 1] =
+        {{{231, 120, 48, 89, 115, 113, 120, 152, 112},
+          {152, 179, 64, 126, 170, 118, 46, 70, 95},
+          {175, 69, 143, 80, 85, 82, 72, 155, 103},
+          {56, 58, 10, 171, 218, 189, 17, 13, 152},
+          {114, 26, 17, 163, 44, 195, 21, 10, 173},
+          {121, 24, 80, 195, 26, 62, 44, 64, 85},
+          {144, 71, 10, 38, 171, 213, 144, 34, 26},
+          {170, 46, 55, 19, 136, 160, 33, 206, 71},
+          {63, 20, 8, 114, 114, 208, 12, 9, 226},
+          {81, 40, 11, 96, 182, 84, 29, 16, 36}},
+         {{134, 183, 89, 137, 98, 101, 106, 165, 148},
+          {72, 187, 100, 130, 157, 111, 32, 75, 80},
+          {66, 102, 167, 99, 74, 62, 40, 234, 128},
+          {41, 53, 9, 178, 241, 141, 26, 8, 107},
+          {74, 43, 26, 146, 73, 166, 49, 23, 157},
+          {65, 38, 105, 160, 51, 52, 31, 115, 128},
+          {104, 79, 12, 27, 217, 255, 87, 17, 7},
+          {87, 68, 71, 44, 114, 51, 15, 186, 23},
+          {47, 41, 14, 110, 182, 183, 21, 17, 194},
+          {66, 45, 25, 102, 197, 189, 23, 18, 22}},
+         {{88, 88, 147, 150, 42, 46, 45, 196, 205},
+          {43, 97, 183, 117, 85, 38, 35, 179, 61},
+          {39, 53, 200, 87, 26, 21, 43, 232, 171},
+          {56, 34, 51, 104, 114, 102, 29, 93, 77},
+          {39, 28, 85, 171, 58, 165, 90, 98, 64},
+          {34, 22, 116, 206, 23, 34, 43, 166, 73},
+          {107, 54, 32, 26, 51, 1, 81, 43, 31},
+          {68, 25, 106, 22, 64, 171, 36, 225, 114},
+          {34, 19, 21, 102, 132, 188, 16, 76, 124},
+          {62, 18, 78, 95, 85, 57, 50, 48, 51}},
+         {{193, 101, 35, 159, 215, 111, 89, 46, 111},
+          {60, 148, 31, 172, 219, 228, 21, 18, 111},
+          {112, 113, 77, 85, 179, 255, 38, 120, 114},
+          {40, 42, 1, 196, 245, 209, 10, 25, 109},
+          {88, 43, 29, 140, 166, 213, 37, 43, 154},
+          {61, 63, 30, 155, 67, 45, 68, 1, 209},
+          {100, 80, 8, 43, 154, 1, 51, 26, 71},
+          {142, 78, 78, 16, 255, 128, 34, 197, 171},
+          {41, 40, 5, 102, 211, 183, 4, 1, 221},
+          {51, 50, 17, 168, 209, 192, 23, 25, 82}},
+         {{138, 31, 36, 171, 27, 166, 38, 44, 229},
+          {67, 87, 58, 169, 82, 115, 26, 59, 179},
+          {63, 59, 90, 180, 59, 166, 93, 73, 154},
+          {40, 40, 21, 116, 143, 209, 34, 39, 175},
+          {47, 15, 16, 183, 34, 223, 49, 45, 183},
+          {46, 17, 33, 183, 6, 98, 15, 32, 183},
+          {57, 46, 22, 24, 128, 1, 54, 17, 37},
+          {65, 32, 73, 115, 28, 128, 23, 128, 205},
+          {40, 3, 9, 115, 51, 192, 18, 6, 223},
+          {87, 37, 9, 115, 59, 77, 64, 21, 47}},
+         {{104, 55, 44, 218, 9, 54, 53, 130, 226},
+          {64, 90, 70, 205, 40, 41, 23, 26, 57},
+          {54, 57, 112, 184, 5, 41, 38, 166, 213},
+          {30, 34, 26, 133, 152, 116, 10, 32, 134},
+          {39, 19, 53, 221, 26, 114, 32, 73, 255},
+          {31, 9, 65, 234, 2, 15, 1, 118, 73},
+          {75, 32, 12, 51, 192, 255, 160, 43, 51},
+          {88, 31, 35, 67, 102, 85, 55, 186, 85},
+          {56, 21, 23, 111, 59, 205, 45, 37, 192},
+          {55, 38, 70, 124, 73, 102, 1, 34, 98}},
+         {{125, 98, 42, 88, 104, 85, 117, 175, 82},
+          {95, 84, 53, 89, 128, 100, 113, 101, 45},
+          {75, 79, 123, 47, 51, 128, 81, 171, 1},
+          {57, 17, 5, 71, 102, 57, 53, 41, 49},
+          {38, 33, 13, 121, 57, 73, 26, 1, 85},
+          {41, 10, 67, 138, 77, 110, 90, 47, 114},
+          {115, 21, 2, 10, 102, 255, 166, 23, 6},
+          {101, 29, 16, 10, 85, 128, 101, 196, 26},
+          {57, 18, 10, 102, 102, 213, 34, 20, 43},
+          {117, 20, 15, 36, 163, 128, 68, 1, 26}},
+         {{102, 61, 71, 37, 34, 53, 31, 243, 192},
+          {69, 60, 71, 38, 73, 119, 28, 222, 37},
+          {68, 45, 128, 34, 1, 47, 11, 245, 171},
+          {62, 17, 19, 70, 146, 85, 55, 62, 70},
+          {37, 43, 37, 154, 100, 163, 85, 160, 1},
+          {63, 9, 92, 136, 28, 64, 32, 201, 85},
+          {75, 15, 9, 9, 64, 255, 184, 119, 16},
+          {86, 6, 28, 5, 64, 255, 25, 248, 1},
+          {56, 8, 17, 132, 137, 255, 55, 116, 128},
+          {58, 15, 20, 82, 135, 57, 26, 121, 40}},
+         {{164, 50, 31, 137, 154, 133, 25, 35, 218},
+          {51, 103, 44, 131, 131, 123, 31, 6, 158},
+          {86, 40, 64, 135, 148, 224, 45, 183, 128},
+          {22, 26, 17, 131, 240, 154, 14, 1, 209},
+          {45, 16, 21, 91, 64, 222, 7, 1, 197},
+          {56, 21, 39, 155, 60, 138, 23, 102, 213},
+          {83, 12, 13, 54, 192, 255, 68, 47, 28},
+          {85, 26, 85, 85, 128, 128, 32, 146, 171},
+          {18, 11, 7, 63, 144, 171, 4, 4, 246},
+          {35, 27, 10, 146, 174, 171, 12, 26, 128}},
+         {{190, 80, 35, 99, 180, 80, 126, 54, 45},
+          {85, 126, 47, 87, 176, 51, 41, 20, 32},
+          {101, 75, 128, 139, 118, 146, 116, 128, 85},
+          {56, 41, 15, 176, 236, 85, 37, 9, 62},
+          {71, 30, 17, 119, 118, 255, 17, 18, 138},
+          {101, 38, 60, 138, 55, 70, 43, 26, 142},
+          {146, 36, 19, 30, 171, 255, 97, 27, 20},
+          {138, 45, 61, 62, 219, 1, 81, 188, 64},
+          {32, 41, 20, 117, 151, 142, 20, 21, 163},
+          {112, 19, 12, 61, 195, 128, 48, 4, 24}}};
 
-    const uint8_t kf_ymode_prob[4] = {145, 156, 163, 128};
+    static const int8_t bmode_tree[18] = {
+        -B_DC_PRED, 2,                          /* B_DC_PRED = "0" */
+        -B_TM_PRED, 4,                          /* B_TM_PRED = "10" */
+        -B_VE_PRED, 6,                          /* B_VE_PRED = "110" */
+        8,          12,         -B_HE_PRED, 10, /* B_HE_PRED = "11100" */
+        -B_RD_PRED, -B_VR_PRED,                 /* B_RD_PRED = "111010",
+                                                             B_VR_PRED = "111011" */
+        -B_LD_PRED, 14,                         /* B_LD_PRED = "111110" */
+        -B_VL_PRED, 16,                         /* B_VL_PRED = "1111110" */
+        -B_HD_PRED, -B_HU_PRED                  /* HD = "11111110",
+                                                             HU = "11111111" */
+    };
+    static const uint8_t kf_ymode_prob[4] = {145, 156, 163, 128};
     int intra_y_mode = BOOL_TREE(bt, kf_ymode_tree, kf_ymode_prob);
     mb->intra_y_mode = intra_y_mode;
     mb->imodes[0] = intra_y_mode;
     if (intra_y_mode == B_PRED) {
         // Paragraph 11.5
-        static const uint8_t
-            kf_bmode_prob[NUM_BMODES][NUM_BMODES][NUM_BMODES - 1] = {
-                {
-                    {231, 120, 48, 89, 115, 113, 120, 152, 112},
-                    {152, 179, 64, 126, 170, 118, 46, 70, 95},
-                    {175, 69, 143, 80, 85, 82, 72, 155, 103},
-                    {56, 58, 10, 171, 218, 189, 17, 13, 152},
-                    {114, 26, 17, 163, 44, 195, 21, 10, 173},
-                    {121, 24, 80, 195, 26, 62, 44, 64, 85},
-                    {144, 71, 10, 38, 171, 213, 144, 34, 26},
-                    {170, 46, 55, 19, 136, 160, 33, 206, 71},
-                    {63, 20, 8, 114, 114, 208, 12, 9, 226},
-                    {81, 40, 11, 96, 182, 84, 29, 16, 36}
-                },
-                {
-                    {134, 183, 89, 137, 98, 101, 106, 165, 148},
-                    {72, 187, 100, 130, 157, 111, 32, 75, 80},
-                    {66, 102, 167, 99, 74, 62, 40, 234, 128},
-                    {41, 53, 9, 178, 241, 141, 26, 8, 107},
-                    {74, 43, 26, 146, 73, 166, 49, 23, 157},
-                    {65, 38, 105, 160, 51, 52, 31, 115, 128},
-                    {104, 79, 12, 27, 217, 255, 87, 17, 7},
-                    {87, 68, 71, 44, 114, 51, 15, 186, 23},
-                    {47, 41, 14, 110, 182, 183, 21, 17, 194},
-                    {66, 45, 25, 102, 197, 189, 23, 18, 22}
-                },
-                {
-                    {88, 88, 147, 150, 42, 46, 45, 196, 205},
-                    {43, 97, 183, 117, 85, 38, 35, 179, 61},
-                    {39, 53, 200, 87, 26, 21, 43, 232, 171},
-                    {56, 34, 51, 104, 114, 102, 29, 93, 77},
-                    {39, 28, 85, 171, 58, 165, 90, 98, 64},
-                    {34, 22, 116, 206, 23, 34, 43, 166, 73},
-                    {107, 54, 32, 26, 51, 1, 81, 43, 31},
-                    {68, 25, 106, 22, 64, 171, 36, 225, 114},
-                    {34, 19, 21, 102, 132, 188, 16, 76, 124},
-                    {62, 18, 78, 95, 85, 57, 50, 48, 51}
-                },
-                {
-                    {193, 101, 35, 159, 215, 111, 89, 46, 111},
-                    {60, 148, 31, 172, 219, 228, 21, 18, 111},
-                    {112, 113, 77, 85, 179, 255, 38, 120, 114},
-                    {40, 42, 1, 196, 245, 209, 10, 25, 109},
-                    {88, 43, 29, 140, 166, 213, 37, 43, 154},
-                    {61, 63, 30, 155, 67, 45, 68, 1, 209},
-                    {100, 80, 8, 43, 154, 1, 51, 26, 71},
-                    {142, 78, 78, 16, 255, 128, 34, 197, 171},
-                    {41, 40, 5, 102, 211, 183, 4, 1, 221},
-                    {51, 50, 17, 168, 209, 192, 23, 25, 82}
-                },
-                {
-                    {138, 31, 36, 171, 27, 166, 38, 44, 229},
-                    {67, 87, 58, 169, 82, 115, 26, 59, 179},
-                    {63, 59, 90, 180, 59, 166, 93, 73, 154},
-                    {40, 40, 21, 116, 143, 209, 34, 39, 175},
-                    {47, 15, 16, 183, 34, 223, 49, 45, 183},
-                    {46, 17, 33, 183, 6, 98, 15, 32, 183},
-                    {57, 46, 22, 24, 128, 1, 54, 17, 37},
-                    {65, 32, 73, 115, 28, 128, 23, 128, 205},
-                    {40, 3, 9, 115, 51, 192, 18, 6, 223},
-                    {87, 37, 9, 115, 59, 77, 64, 21, 47}
-                },
-                {
-                    {104, 55, 44, 218, 9, 54, 53, 130, 226},
-                    {64, 90, 70, 205, 40, 41, 23, 26, 57},
-                    {54, 57, 112, 184, 5, 41, 38, 166, 213},
-                    {30, 34, 26, 133, 152, 116, 10, 32, 134},
-                    {39, 19, 53, 221, 26, 114, 32, 73, 255},
-                    {31, 9, 65, 234, 2, 15, 1, 118, 73},
-                    {75, 32, 12, 51, 192, 255, 160, 43, 51},
-                    {88, 31, 35, 67, 102, 85, 55, 186, 85},
-                    {56, 21, 23, 111, 59, 205, 45, 37, 192},
-                    {55, 38, 70, 124, 73, 102, 1, 34, 98}
-                },
-                {
-                    {125, 98, 42, 88, 104, 85, 117, 175, 82},
-                    {95, 84, 53, 89, 128, 100, 113, 101, 45},
-                    {75, 79, 123, 47, 51, 128, 81, 171, 1},
-                    {57, 17, 5, 71, 102, 57, 53, 41, 49},
-                    {38, 33, 13, 121, 57, 73, 26, 1, 85},
-                    {41, 10, 67, 138, 77, 110, 90, 47, 114},
-                    {115, 21, 2, 10, 102, 255, 166, 23, 6},
-                    {101, 29, 16, 10, 85, 128, 101, 196, 26},
-                    {57, 18, 10, 102, 102, 213, 34, 20, 43},
-                    {117, 20, 15, 36, 163, 128, 68, 1, 26}
-                },
-                {
-                    {102, 61, 71, 37, 34, 53, 31, 243, 192},
-                    {69, 60, 71, 38, 73, 119, 28, 222, 37},
-                    {68, 45, 128, 34, 1, 47, 11, 245, 171},
-                    {62, 17, 19, 70, 146, 85, 55, 62, 70},
-                    {37, 43, 37, 154, 100, 163, 85, 160, 1},
-                    {63, 9, 92, 136, 28, 64, 32, 201, 85},
-                    {75, 15, 9, 9, 64, 255, 184, 119, 16},
-                    {86, 6, 28, 5, 64, 255, 25, 248, 1},
-                    {56, 8, 17, 132, 137, 255, 55, 116, 128},
-                    {58, 15, 20, 82, 135, 57, 26, 121, 40}
-                },
-                {
-                    {164, 50, 31, 137, 154, 133, 25, 35, 218},
-                    {51, 103, 44, 131, 131, 123, 31, 6, 158},
-                    {86, 40, 64, 135, 148, 224, 45, 183, 128},
-                    {22, 26, 17, 131, 240, 154, 14, 1, 209},
-                    {45, 16, 21, 91, 64, 222, 7, 1, 197},
-                    {56, 21, 39, 155, 60, 138, 23, 102, 213},
-                    {83, 12, 13, 54, 192, 255, 68, 47, 28},
-                    {85, 26, 85, 85, 128, 128, 32, 146, 171},
-                    {18, 11, 7, 63, 144, 171, 4, 4, 246},
-                    {35, 27, 10, 146, 174, 171, 12, 26, 128}
-                },
-                {
-                    {190, 80, 35, 99, 180, 80, 126, 54, 45},
-                    {85, 126, 47, 87, 176, 51, 41, 20, 32},
-                    {101, 75, 128, 139, 118, 146, 116, 128, 85},
-                    {56, 41, 15, 176, 236, 85, 37, 9, 62},
-                    {71, 30, 17, 119, 118, 255, 17, 18, 138},
-                    {101, 38, 60, 138, 55, 70, 43, 26, 142},
-                    {146, 36, 19, 30, 171, 255, 97, 27, 20},
-                    {138, 45, 61, 62, 219, 1, 81, 188, 64},
-                    {32, 41, 20, 117, 151, 142, 20, 21, 163},
-                    {112, 19, 12, 61, 195, 128, 48, 4, 24}
-                }
-            };
-
-        const int8_t bmode_tree[18] = {
-            -B_DC_PRED, 2,                          /* B_DC_PRED = "0" */
-            -B_TM_PRED, 4,                          /* B_TM_PRED = "10" */
-            -B_VE_PRED, 6,                          /* B_VE_PRED = "110" */
-            8,          12,
-            -B_HE_PRED, 10,                         /* B_HE_PRED = "11100" */
-            -B_RD_PRED, -B_VR_PRED,               /* B_RD_PRED = "111010",
-                                                               B_VR_PRED = "111011" */
-            -B_LD_PRED, 14,                       /* B_LD_PRED = "111110" */
-            -B_VL_PRED, 16,                       /* B_VL_PRED = "1111110" */
-            -B_HD_PRED, -B_HU_PRED                /* HD = "11111110",
-                                                               HU = "11111111" */
-        };
+        
         struct macro_block *above = mb - cols;
         for (int i = 0; i < 16; i++) {
             int a = above_block_mode(mb, above, i);
@@ -2436,7 +2444,7 @@ finish_row(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
 {
     int filter_now = (filter_type > 0);
     int height = w->fi.height;
-    const int extra_y_rows = filter_type * 3 - 1; //kFilterExtraRows
+    const int extra_y_rows = filter_type * 3 - 1;
     const int cache_id = 0;
     const int ysize = extra_y_rows * c->y_stride;
     const int uvsize = (extra_y_rows / 2) * c->uv_stride;
@@ -2551,44 +2559,34 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 
             // VP8FInfo *fi = finfos + y * cols + x;
             vp8_decode_residual_data(w, block, bt, &left, top, NULL);
+
+            // vp8_prerdict_mb(w, block);
         }
     }
 
-    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
-    uint8_t* yuv_b = malloc(YUV_SIZE);
+    loop_filter();
+    int filter_type = (w->k.loop_filter_level == 0) ? 0 :
+            w->k.filter_type ? 1 : 2;
+    uint8_t *yuv_b = malloc(YUV_SIZE);
     int extra_rows = kFilterExtraRows[filter_type];
 
     cache c;
-    c.m = malloc((cols * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
+    c.m = malloc((cols * sizeof(topsamples)) *
+                    ((16 * 1 + extra_rows) * 3 / 2));
     c.y_stride = cols * 16;
     c.uv_stride = cols * 8;
     c.y = c.m + extra_rows * c.y_stride;
     c.u = c.y + 16 * c.y_stride + (extra_rows / 2) * c.uv_stride;
     c.v = c.u + 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride;
-    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n",  extra_rows *
-    // c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride, 8 *
-    // c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
+    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n", extra_rows
+    // * c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride, 8
+    // * c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
     //     (cols * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
-
-#if 0
-    for (int j = 0; j < 24; j ++) {
-        for (int i = 0; i < 16; i ++) {
-            printf("%03d ", (blocks + ((width + 15) >> 4)*(((height + 15) >> 4) -1))->coeffs[j * 16 + i]);
-        }
-        printf("\n");
-    }
-#endif
 
     /* reconstruct the row with filter */
     // for (int y = 0; y < (height + 15) >> 4; y ++) {
-    //     reconstruct_row(w, blocks, yuv_b, y, &c, finfos);
-    //     finish_row(w, filter_type, y, &c, finfos);
-    // }
-
-    // for (int i = 0; i < ((width + 15) >> 4); i ++) {
-    //     VP8FInfo *fi = finfos + i;
-    //     VDBG(webp, "ilevel %d, inner %d,  limit %d, hev %d", 
-    //         fi->f_ilevel, fi->f_inner, fi->f_limit, fi->hev_thresh);
+    //     reconstruct_row(w, blocks, yuv_b, y, &c, NULL);
+    //     finish_row(w, filter_type, y, &c, NULL);
     // }
 
     free(yuv_b);

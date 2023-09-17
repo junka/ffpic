@@ -252,8 +252,6 @@ struct macro_block {
 
     uint8_t dither;        // local dithering strength (deduced from non_zero_*)
 
-    uint8_t ctx[9];        //  1 DC / 4 luma / 4 chrome
-
     int x;
 };
 

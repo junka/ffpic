@@ -5,7 +5,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+#include <stdint.h>
+#include <stdio.h>
 
 #define _format_printf(format_index, first_arg) \
     __attribute__((format(printf, format_index, first_arg)))

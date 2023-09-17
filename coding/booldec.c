@@ -161,11 +161,9 @@ bool_dec_signed_bits(bool_dec *br, int nums)
 
 /* A tree specification is simply an array of 8-bit integers. */
 int
-bool_dec_tree(struct bool_dec *br, const int8_t *t, const uint8_t *p)
+bool_dec_tree(struct bool_dec *br, const int8_t *t, const uint8_t *p, int start)
 {
-    int index = t[BOOL_DECODE(br, p[0])];
-    while (index > 0) {
-        index = t[index + BOOL_DECODE(br, p[index >> 1])];
-    }
+    int index = start;
+    while ((index = t[index + BOOL_DECODE(br, p[index >> 1])]) > 0);
     return -index;
 }

@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <errno.h>
 #include <assert.h>
 
@@ -396,26 +397,26 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
 }
 
 static void
-read_mb_lf_adjustments(struct vp8_mb_lf_adjustments *d, struct bool_dec *br)
+read_mb_lf_adjustments(struct vp8_mb_lf_adjustments *lf, struct bool_dec *br)
 {
-    d->loop_filter_adj_enable = BOOL_BIT(br);
-    if (d->loop_filter_adj_enable) {
-        d->mode_ref_lf_delta_update_flag = BOOL_BIT(br);
-        if (d->mode_ref_lf_delta_update_flag) {
+    lf->loop_filter_adj_enable = BOOL_BIT(br);
+    if (lf->loop_filter_adj_enable) {
+        lf->mode_ref_lf_delta_update_flag = BOOL_BIT(br);
+        if (lf->mode_ref_lf_delta_update_flag) {
             for (int i = 0; i < 4; i ++) {
                 // d->mode_ref_lf_delta_update[i].ref_frame_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
-                    d->mode_ref_lf_delta_update[i] = BOOL_SBITS(br, 6);
+                    lf->mode_ref_lf_delta_update[i] = BOOL_SBITS(br, 6);
                 } else {
-                    d->mode_ref_lf_delta_update[i] = 0;
+                    lf->mode_ref_lf_delta_update[i] = 0;
                 }
             }
             for (int i = 0; i < 4; i ++) {
                 // d->mb_mode_delta_update[i].mb_mode_delta_update_flag = BOOL_BIT(br);
                 if (BOOL_BIT(br)) {
-                    d->mb_mode_delta_update[i] = BOOL_SBITS(br, 6);
+                    lf->mb_mode_delta_update[i] = BOOL_SBITS(br, 6);
                 } else {
-                    d->mb_mode_delta_update[i] = 0;
+                    lf->mb_mode_delta_update[i] = 0;
                 }
             }
         }
@@ -455,34 +456,8 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     w->k.nbr_partitions = num + 1;
 }
 
-/* similar to jpeg decoder, four components */
-struct WEBP_decoder {
-    uint16_t y1_dc;
-    uint16_t y1_ac;
-    uint16_t y2_dc;
-    uint16_t y2_ac;
-    uint16_t uv_dc;
-    uint16_t uv_ac;
-
-    uint16_t quant;
-    uint16_t uv_quant; // for dithering
-};
-
-static int
-init_decoder(WEBP *w, struct WEBP_decoder *d, uint8_t comp)
-{
-    return 0;
-}
-
-static void
-destroy_decoder(struct WEBP_decoder *d)
-{
-    free(d);
-}
-
 static void read_dequantization(WEBP *w, struct vp8_key_frame_header *kh,
                                 struct bool_dec *br) {
-    struct WEBP_decoder d[4];// different segment has different parameters
 
     // 13.4 quant_indices
     kh->quant_indice.y_ac_qi = BOOL_BITS(br, 7);
@@ -547,28 +522,29 @@ static void read_dequantization(WEBP *w, struct vp8_key_frame_header *kh,
                 quant = w->k.segmentation.quant[i].quantizer_update_value;
             }
         }
-        d[i].y1_dc = dc_qlookup[clamp(quant + kh->quant_indice.y_dc_delta, 127)];
-        d[i].y1_ac = ac_qlookup[clamp(quant, 127)];
+        w->d[i].y1_dc = dc_qlookup[clamp(quant + kh->quant_indice.y_dc_delta, 127)];
+        w->d[i].y1_ac = ac_qlookup[clamp(quant, 127)];
 
-        d[i].y2_dc =
+        w->d[i].y2_dc =
             dc_qlookup[clamp(quant + kh->quant_indice.y2_dc_delta, 127)] * 2;
-        d[i].y2_ac =
-            ac_qlookup[clamp(quant + kh->quant_indice.y2_ac_delta, 127)] * 155 / 100;
+        w->d[i].y2_ac =
+            ac_qlookup[clamp(quant + kh->quant_indice.y2_ac_delta, 127)] * 155 /
+            100;
 
-        d[i].uv_dc =
+        w->d[i].uv_dc =
             dc_qlookup[clamp(quant + kh->quant_indice.uv_dc_delta, 127)];
-        d[i].uv_ac =
+        w->d[i].uv_ac =
             ac_qlookup[clamp(quant + kh->quant_indice.uv_ac_delta, 127)];
 
-        if (d[i].y2_dc > 132) {
-            d[i].y2_dc = 132;
+        if (w->d[i].y2_dc > 132) {
+            w->d[i].y2_dc = 132;
         }
-        if (d[i].y2_ac < 8) {
-            d[i].y2_ac = 8;
+        if (w->d[i].y2_ac < 8) {
+            w->d[i].y2_ac = 8;
         }
-        d[i].quant = quant;
+        w->d[i].quant = quant;
         // for dithering
-        d[i].uv_quant = quant + kh->quant_indice.uv_ac_delta;
+        w->d[i].uv_quant = quant + kh->quant_indice.uv_ac_delta;
     }
 }
 
@@ -960,24 +936,43 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
 }
 
 /* Residual decoding (Paragraph 13.2 / 13.3) */
-typedef enum
-{
-    DCT_0,      /* value 0 */
-    DCT_1,      /* 1 */
-    DCT_2,      /* 2 */
-    DCT_3,      /* 3 */
-    DCT_4,      /* 4 */
-    dct_cat1,   /* range 5 - 6  (size 2) */
-    dct_cat2,   /* 7 - 10   (4) */
-    dct_cat3,   /* 11 - 18  (8) */
-    dct_cat4,   /* 19 - 34  (16) */
-    dct_cat5,   /* 35 - 66  (32) */
-    dct_cat6,   /* 67 - 2048  (1982) */
-    dct_eob,    /* end of block */
+typedef enum {
+  DCT_0,    /* value 0 */
+  DCT_1,    /* 1 */
+  DCT_2,    /* 2 */
+  DCT_3,    /* 3 */
+  DCT_4,    /* 4 */
+  dct_cat1, /* range 5 - 6  (size 2) */
+  dct_cat2, /* 7 - 10   (4) */
+  dct_cat3, /* 11 - 18  (8) */
+  dct_cat4, /* 19 - 34  (16) */
+  dct_cat5, /* 35 - 66  (32) */
+  dct_cat6, /* 67 - 2048  (1982) */
+  dct_eob,  /* end of block */
 
-    num_dct_tokens   /* 12 */
+  num_dct_tokens /* 12 */
 } dct_token;
-/* pCatn secifyranges of unsigned values whose width is 
+
+const int8_t coeff_tree[2 * (num_dct_tokens - 1)] = {
+    -dct_eob,  2, /* eob = "0"   */
+    -DCT_0,    4, /* 0   = "10"  */
+    -DCT_1,    6, /* 1   = "110" */
+    8,         12,       -DCT_2,
+    10,                /* 2   = "11100" */
+    -DCT_3,    -DCT_4, /* 3   = "111010", 4 = "111011" */
+    14,        16,       -dct_cat1,
+    -dct_cat2, /* cat1 =  "111100",
+                  cat2 = "111101" */
+    18,        20,       -dct_cat3,
+    -dct_cat4,           /* cat3 = "1111100",
+                            cat4 = "1111101" */
+    -dct_cat5, -dct_cat6 /* cat4 = "1111110",
+                            cat4 = "1111111" */
+};
+
+const int coeff_bands[16] = {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7};
+
+/* pCatn specify ranges of unsigned values whose width is 
 1, 2, 3, 4, 5, or 11 bits, respectively.  */
 static const uint8_t pCat1[] = { 159, 0};
 static const uint8_t pCat2[] = { 165, 145, 0};
@@ -989,13 +984,19 @@ static const uint8_t pCat6[] =
 
 static const uint8_t* const pCat3456[] = { pCat3, pCat4, pCat5, pCat6 };
 
+static const uint8_t * pCat[] = {pCat1, pCat2, pCat3, pCat4, pCat5, pCat6};
+
 static const uint8_t kZigzag[16] = {
   0, 1, 4, 8,  5, 2, 3, 6,  9, 12, 13, 10,  7, 11, 14, 15
 };
 
-const int coeff_bands [16] = 
-    {0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7 };
-
+uint8_t DCTextra(bool_dec *bt, const uint8_t *p) {
+    uint8_t v = 0;
+    do {
+        v += v + BOOL_DECODE(bt, *p);
+    } while (*++p);
+    return v;
+}
 
 // See section 13-2: https://datatracker.ietf.org/doc/html/rfc6386#section-13.2
 static int
@@ -1013,8 +1014,9 @@ get_large_value(struct bool_dec *bt, const uint8_t* const p)
         if (!BOOL_DECODE(bt, p[7])) {
             v = 5 + BOOL_DECODE(bt, 159);
         } else {
-            v = 7 + 2 * BOOL_DECODE(bt, 165);
-            v += BOOL_DECODE(bt, 145);
+            // v = 7 + 2 * BOOL_DECODE(bt, 165);
+            // v += BOOL_DECODE(bt, 145);
+            BOOL_TREE(bt, coeff_tree, pCat2);
         }
     } else {
         const uint8_t* tab;
@@ -1032,64 +1034,48 @@ get_large_value(struct bool_dec *bt, const uint8_t* const p)
 }
 
 
-/* Returns the position of the last non-zero coeff plus one */
-static int
-vp8_get_coeff_fast(struct bool_dec *bt, int16_t *out,
-                    const VP8BandProbas * const bands[], int n, int ctx, uint16_t indice)
+/* Returns the position of the last non-zero coeff */
+static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
+                         const VP8BandProbas *const bands[], int first, int ctx,
+                         uint16_t quant_dc, uint16_t quant_ac)
 {
-    const uint8_t* p = bands[n]->probas[ctx];
-    for (; n < 16; ++n) {
-        if (!BOOL_DECODE(bt, p[0])) {
-            return n;  // previous coeff was last non-zero coeff
-        }
-        while (!BOOL_DECODE(bt, p[1])) {       // sequence of zero coeffs
-            p = bands[++n]->probas[0];
-            if (n == 16)
-                return 16;
-        }
-        // non zero coeff
-        int v;
-        if (!BOOL_DECODE(bt, p[2])) {
-            v = 1;
-            p = bands[n+1]->probas[1];
+    bool prevCoeffWasZero = false;
+    int token = 0;
+    int sign = 0;
+    int absValue = 0;
+    int categoryBase[6] = {5, 7, 11, 19, 35, 67};
+
+    for (int n = first; n < 16; ++n) {
+        const uint8_t *p = bands[n]->probas[ctx];
+
+        token = bool_dec_tree(bt, coeff_tree, p, prevCoeffWasZero ? 2 : 0);
+        // VDBG(webp, "token %d", token);
+        if (token == dct_eob) {
+            return n - first;
+        } else if (token == DCT_0) {
+            prevCoeffWasZero = true;
+            absValue = 0;
+        } else if (token > DCT_4) {
+            int extraBits = DCTextra(bt, pCat[token - dct_cat1]);
+            // VDBG(webp, "extra %d", token);
+            absValue = categoryBase[token - dct_cat1] + extraBits;
+            prevCoeffWasZero = false;
         } else {
-            v = get_large_value(bt, p);
-            p = bands[n+1]->probas[2];
+            absValue = token;
+            prevCoeffWasZero = false;
         }
-        out[kZigzag[n]] = BOOL_SIGNED(bt, v) * indice;
-        //do both zigzag and dequantation here
-    
+
+        ctx = absValue == 0 ? 0 : (absValue == 1 ? 1 : 2);
+
+        if (absValue != 0) {
+            if (BOOL_DECODE(bt, 128)) {
+                absValue = -absValue;
+            }
+        }
+
+        out[kZigzag[n]] = absValue * (n > 0 ? quant_ac : quant_dc);
     }
     return 16;
-}
-
-static int
-vp8_get_coeff_alt(struct bool_dec *bt, uint8_t *out, 
-                    uint8_t ***coeff_prob, int i, int ctx)
-{
-    const uint8_t* p = coeff_prob[i][ctx];
-    for (; i < 16; i ++) {
-        if (!BOOL_DECODE_ALT(bt, p[0])) {
-            return i;
-        }
-        while (!BOOL_DECODE_ALT(bt, p[1])) {
-            p = coeff_prob[++i][0];
-            if (i == 16)
-                return 16;
-        }
-        int v;
-        uint8_t **p_ctx = coeff_prob[i+1];
-        if (!BOOL_DECODE_ALT(bt, p[2])) {
-            v = 1;
-            p = p_ctx[1];
-        } else {
-            v = get_large_value(bt, p);
-            p = p_ctx[2];
-
-        }
-        out[kZigzag[i]] = BOOL_DECODE_ALT(bt, 0x80);
-    }
-    return 0;
 }
 
 static void
@@ -1121,112 +1107,99 @@ transformWHT_C(const int16_t* in, int16_t* out)
     }
 }
 
-static inline uint32_t
-NzCodeBits(uint32_t nz_coeffs, int nz, int dc_nz)
-{
-    nz_coeffs <<= 2;
-    nz_coeffs |= (nz > 3) ? 3 : (nz > 1) ? 2 : dc_nz;
-    return nz_coeffs;
-}
+struct context {
+    int ctx[9];
+};
 
-
-static int
-vp8_decode_residual_block(WEBP *w, struct vp8mb *left_mb, struct vp8mb *mb,
-                   struct macro_block *block, bool_dec *bt, struct WEBP_decoder *d)
+/**
+ * The function `vp8_decode_residual_block` decodes the residual block of a VP8 video frame.
+ * 
+ * @param w A pointer to a structure of type WEBP, which contains information about the WebP image
+ * being decoded.
+ * @param block The "block" parameter is a pointer to a struct macro_block, which contains information
+ * about a macro block in the video frame. It includes the block's position (x, y), context information
+ * (ctx), intra prediction mode (intra_y_mode), and coefficients (coeffs).
+ * @param bt The parameter "bt" is a pointer to a boolean decoder. It is used to decode the
+ * coefficients of the residual block.
+ * 
+ * @return an integer value of 0.
+ */
+static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
+                                     struct context *left, struct context *top,
+                                     bool_dec *bt) 
 {
-    static const uint8_t kBands[16 + 1] = {
-        0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7,
-        0  // extra entry as sentinel
-    };
-    const VP8BandProbas *bands[NUM_TYPES][16 + 1];
+    const VP8BandProbas *bands[NUM_TYPES][16];
     int16_t* dst = block->coeffs;
     memset(dst, 0, 384 * sizeof(*dst));
-    // struct macro_block *left_mb = mb - 1;
-    uint8_t tnz, lnz;
-    uint32_t non_zero_y = 0;
-    uint32_t non_zero_uv = 0;
-    int x, y, ch;
-    uint32_t out_t_nz, out_l_nz;
-    int first;
+
+    struct WEBP_decoder *d = &w->d[block->segment_id];
+
+    int firstCoeff;
     const VP8BandProbas* const * ac_proba;
 
     for (int t = 0; t < NUM_TYPES; ++t) {
-        for (int b = 0; b < 16 + 1; ++b) {
-            bands[t][b] = &w->k.coeff_prob[t][kBands[b]];
+        for (int b = 0; b < 16; ++b) {
+            bands[t][b] = &w->k.coeff_prob[t][coeff_bands[b]];
         }
     }
+    // Y2
     if (block->intra_y_mode != B_PRED) {
         int16_t dc[16] = {0};
-        const int ctx = mb->nz_dc + left_mb->nz_dc;
-        const int nz = vp8_get_coeff_fast(bt, dc, bands[1], 0, ctx, d->y2_dc);
-        mb->nz_dc = left_mb->nz_dc = (nz > 0);
+        int ctx = top[block->x].ctx[0] + left->ctx[0];
+        // VDBG(webp, "ctx1 %d", ctx);
+        const int nz = vp8_get_coefficients(bt, dc, bands[1], 0, ctx, d->y2_dc, d->y2_ac);
+        // for (int i = 0; i < 16; i++) {
+        //     printf("%d ", dc[i]);
+        // }
+        // printf("\n");
+        // assert(0);
+        top[block->x].ctx[0] = left->ctx[0] = ((nz > 0) ? 1 : 0);
         if (nz > 1) {   // more than just the DC -> perform the full transform
             transformWHT_C(dc, dst);
         } else {        // only DC is non-zero -> inlined simplified transform
             const int dc0 = (dc[0] + 3) >> 3;
-            for (int i = 0; i < 16 * 16; i += 16) {
-                dst[i] = dc0;
+            for (int i = 0; i < 16; i += 1) {
+                dst[i * 16] = dc0;
             }
         }
-        first = 1;
+        firstCoeff = 1;
         ac_proba = bands[0];
     } else {
-        first = 0;
+        firstCoeff = 0;
         ac_proba = bands[3];
     }
 
-    tnz = mb->nz & 0x0f;
-    lnz = left_mb->nz & 0x0f;
-    for (y = 0; y < 4; ++y) {
-        int l = lnz & 1;
-        uint32_t nz_coeffs = 0;
-        for (x = 0; x < 4; ++x) {
-            const int ctx = l + (tnz & 1);
-            // printf("tnz %d, lnz %d, ctx %d\n", tnz, lnz, ctx);
-            const int nz = vp8_get_coeff_fast(bt, dst, ac_proba, first, ctx, d->y1_dc);
-            l = (nz > first);
-            tnz = (tnz >> 1) | (l << 7);
-            nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
+    //16Y
+    for (int y = 0; y < 4; ++y) {
+        uint8_t l = left->ctx[y+1];
+        for (int x = 0; x < 4; ++x) {
+            int ctx = top[block->x].ctx[x + 1] + l;
+            // VDBG(webp, "ctx2 %d", ctx);
+            const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
             dst += 16;
+            l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
         }
-        tnz >>= 4;
-        lnz = (lnz >> 1) | (l << 7);
-        non_zero_y = (non_zero_y << 8) | nz_coeffs;
+        left->ctx[y+1] = l;
     }
-    out_t_nz = tnz;
-    out_l_nz = lnz >> 4;
 
-    for (ch = 0; ch < 4; ch += 2) {
-        uint32_t nz_coeffs = 0;
-        tnz = mb->nz >> (4 + ch);
-        lnz = left_mb->nz >> (4 + ch);
-        for (y = 0; y < 2; ++y) {
-            int l = lnz & 1;
-            for (x = 0; x < 2; ++x) {
-                const int ctx = l + (tnz & 1);
-                const int nz = vp8_get_coeff_fast(bt, dst, bands[2], 0, ctx, d->uv_dc);
-                l = (nz > 0);
-                tnz = (tnz >> 1) | (l << 3);
-                nz_coeffs = NzCodeBits(nz_coeffs, nz, dst[0] != 0);
-                dst += 16;
+    //4U 4V
+    for (int ch = 5; ch <= 7; ch += 2) {
+        for (int y = 0; y < 2; ++y) {
+            uint8_t l = left->ctx[y + ch];
+            for (int x = 0; x < 2; ++x) {
+
+                int ctx = l + top[block->x].ctx[x + ch];
+                // VDBG(webp, "ctx3 %d", ctx);
+                const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
+
+                l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;
             }
-            tnz >>= 2;
-            lnz = (lnz >> 1) | (l << 5);
+            left->ctx[y+ch] = l;
         }
-        // Note: we don't really need the per-4x4 details for U/V blocks.
-        non_zero_uv |= nz_coeffs << (4 * ch);
-        out_t_nz |= (tnz << 4) << ch;
-        out_l_nz |= (lnz & 0xf0) << ch;
     }
-    mb->nz = out_t_nz;
-    left_mb->nz = out_l_nz;
-
-    block->non_zero_y = non_zero_y;
-    block->non_zero_uv = non_zero_uv;
 
     return 0;
 }
-
 
 typedef struct {  // filter specs
   uint8_t f_limit;      // filter limit in [3..189], or 0 if no filtering
@@ -1237,34 +1210,33 @@ typedef struct {  // filter specs
 
 static VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
-static int 
-vp8_decode_residual_data(WEBP *w, struct vp8mb *left, struct vp8mb *mb, struct macro_block *block, bool_dec *bt,
-             struct WEBP_decoder *d, VP8FInfo *finfo)
+static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
+                                    bool_dec *bt, struct context *left,
+                                    struct context *top, VP8FInfo *finfo) 
 {
-    // int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
-    //     w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
-    // 0=off, 1=simple, 2=complex
-    // struct macro_block *left_mb = mb - 1;
+  // int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
+  //     w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
+  // 0=off, 1=simple, 2=complex
 
-    if (block->mb_skip_coeff) {
+  // see section 19.3
+  // if (block->mb_skip_coeff)
+  //         VDBG(webp, "skip %d", block->mb_skip_coeff);
+  if (!block->mb_skip_coeff) {
+        vp8_decode_residual_block(w, block, left, top, bt);
+    } else {
+        // 1 DC
         if (block->intra_y_mode != B_PRED) {
-            // Y2
-            vp8_decode_residual_block(w, left, mb, block, bt, d);
+            left->ctx[0] = 0;
+            top[block->x].ctx[0] = 0;
         }
-        // 16Y 4U 4V
-        for (int i = 0; i < 24; i++) {
-            vp8_decode_residual_block(w, left, mb, block, bt, d);
+        //  4 luma and 4 chrome
+        for (int i = 1; i < 9; i++) {
+            left->ctx[i] = 0;
+            top[block->x].ctx[i] = 0;
         }
+        block->dither = 0;
     }
-    // else {
-    //     left->nz = mb->nz = 0;
-    //     if (block->intra_y_mode != B_PRED) {
-    //         left->nz_dc = mb->nz_dc = 0;
-    //     }
-    //     block->non_zero_y = 0;
-    //     block->non_zero_uv = 0;
-    //     block->dither = 0;
-    // }
+
     // if (filter_type) {
     //     *finfo = fstrengths[block->segment_id][block->intra_y_mode==B_PRED];
     //     finfo->f_inner |= !skip;
@@ -1322,18 +1294,18 @@ left_block_mode(const struct macro_block *this,
 }
 
 static void
-vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mbs, int y, int x)
+vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x)
 {
     // prepare a fake left mb when ymode is B_PRED
     struct macro_block fake_left = {
         .intra_y_mode = 0,
     };
     int width = ((w->fi.width + 3) >> 2) << 2;
-    int intra_size = (width + 15) >> 2;
-    struct macro_block *mb;
-
     int cols = (width + 15) >> 4;
-    mb = mbs + y * cols + x;
+    // int intra_size = (width + 15) >> 2;
+
+    mb->x = x;
+
     // see 9.3.5, section 10, ref section 20.11
     if (w->k.segmentation.update_mb_segmentation_map) {
         mb->segment_id = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
@@ -1358,7 +1330,7 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mbs, int y, int 
     };
 
     const uint8_t kf_ymode_prob[4] = {145, 156, 163, 128};
-    int intra_y_mode = bool_dec_tree(bt, kf_ymode_tree, kf_ymode_prob);
+    int intra_y_mode = BOOL_TREE(bt, kf_ymode_tree, kf_ymode_prob);
     mb->intra_y_mode = intra_y_mode;
     mb->imodes[0] = intra_y_mode;
     if (intra_y_mode == B_PRED) {
@@ -1500,11 +1472,11 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mbs, int y, int 
             -B_HD_PRED, -B_HU_PRED                /* HD = "11111110",
                                                                HU = "11111111" */
         };
-        struct macro_block *above = mbs + (y - 1) * cols + x;
+        struct macro_block *above = mb - cols;
         for (int i = 0; i < 16; i++) {
             int a = above_block_mode(mb, above, i);
             int l = left_block_mode(mb, (x > 0) ? (mb - 1 ) : &fake_left, i);
-            int intra_b_mode = bool_dec_tree(bt, bmode_tree, kf_bmode_prob[a][l]);
+            int intra_b_mode = BOOL_TREE(bt, bmode_tree, kf_bmode_prob[a][l]);
             mb->imodes[i] = intra_b_mode;
         }
     }
@@ -1516,7 +1488,7 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mbs, int y, int 
                                                    TM_PRED = "111" */
     };
     const uint8_t kf_uv_mode_prob[3] = {142, 114, 183};
-    mb->intra_uv_mode = bool_dec_tree(bt, uv_mode_tree, kf_uv_mode_prob);
+    mb->intra_uv_mode = BOOL_TREE(bt, uv_mode_tree, kf_uv_mode_prob);
     // VDBG(webp, "y %d, x %d: ymode %d, uvmode %d", y, x, mb->intra_y_mode, mb->intra_uv_mode);
 }
 
@@ -2052,6 +2024,7 @@ typedef struct {
     int uv_stride;
 } cache;
 
+#if 0
 void
 reconstruct_row(WEBP *w, struct macro_block *blocks, 
                 uint8_t* yuv_b, int y, cache *c, VP8FInfo *finfos)
@@ -2107,7 +2080,7 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
         // bring top samples into the cache
         topsamples* const top_yuv = &yuv_t;
         const int16_t* const coeffs = mb->coeffs;
-        uint32_t bits = mb->non_zero_y;
+        // uint32_t bits = mb->non_zero_y;
         int n;
 
         if (y > 0) {
@@ -2182,7 +2155,7 @@ reconstruct_row(WEBP *w, struct macro_block *blocks,
         }
     }
 }
-
+#endif
 
 //-------------------------------------------------------------------------
 // Filtering
@@ -2545,46 +2518,39 @@ static void
 vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 {
     uint32_t *Y, *U, *V;
+    struct macro_block *block;
+    
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
     int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    struct WEBP_decoder d;
+    int rows = (height + 15) >> 4;
+    int cols = (width + 15) >> 4;
 
     precompute_filter(w);
 
-    struct macro_block *blocks = malloc(sizeof(struct macro_block)* (((width + 15) >> 4) * ((height + 15) >> 4)));
-    
-    struct vp8mb *mbs = malloc(sizeof(struct vp8mb)* (((width + 15) >> 4) + 1));
+    struct macro_block *blocks = malloc(sizeof(struct macro_block)* (cols * rows));
+    // one more struct for left of zero col
+    struct context *top = calloc(cols, sizeof(struct context));
 
-    int rows = (height + 15) >> 4;
-    int cols =  (width + 15) >> 4;
     VDBG(webp, "rows %d, cols %d\n", rows, cols);
 
     // Section 19.3: Macroblock header & Data
     for (int y = 0; y < rows; y++) {
+
+        // parse intra mode here or in advance
+        bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
+
+        // reset left part
+        struct context left = { .ctx = {0,}};
         // from first partition
         for (int x = 0; x < cols; x++) {
-            vp8_decode_mb_header(w, br, blocks, y, x);
-        }
-        // bits_vec_dump(br->bits);
-        // printf("%ld\n", br->bits->len - (br->bits->ptr - br->bits->start));
 
-        for (int x = 0; x < cols; x++) {
-            VP8FInfo *finfos = malloc(sizeof(VP8FInfo) * rows * cols);
+            block = blocks + y * cols + x;
 
-            // parse intra mode here or in advance
-            bool_dec *bt = btree[y & (w->k.nbr_partitions - 1)];
+            vp8_decode_mb_header(w, br, block, y, x);
 
-            // reset left part
-            struct vp8mb *left = mbs;
-            left->nz = 0;
-            left->nz_dc = 0;
-
-            struct macro_block *block = blocks + y * cols + x;
-            struct vp8mb *mb = mbs + 1 + x;
-            VP8FInfo *fi = finfos + y * cols + x;
-            // printf("2 y %d, x %d, is 4x4 %d, tnz %d, lnz %d\n", y, x, block->intra_y_mode, mb->nz, left->nz);
-            vp8_decode_residual_data(w, left, mb, block, bt, &d, fi);
+            // VP8FInfo *fi = finfos + y * cols + x;
+            vp8_decode_residual_data(w, block, bt, &left, top, NULL);
         }
     }
 

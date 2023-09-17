@@ -243,27 +243,18 @@ struct vp8_key_frame_header {
 struct macro_block {
     uint8_t segment_id;
     uint8_t mb_skip_coeff;
-    // uint8_t is_inter_mb; // never
+
     uint8_t intra_y_mode;  // intra_y_mode is B_PRED, mb is 4x4
     uint8_t intra_uv_mode; // chroma prediction mode
+    uint8_t imodes[16];    // one 16x16 mode (#0) or sixteen 4x4 modes
 
     int16_t coeffs[384];   // 384 coeffs = (16+4+4) * 4*4
-    uint8_t imodes[16];    // one 16x16 mode (#0) or sixteen 4x4 modes
-    // bit-wise info about the content of each sub-4x4 blocks (in decoding order).
-    // Each of the 4x4 blocks for y/u/v is associated with a 2b code according to:
-    //   code=0 -> no coefficient
-    //   code=1 -> only DC
-    //   code=2 -> first three coefficients are non-zero
-    //   code=3 -> more than three coefficients are non-zero
-    // This allows to call specialized transform functions.
-    uint32_t non_zero_y;
-    uint32_t non_zero_uv;
-    uint8_t dither;      // local dithering strength (deduced from non_zero_*)
-};
 
-struct vp8mb {
-    uint8_t nz;         // non-zero AC/DC coeffs (4bit for luma + 4bit for chroma)
-    uint8_t nz_dc;      // non-zero DC coeff (1bit)
+    uint8_t dither;        // local dithering strength (deduced from non_zero_*)
+
+    uint8_t ctx[9];        //  1 DC / 4 luma / 4 chrome
+
+    int x;
 };
 
 
@@ -310,6 +301,20 @@ struct partition {
     uint32_t len;       // partition length
 };
 
+/* similar to jpeg decoder, four components */
+struct WEBP_decoder {
+    uint16_t y1_dc;
+    uint16_t y1_ac;
+    uint16_t y2_dc;
+    uint16_t y2_ac;
+    uint16_t uv_dc;
+    uint16_t uv_ac;
+
+    uint16_t quant;
+    uint16_t uv_quant; // for dithering
+    
+};
+
 typedef struct {
     struct webp_header header;
     struct webp_vp8x vp8x;
@@ -322,6 +327,7 @@ typedef struct {
     struct vp8_key_frame_extra fi;
     struct vp8_key_frame_header k;
     struct partition p[MAX_PARTI_NUM];
+    struct WEBP_decoder d[4]; // different segment has different parameters
 } WEBP;
 
 void WEBP_init(void);

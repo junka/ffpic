@@ -26,16 +26,16 @@ struct hvcC_box {
 #endif
     uint32_t general_profile_compatibility_flags;
 
+    uint32_t general_constraint_indicator_flags_h;
+    uint16_t general_constraint_indicator_flags_l;
+
+    uint8_t general_level_idc;
 #ifdef LITTLE_ENDIAN
-    uint64_t min_spatial_segmentation_idc1:4;
-    uint64_t reserved:4;
-    uint64_t general_level_idc:8;
-    uint64_t general_constraint_indicator_flags: 48;
+    uint8_t min_spatial_segmentation_idc1:4;
+    uint8_t reserved:4;
 #else
-    uint64_t general_constraint_indicator_flags: 48;
-    uint64_t general_level_idc:8;
-    uint64_t reserved:4;
-    uint64_t min_spatial_segmentation_idc1:4;
+    uint8_t reserved:4;
+    uint8_t min_spatial_segmentation_idc1:4;
 #endif
 
     uint8_t min_spatial_segmentation_idc2;
@@ -105,7 +105,7 @@ struct ipco_box {
 struct ipma_item {
     uint32_t item_id;
     uint8_t association_count;
-    uint16_t* association;
+    uint16_t* association; // could be 1 byte or 2 bytes width, highest bit is always for seential
 };
 
 struct ipma_box {

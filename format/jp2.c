@@ -462,9 +462,7 @@ read_next_box(JP2 *j, FILE *f, int len)
             read_xml(j, f, b.size - 8);
             break;
         default:
-            s = UINT2TYPE(type);
-            printf("unkown marker \"%s\"\n", s);
-            free(s);
+            printf("unkown marker \"%s\"\n", UINT2TYPE(type));
             fseek(f, b.size - 8, SEEK_CUR);
             break;
     }

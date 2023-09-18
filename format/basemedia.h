@@ -14,12 +14,11 @@ extern "C" {
 static char *
 type2name(uint32_t type)
 {
-    char* name = malloc(5);
-    char c1 = (type >> 24) & 0xFF;
-    char c2 = (type >> 16) & 0xFF;
-    char c3 = (type >> 8) & 0xFF;
-    char c4 = (type) & 0xFF;
-    sprintf(name, "%c%c%c%c", c4, c3, c2, c1);
+    static char name[5];
+    name[3] = (type >> 24) & 0xFF;
+    name[2] = (type >> 16) & 0xFF;
+    name[1] = (type >> 8) & 0xFF;
+    name[0] = (type) & 0xFF;
     name[4]= '\0';
     return name;
 }

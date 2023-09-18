@@ -111,9 +111,7 @@ void
 print_box(FILE *f, void *d)
 {
     struct box *b = (struct box *) d;
-    char *s = UINT2TYPE(b->type);
-    fprintf(f, "\"%s\":%d", s, b->size);
-    free(s);
+    fprintf(f, "\"%s\":%d", UINT2TYPE(b->type), b->size);
 }
 
 

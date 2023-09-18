@@ -53,10 +53,9 @@ AVIF_info(FILE *f, struct pic* p)
     fprintf(f, "AVIF file format:\n");
     fprintf(f, "-----------------------\n");
     char *s1 = UINT2TYPE(h->ftyp.minor_version);
+    fprintf(f, "\tbrand: %s", s1);
     char *s2 = UINT2TYPE(h->ftyp.compatible_brands[1]);
-    fprintf(f, "\tbrand: %s, compatible %s\n", s1, s2);
-    free(s1);
-    free(s2);
+    fprintf(f," compatible %s\n", s2);
     fprintf(f, "\theight: %d, width: %d\n", p->height, p->width);
 }
 

@@ -69,6 +69,8 @@ read_hvcc_box(FILE *f, struct hvcC_box *b)
     fread(&b->configurationVersion, 23, 1, f);
     
     b->general_profile_compatibility_flags = SWAP(b->general_profile_compatibility_flags);
+    b->general_constraint_indicator_flags_h = SWAP(b->general_constraint_indicator_flags_h);
+    b->general_constraint_indicator_flags_l = SWAP(b->general_constraint_indicator_flags_l);
     b->avgframerate = SWAP(b->avgframerate);
     b->nal_arrays = malloc(b->num_of_arrays * sizeof(struct nal_arr));
 
@@ -152,8 +154,12 @@ read_ipma_box(FILE *f, struct ipma_box *b)
         for (int j = 0; j < b->entries[i].association_count; j ++) {
             if (b->flags & 0x1) {
                 fread(b->entries[i].association + j, 2, 1, f);
+                b->entries[i].association[j] = SWAP(b->entries[i].association[j]);
             } else {
-                fread(b->entries[i].association + j, 1, 1, f);
+                b->entries[i].association[j] = fgetc(f);
+                if (b->entries[i].association[j] & 0x80) {
+                    b->entries[i].association[j] = (0x8000 | (b->entries[i].association[j] & 0x7F));
+                }
             }
         }
     }
@@ -258,7 +264,7 @@ decode_items(HEIF * h, FILE *f, struct mdat_box *b, uint8_t *pixels)
         } else {
             //take it as real coded data
             VINFO(heif, "decoding id 0x%x len %llu",  h->items[i].item->item_id, h->items[i].length);
-            decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
+            // decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
         }
     }
 }
@@ -378,10 +384,9 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "HEIF file format:\n");
     fprintf(f, "-----------------------\n");
     char *s1 = UINT2TYPE(h->ftyp.minor_version);
-    char *s2 = UINT2TYPE(h->ftyp.compatible_brands[1]);
-    fprintf(f, "\tbrand: %s, compatible %s\n", s1, s2);
-    free(s1);
-    free(s2);
+    fprintf(f, "\tbrand: %s,", s1);
+    s1 = UINT2TYPE(h->ftyp.compatible_brands[1]);
+    fprintf(f, " compatible %s\n", s1);
     fprintf(f, "\theight: %d, width: %d\n", p->height, p->width);
 
     fprintf(f, "\tmeta box --------------\n");
@@ -389,7 +394,6 @@ HEIF_info(FILE *f, struct pic* p)
     print_box(f, &h->meta.hdlr);
     s1 = UINT2TYPE(h->meta.hdlr.handler_type);
     fprintf(f, " pre_define=%d,handle_type=\"%s\"", h->meta.hdlr.pre_defined, s1);
-    free(s1);
     if (h->meta.hdlr.name) {
         fprintf(f, ",name=%s", h->meta.hdlr.name);
     }
@@ -432,7 +436,6 @@ HEIF_info(FILE *f, struct pic* p)
         fprintf(f, " item_id=%d,item_protection_index=%d,item_type=%s",
             h->meta.iinf.item_infos[i].item_id, h->meta.iinf.item_infos[i].item_protection_index,
             s1);
-        free(s1);
         fprintf(f, "\n");
     }
 
@@ -459,7 +462,7 @@ HEIF_info(FILE *f, struct pic* p)
                 hvcc->general_profile_compatibility_flags);
             fprintf(f, "\t\t\t\tmin_spatial_segmentation_idc %d, general_level_idc %d\n",
                 min_spatial_segmentation_idc, hvcc->general_level_idc);
-            fprintf(f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%llx\n", hvcc->general_constraint_indicator_flags);
+            fprintf(f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%llx\n", (uint64_t)hvcc->general_constraint_indicator_flags_h << 16 | hvcc->general_constraint_indicator_flags_l);
             
             fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
                 hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);
@@ -480,6 +483,14 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iprp.ipma);
     fprintf(f, "\n");
+    for (int i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
+        struct ipma_item *ipma = &h->meta.iprp.ipma.entries[i];
+        fprintf(f, "\t\titem %d: association_count %d\n", ipma->item_id, ipma->association_count);
+        for (int j = 0; j < ipma->association_count; j ++) {
+            fprintf(f, "\t\t\tessential %d, id %d \n", ipma->association[j] >> 15, ipma->association[j] & 0x7fff);
+        }
+    }
+    fprintf(f, "\n");
 
     fprintf(f, "\t");
     print_box(f, &h->meta.iref);
@@ -490,7 +501,6 @@ HEIF_info(FILE *f, struct pic* p)
         fprintf(f, "ref_type=%s,from_item_id=%d,ref_count=%d", s1,
             h->meta.iref.refs[i].from_item_id,
             h->meta.iref.refs[i].ref_count);
-        free(s1);
         for (int j = 0; j < h->meta.iref.refs[i].ref_count; j ++) {
             fprintf(f, ",to_item=%d",  h->meta.iref.refs[i].to_item_ids[j]);
         }

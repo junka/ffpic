@@ -71,7 +71,8 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/exr.c"
   "${FFPIC_ROOT}/format/psd.c"
   "${FFPIC_ROOT}/format/svg.c"
-  "${FFPIC_ROOT}/format/file.c")
+  "${FFPIC_ROOT}/format/file.c"
+  "${FFPIC_ROOT}/format/predict.c")
 
 find_package(SDL2)
 

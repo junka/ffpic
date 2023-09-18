@@ -88,40 +88,6 @@ struct hvcC_box {
     struct nal_arr *nal_arrays;
 };
 
-/* see IEC 23008-12 6.5.3 */
-struct ispe_box {
-    FULL_BOX_ST;
-    uint32_t image_width;
-    uint32_t image_height;
-};
-
-/* may have hvcC, ispe */
-struct ipco_box {
-    BOX_ST;
-    struct box *property[2];
-};
-
-//item property association
-struct ipma_item {
-    uint32_t item_id;
-    uint8_t association_count;
-    uint16_t* association; // could be 1 byte or 2 bytes width, highest bit is always for seential
-};
-
-struct ipma_box {
-    FULL_BOX_ST;
-    uint32_t entry_count;
-    struct ipma_item *entries; 
-};
-
-
-/* see iso_ico 230008-12 9.3*/
-struct iprp_box {
-    BOX_ST;
-    struct ipco_box ipco;
-    struct ipma_box ipma;
-};
-
 
 
 #pragma pack(pop)

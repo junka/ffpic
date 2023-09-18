@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include "byteorder.h"
 #include "basemedia.h"
@@ -111,7 +112,8 @@ void
 print_box(FILE *f, void *d)
 {
     struct box *b = (struct box *) d;
-    fprintf(f, "\"%s\":%d", UINT2TYPE(b->type), b->size);
+    if (b->size || b->type)
+        fprintf(f, "\"%s\":%d", UINT2TYPE(b->type), b->size);
 }
 
 
@@ -261,9 +263,16 @@ read_infe_box(FILE *f, struct infe_box *b)
 void
 read_iinf_box(FILE *f, struct iinf_box *b)
 {
-    fread(b, 14, 1, f);
+    fread(b, 12, 1, f);
     b->size = SWAP(b->size);
-    b->entry_count = SWAP(b->entry_count);
+    if (b->version > 0) {
+        fread(&b->entry_count, 4, 1, f);
+        b->entry_count = SWAP(b->entry_count);
+    } else {
+        uint16_t count;
+        fread(&count, 2, 1, f);
+        b->entry_count = SWAP(count);
+    }
     b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
     for (int i = 0; i < b->entry_count; i ++) {
         read_infe_box(f, b->item_infos + i);
@@ -327,6 +336,113 @@ read_iref_box(FILE *f, struct iref_box *b)
     }
     b->refs_count = n - 1;
 }
+
+
+
+static int
+read_ispe_box(FILE *f, struct ispe_box *b)
+{
+    fread(b, 20, 1, f);
+    b->size = SWAP(b->size);
+    b->image_height = SWAP(b->image_height);
+    b->image_width = SWAP(b->image_width);
+    return b->size;
+}
+
+static int
+read_pixi_box(FILE *f, struct pixi_box *b)
+{
+    fread(b, 13, 1, f);
+    b->size = SWAP(b->size);
+    b->bits_per_channel = malloc(b->channels);
+    fread(b->bits_per_channel, b->channels, 1, f);
+    return b->size;
+}
+
+static int
+read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
+{
+    struct box * cc = NULL;
+    struct ispe_box *ispe;
+    struct pixi_box *pixi;
+    fread(b, 8, 1, f);
+    b->size = SWAP(b->size);
+    int s = b->size - 8;
+    int n = 0;
+    while (s > 0) {
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("type %s, size %d\n", UINT2TYPE(type), p.size);
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+            case TYPE2UINT("hvcC"):
+                s -= cb(f, &cc);
+                b->property[n++] = cc;
+                break;
+            case TYPE2UINT("av1C"):
+                s -= cb(f, &cc);
+                b->property[n++] = cc;
+                break;
+            case TYPE2UINT("ispe"):
+                ispe = malloc(sizeof(struct ispe_box));
+                s -= read_ispe_box(f, ispe);
+                b->property[n++] = (struct box *)ispe;
+                break;
+            case TYPE2UINT("pixi"):
+                pixi = malloc(sizeof(struct pixi_box));
+                s -= read_pixi_box(f, pixi);
+                b->property[n++] = (struct box *)pixi;
+                break;
+            default:
+                // assert(0);
+                s -= p.size;
+                fseek(f, p.size, SEEK_CUR);
+                break;
+        }
+    }
+    b->n_prop = n;
+    return b->size;
+}
+
+static void
+read_ipma_box(FILE *f, struct ipma_box *b)
+{
+    fread(b, 16, 1, f);
+    b->size = SWAP(b->size);
+    b->entry_count = SWAP(b->entry_count);
+    b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
+    for (int i = 0; i < b->entry_count; i ++) {
+        if (b->version < 1) {
+            fread(b->entries + i, 2, 1, f);
+        } else {
+            fread(b->entries + i, 4, 1, f);
+        }
+        b->entries[i].association_count = fgetc(f);
+        b->entries[i].association = malloc(2 * b->entries[i].association_count);
+        for (int j = 0; j < b->entries[i].association_count; j ++) {
+            if (b->flags & 0x1) {
+                fread(b->entries[i].association + j, 2, 1, f);
+                b->entries[i].association[j] = SWAP(b->entries[i].association[j]);
+            } else {
+                b->entries[i].association[j] = fgetc(f);
+                if (b->entries[i].association[j] & 0x80) {
+                    b->entries[i].association[j] = (0x8000 | (b->entries[i].association[j] & 0x7F));
+                }
+            }
+        }
+    }
+}
+
+void
+read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb)
+{
+    fread(b, 8, 1, f);
+    b->size = SWAP(b->size);
+    read_ipco_box(f, &b->ipco, cb);
+    read_ipma_box(f, &b->ipma);
+}
+
+
 
 void
 read_mdat_box(FILE *f, struct mdat_box *b)

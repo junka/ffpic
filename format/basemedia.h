@@ -7,6 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 
 #define TYPE2UINT(x) (x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
@@ -153,7 +154,7 @@ struct infe_box {
 
 struct iinf_box {
     FULL_BOX_ST;
-    uint16_t entry_count;
+    uint32_t entry_count; // depends on version, 2 bytes of version 0, else 4 bytes
     struct infe_box *item_infos;
 };
 
@@ -302,6 +303,49 @@ struct skip_box {
     uint8_t *data;
 };
 
+/* see IEC 23008-12 6.5.3 */
+struct ispe_box {
+    FULL_BOX_ST;
+    uint32_t image_width;
+    uint32_t image_height;
+};
+
+struct pixi_box {
+    FULL_BOX_ST;
+    uint8_t channels;
+    uint8_t* bits_per_channel;
+};
+
+/* for HEIF may have hvcC, ispe */
+/* for avif may have av1C, ispe, pixi, psap */
+struct ipco_box {
+    BOX_ST;
+    struct box *property[4];
+    int n_prop;
+};
+
+
+//item property association
+struct ipma_item {
+    uint32_t item_id;
+    uint8_t association_count;
+    uint16_t* association; // could be 1 byte or 2 bytes width, highest bit is always for seential
+};
+
+struct ipma_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    struct ipma_item *entries; 
+};
+
+
+/* see iso_ico 230008-12 9.3*/
+struct iprp_box {
+    BOX_ST;
+    struct ipco_box ipco;
+    struct ipma_box ipma;
+};
+
 #pragma pack(pop)
 
 uint32_t read_box(FILE *f, void * d, int len);
@@ -325,7 +369,9 @@ void read_sinf_box(FILE *f, struct sinf_box *b);
 
 void read_iref_box(FILE *f, struct iref_box *b);
 
+typedef int (* read_box_callback)(FILE *f, struct box **b);
 
+void read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb);
 
 /* read mdat */
 void read_mdat_box(FILE *f, struct mdat_box *b);

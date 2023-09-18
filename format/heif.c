@@ -61,8 +61,12 @@ HEIF_probe(const char *filename)
 
 
 static int
-read_hvcc_box(FILE *f, struct hvcC_box *b)
+read_hvcc_box(FILE *f, struct box **bn)
 {
+    struct hvcC_box *b = malloc(sizeof(struct hvcC_box));
+    if (*bn == NULL) {
+        *bn = (struct box *)b;
+    }
     fread(b, 8, 1, f);
     b->size = SWAP(b->size);
 
@@ -94,86 +98,6 @@ read_hvcc_box(FILE *f, struct hvcC_box *b)
     return b->size;
 }
 
-static int
-read_ispe_box(FILE *f, struct ispe_box *b)
-{
-    fread(b, 20, 1, f);
-    b->size = SWAP(b->size);
-    b->image_height = SWAP(b->image_height);
-    b->image_width = SWAP(b->image_width);
-    return b->size;
-}
-
-static int
-read_ipco_box(FILE *f, struct ipco_box *b)
-{
-    struct hvcC_box *hvcc;
-    struct ispe_box *ispe;
-    fread(b, 8, 1, f);
-    b->size = SWAP(b->size);
-    int s = b->size - 8;
-    int n = 0;
-    while (s) {
-        struct box p;
-        uint32_t type = read_box(f, &p, s);
-        fseek(f, -8, SEEK_CUR);
-        switch (type) {
-            case TYPE2UINT("hvcC"):
-                hvcc = malloc(sizeof(struct hvcC_box));
-                s -= read_hvcc_box(f, hvcc);
-                b->property[n++] = (struct box *)hvcc;
-                break;
-            case TYPE2UINT("ispe"):
-                ispe = malloc(sizeof(struct ispe_box));
-                s -= read_ispe_box(f, ispe);
-                b->property[n++] = (struct box *)ispe;
-                break;
-            default:
-                break;
-        }
-        VDBG(heif, "ipco left %d", s);
-    }
-    return b->size;
-}
-
-static void
-read_ipma_box(FILE *f, struct ipma_box *b)
-{
-    fread(b, 16, 1, f);
-    b->size = SWAP(b->size);
-    b->entry_count = SWAP(b->entry_count);
-    b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
-    for (int i = 0; i < b->entry_count; i ++) {
-        if (b->version < 1) {
-            fread(b->entries + i, 2, 1, f);
-        } else {
-            fread(b->entries + i, 4, 1, f);
-        }
-        b->entries[i].association_count = fgetc(f);
-        b->entries[i].association = malloc(2 * b->entries[i].association_count);
-        for (int j = 0; j < b->entries[i].association_count; j ++) {
-            if (b->flags & 0x1) {
-                fread(b->entries[i].association + j, 2, 1, f);
-                b->entries[i].association[j] = SWAP(b->entries[i].association[j]);
-            } else {
-                b->entries[i].association[j] = fgetc(f);
-                if (b->entries[i].association[j] & 0x80) {
-                    b->entries[i].association[j] = (0x8000 | (b->entries[i].association[j] & 0x7F));
-                }
-            }
-        }
-    }
-}
-
-static void
-read_iprp_box(FILE *f, struct iprp_box *b)
-{
-    fread(b, 8, 1, f);
-    b->size = SWAP(b->size);
-    read_ipco_box(f, &b->ipco);
-    read_ipma_box(f, &b->ipma);
-}
-
 
 static void
 read_meta_box(FILE *f, struct meta_box *meta)
@@ -202,7 +126,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
             read_iinf_box(f, &meta->iinf);
             break;
         case TYPE2UINT("iprp"):
-            read_iprp_box(f, &meta->iprp);
+            read_iprp_box(f, &meta->iprp, &read_hvcc_box);
             break;
         case TYPE2UINT("iref"):
             read_iref_box(f, &meta->iref);
@@ -508,8 +432,6 @@ HEIF_info(FILE *f, struct pic* p)
     }
     
 }
-
-
 
 
 static struct file_ops heif_ops = {

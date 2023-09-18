@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "bitstream.h"
 #include "vlog.h"
 #include "file.h"
 #include "avif.h"
@@ -32,7 +33,215 @@ AVIF_probe(const char *filename)
     return -EINVAL;
 }
 
+static int
+parse_color_config(struct color_config *cc, struct sequence_header_obu *obu, struct bits_vec *v)
+{
+    cc->high_bitdepth = READ_BIT(v);
+    if (obu->seq_profile == 2 && cc->high_bitdepth) {
+        cc->twelve_bit = READ_BIT(v);
+        obu->BitDepth = cc->twelve_bit ? 12: 10;
+    } else if (obu->seq_profile <= 2) {
+        obu->BitDepth = cc->high_bitdepth ? 10 : 8;
+    }
+    if (obu->seq_profile == 1) {
+        cc->mono_chrome = 0;
+    } else {
+        cc->mono_chrome = READ_BIT(v);
+    }
+    obu->NumPlanes = cc->mono_chrome ? 1: 3;
+    cc->color_description_present_flag = READ_BIT(v);
+    if (cc->color_description_present_flag) {
+        cc->color_primaries = READ_BITS(v, 8);
+        cc->transfer_characteristics = READ_BITS(v, 8);
+        cc->matrix_coefficients = READ_BITS(v, 8);
+    } else {
+        cc->color_primaries = CP_UNSPECIFIED;
+        cc->transfer_characteristics = TC_UNSPECIFIED;
+        cc->matrix_coefficients = MC_UNSPECIFIED;
+    }
+    if (cc->mono_chrome) {
+        cc->color_range = READ_BIT(v);
+        cc->subsampling_x = 1;
+        cc->subsampling_y = 1;
+        cc->chroma_sample_position = CSP_UNKNOWN;
+        cc->separate_uv_delta_q = 0;
+        return 0;
+    } else if (cc->color_primaries == CP_BT_709 &&
+        cc->transfer_characteristics == TC_SRGB &&
+        cc->matrix_coefficients == MC_IDENTITY) {
+        cc->color_range = 1;
+        cc->subsampling_x = 0;
+        cc->subsampling_y = 0;
+    } else {
+        cc->color_range = READ_BIT(v);
+        if (obu->seq_profile == 0) {
+            cc->subsampling_x = 1;
+            cc->subsampling_y = 1;
+        } else if (obu->seq_profile == 1) {
+            cc->subsampling_x = 0;
+            cc->subsampling_y = 0;
+        } else {
+            if (obu->BitDepth == 12) {
+                cc->subsampling_x = READ_BIT(v);
+                if (cc->subsampling_x) {
+                    cc->subsampling_y = READ_BIT(v);
+                } else {
+                    cc->subsampling_y = 0;
+                }
+            } else {
+                cc->subsampling_x = 1;
+                cc->subsampling_y = 0;
+            }
+        }
+        if (cc->subsampling_x && cc->subsampling_y) {
+            cc->chroma_sample_position = READ_BITS(v, 2);
+        }
+    }
+    cc->separate_uv_delta_q = READ_BIT(v);
+    return 0;
+}
 
+int choose_operating_point()
+{
+    return 0;
+}
+
+static struct sequence_header_obu *
+parse_sequence_header_obu(uint8_t *data, int size)
+{
+    struct bits_vec *v = bits_vec_alloc(data, size, BITS_LSB);
+    struct sequence_header_obu *obu = malloc(sizeof(*obu));
+    obu->seq_profile = READ_BITS(v, 3);
+    obu->still_picture = READ_BIT(v);
+    obu->reduced_still_picture_header = READ_BIT(v);
+    if (obu->reduced_still_picture_header) {
+        obu->timing_info_present_flag = 0;
+        obu->decoder_model_info_present_flag = 0;
+        obu->initial_display_delay_present_flag = 0;
+        obu->operating_points_cnt_minus_1 = 0;
+        obu->points[0].operating_point_idc = 0;
+        obu->points[0].seq_level_idx = READ_BITS(v, 5);
+        obu->points[0].seq_tier = 0;
+        obu->points[0].decoder_model_present_for_this_op = 0;
+        obu->points[0].initial_display_delay_present_for_this_op = 0;
+    } else {
+        obu->timing_info_present_flag = READ_BIT(v);
+        if (obu->timing_info_present_flag) {
+            obu->decoder_model_info_present_flag = READ_BIT(v);
+            if (obu->decoder_model_info_present_flag) {
+                obu->minfo.buffer_delay_length_minus_1 = READ_BITS(v, 5);
+                obu->minfo.num_units_in_decoding_tick = READ_BITS(v, 32);
+                obu->minfo.buffer_removal_time_length_minus_1 = READ_BITS(v, 5);
+                obu->minfo.frame_presentation_time_length_minus_1 = READ_BITS(v, 5);
+            }
+        } else {
+            obu->decoder_model_info_present_flag = 0;
+        }
+        obu->initial_display_delay_present_flag = READ_BIT(v);
+        obu->operating_points_cnt_minus_1 = READ_BITS(v, 5);
+        obu->points = malloc(sizeof(struct operating_points) * (obu->operating_points_cnt_minus_1+1));
+        for (int i = 0; i <= obu->operating_points_cnt_minus_1; i++) {
+            obu->points[i].operating_point_idc = READ_BITS(v, 12);
+            obu->points[i].seq_level_idx = READ_BITS(v, 5);
+            if (obu->points[i].seq_level_idx > 7) {
+                obu->points[i].seq_tier = READ_BIT(v);
+            } else {
+                obu->points[i].seq_tier = 0;
+            }
+            if (obu->decoder_model_info_present_flag) {
+                obu->points[i].decoder_model_present_for_this_op = READ_BIT(v);
+                if (obu->points[i].decoder_model_present_for_this_op) {
+                    int n = obu->minfo.buffer_delay_length_minus_1 + 1;
+                    obu->points[i].pinfo.decoder_buffer_delay = READ_BITS(v, n);
+                    obu->points[i].pinfo.encoder_buffer_delay = READ_BITS(v, n);
+                    obu->points[i].pinfo.low_delay_mode_flag = READ_BIT(v);
+                }
+            } else {
+                obu->points[i].decoder_model_present_for_this_op = 0;
+            }
+            if (obu->initial_display_delay_present_flag) {
+                obu->points[i].initial_display_delay_present_for_this_op = READ_BIT(v);
+                if (obu->points[i].initial_display_delay_present_for_this_op) {
+                    obu->points[i].initial_display_delay_minus_1 = READ_BITS(v, 4);
+                }
+            }
+        }
+    }
+    int op = choose_operating_point();
+    int OperatingPointIdc = obu->points[op].operating_point_idc;
+    obu->frame_width_bits_minus_1 = READ_BITS(v, 4);
+    obu->frame_height_bits_minus_1 = READ_BITS(v, 4);
+    obu->max_frame_width_minus_1 = READ_BITS(v, obu->frame_width_bits_minus_1+1);
+    obu->max_frame_height_minus_1 = READ_BITS(v, obu->frame_height_bits_minus_1+1);
+    if (obu->reduced_still_picture_header) {
+        obu->frame_id_numbers_present_flag = 0;
+    } else {
+        obu->frame_id_numbers_present_flag = READ_BIT(v);
+    }
+    if (obu->frame_id_numbers_present_flag) {
+        obu->delta_frame_id_length_minus_2 = READ_BITS(v, 4);
+        obu->additional_frame_id_length_minus_1 = READ_BITS(v, 3);
+    }
+    obu->use_128x128_superblock = READ_BIT(v);
+    obu->enable_filter_intra = READ_BIT(v);
+    obu->enable_intra_edge_filter = READ_BIT(v);
+    if (obu->reduced_still_picture_header) {
+        obu->enable_interintra_compound = 0;
+        obu->enable_masked_compound = 0;
+        obu->enable_warped_motion = 0;
+        obu->enable_dual_filter = 0;
+        obu->enable_order_hint = 0;
+        obu->enable_jnt_comp = 0;
+        obu->enable_ref_frame_mvs = 0;
+        obu->seq_force_screen_content_tools = SELECT_SCREEN_CONTENT_TOOLS;
+        obu->seq_force_integer_mv = SELECT_INTEGER_MV;
+        obu->OrderHintBits = 0;
+    } else {
+        obu->enable_interintra_compound = READ_BIT(v);
+        obu->enable_masked_compound = READ_BIT(v);
+        obu->enable_warped_motion = READ_BIT(v);
+        obu->enable_dual_filter = READ_BIT(v);
+        obu->enable_order_hint = READ_BIT(v);
+        if (obu->enable_order_hint) {
+            obu->enable_jnt_comp = READ_BIT(v);
+            obu->enable_ref_frame_mvs = READ_BIT(v);
+        } else {
+            obu->enable_jnt_comp = 0;
+            obu->enable_ref_frame_mvs = 0;
+        }
+        obu->seq_choose_screen_content_tools = READ_BIT(v);
+        if (obu->seq_choose_screen_content_tools) {
+            obu->seq_force_screen_content_tools = SELECT_SCREEN_CONTENT_TOOLS;
+        } else {
+            obu->seq_force_screen_content_tools = READ_BIT(v);
+        }
+        if (obu->seq_force_screen_content_tools > 0) {
+            obu->seq_choose_integer_mv = READ_BIT(v);
+            if (obu->seq_choose_integer_mv) {
+                obu->seq_force_integer_mv = SELECT_INTEGER_MV;
+            } else {
+                obu->seq_force_integer_mv = READ_BIT(v);
+            }
+        } else {
+            obu->seq_force_integer_mv = SELECT_INTEGER_MV;
+        }
+        if (obu->enable_order_hint) {
+            obu->order_hint_bits_minus_1 = READ_BITS(v, 3);
+            obu->OrderHintBits = obu->order_hint_bits_minus_1 + 1;
+        } else {
+            obu->OrderHintBits = 0;
+        }
+    }
+
+    obu->enable_superres = READ_BIT(v);
+    obu->enable_cdef = READ_BIT(v);
+    obu->enable_restoration = READ_BIT(v);
+    parse_color_config(&obu->cc, obu, v);
+    obu->film_grain_params_present = READ_BIT(v);
+    
+    bits_vec_free(v);
+    return obu;
+}
 
 static int
 read_av1c_box(FILE *f, struct box **bn)
@@ -47,14 +256,22 @@ read_av1c_box(FILE *f, struct box **bn)
     fread(&b->type + 4, 4, 1, f);
 
     
-    VDBG(avif, "size %d",
-                b->size);
+    VDBG(avif, "size %d", b->size);
+    uint8_t *data = malloc(b->size - 12);
+    fread(data, b->size - 12, 1, f);
+    
+    // configOBUs field contains zero or more OBUs. Any OBU may be present provided that the following procedures produce compliant AV1 bitstreams:
+    
+    //the configOBUs field SHALL contain at most one Sequence Header OBU
+    // and if present, it SHALL be the first OBU.
+    struct sequence_header_obu *obu = parse_sequence_header_obu(data, b->size - 12);
 
-    // b->configOBUs = malloc(b->num_of_arrays * sizeof(struct nal_arr));
+    VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
+    b->configOBUs = obu;
 
     VDBG(avif, "av1C: version %d, marker 0x%x", b->version,
                 b->marker);
-    fseek(f, b->size - 12, SEEK_CUR);
+
     return b->size;
 }
 

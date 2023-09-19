@@ -88,8 +88,6 @@ struct hvcC_box {
     struct nal_arr *nal_arrays;
 };
 
-
-
 #pragma pack(pop)
 
 /* see 8.11.1 */
@@ -106,6 +104,7 @@ struct meta_box {
 
 struct heif_item {
     const struct item_location *item;
+    uint32_t type;
     uint64_t length;
     uint8_t *data;
 };
@@ -114,7 +113,7 @@ typedef struct {
     struct ftyp_box ftyp;
     struct meta_box meta;
     int mdat_num;
-    struct mdat_box *mdat;
+    // struct mdat_box *mdat;
 
     struct heif_item *items;
 } HEIF;

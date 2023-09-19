@@ -82,7 +82,7 @@ struct mvhd_box {
 };
 
 
-/* see 8.9 */
+/* see 8.9  handler, declares the metadata(handler) type */
 struct hdlr_box {
     FULL_BOX_ST;
 
@@ -114,6 +114,7 @@ struct item_location {
     struct item_extent * extents;
 };
 
+/* item location */
 struct iloc_box {
     FULL_BOX_ST;
 #ifdef LITTLE_ENDIAN
@@ -132,7 +133,7 @@ struct iloc_box {
     struct item_location *items;
 };
 
-/*see 8.44.4 */
+/*see 8.44.4 primary item reference */
 struct pitm_box {
     FULL_BOX_ST;
 
@@ -152,6 +153,7 @@ struct infe_box {
     char* content_encoding;
 };
 
+/* item infomation */
 struct iinf_box {
     FULL_BOX_ST;
     uint32_t entry_count; // depends on version, 2 bytes of version 0, else 4 bytes
@@ -164,7 +166,7 @@ struct ipro_box {
     uint16_t protection_count;
 };
 
-
+/* original format box */
 struct frma_box {
     BOX_ST;
     uint32_t data_format;
@@ -185,7 +187,7 @@ struct frma_box {
 //     struct IPMP_Descriptor *ipmp_descs;
 // };
 
-
+/* scheme type box */
 struct schm_box {
     FULL_BOX_ST;
 
@@ -194,6 +196,7 @@ struct schm_box {
     uint8_t * scheme_uri; //only exist when flag & 0x1
 };
 
+/* scheme information box */
 struct schi_box {
     BOX_ST;
 };
@@ -207,6 +210,7 @@ struct sinf_box {
     struct schi_box *info;    //optional
 };
 
+/* pixel aspect ratio */
 struct pasp_box {
     BOX_ST;
 
@@ -214,6 +218,7 @@ struct pasp_box {
     uint32_t vSpacing; 
 };
 
+/* clean aperture */
 struct clap_box {
     BOX_ST;
 
@@ -230,6 +235,7 @@ struct clap_box {
     uint32_t vertOffD;
 };
 
+/* color information */
 struct colr_box {
     BOX_ST;
     uint32_t color_type;
@@ -286,6 +292,7 @@ struct itemtype_ref_box {
     uint16_t* to_item_ids;
 };
 
+/* item reference box */
 struct iref_box {
     FULL_BOX_ST;
     int refs_count; // not in iso doc, add for conveniency
@@ -303,16 +310,17 @@ struct skip_box {
     uint8_t *data;
 };
 
-/* see IEC 23008-12 6.5.3 */
+/* see IEC 23008-12 6.5.3 image spatial extents */
 struct ispe_box {
     FULL_BOX_ST;
     uint32_t image_width;
     uint32_t image_height;
 };
 
+/* see ISO/IEC 23008-12  6.5.6 pixel information */
 struct pixi_box {
     FULL_BOX_ST;
-    uint8_t channels;
+    uint8_t num_channels;
     uint8_t* bits_per_channel;
 };
 
@@ -339,7 +347,7 @@ struct ipma_box {
 };
 
 
-/* see iso_ico 230008-12 9.3*/
+/* see iso_ico 230008-12 9.3 item properties */
 struct iprp_box {
     BOX_ST;
     struct ipco_box ipco;

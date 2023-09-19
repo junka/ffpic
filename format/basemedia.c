@@ -354,8 +354,8 @@ read_pixi_box(FILE *f, struct pixi_box *b)
 {
     fread(b, 13, 1, f);
     b->size = SWAP(b->size);
-    b->bits_per_channel = malloc(b->channels);
-    fread(b->bits_per_channel, b->channels, 1, f);
+    b->bits_per_channel = malloc(b->num_channels);
+    fread(b->bits_per_channel, b->num_channels, 1, f);
     return b->size;
 }
 
@@ -441,7 +441,6 @@ read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb)
     read_ipco_box(f, &b->ipco, cb);
     read_ipma_box(f, &b->ipma);
 }
-
 
 
 void

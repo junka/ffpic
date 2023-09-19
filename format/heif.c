@@ -141,21 +141,22 @@ read_meta_box(FILE *f, struct meta_box *meta)
 }
 
 static void
-read_item(HEIF * h, FILE *f, uint32_t idx)
+pre_read_item(HEIF * h, FILE *f, uint32_t idx)
 {
-    fseek(f, h->items[idx].item->base_offset, SEEK_SET);
+    // for now make sure, extent_count = 1 work
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
-        h->items[idx].data = malloc(h->items[idx].item->extents[0].extent_length);
-        fread(h->items[idx].data, h->items[idx].item->extents[0].extent_length, 1, f);
+        h->items[idx].data = malloc(h->items[idx].length);
+        fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET),
+        fread(h->items[idx].data, h->items[idx].length, 1, f);
     } else {
-        h->items[idx].data = malloc(h->items[idx].item->extents[0].extent_length);
+        h->items[idx].data = malloc(1);
         uint64_t total = 0;
         for (int i = 0; i < h->items[idx].item->extent_count; i ++) {
+            h->items[idx].data = realloc(h->items[idx].data, h->items[idx].item->extents[i].extent_length);
+            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET),
+            fread(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
             total += h->items[idx].item->extents[i].extent_length;
-            h->items[idx].data = realloc(h->items[idx].data, total);
-            fread(h->items[idx].data + h->items[idx].item->extents[i].extent_offset,
-                h->items[idx].item->extents[i].extent_length, 1, f);
         }
         h->items[idx].length = total;
     }
@@ -164,10 +165,10 @@ read_item(HEIF * h, FILE *f, uint32_t idx)
 void
 decode_hvc1(HEIF * h, uint8_t *data, uint64_t len, uint8_t* pixels)
 {
-    // hexdump(stdout, "mdat ", "", data, 256);
+    hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     while (len) {
-        int sample_len = data[0] << 24 | data[1] << 16| data[2] << 8| data[3];
+        int sample_len = p[0] << 24 | p[1] << 16| p[2] << 8| p[3];
         len -= 4;
         p += 4;
         parse_nalu(p, sample_len);
@@ -177,18 +178,19 @@ decode_hvc1(HEIF * h, uint8_t *data, uint64_t len, uint8_t* pixels)
 }
 
 static void
-decode_items(HEIF * h, FILE *f, struct mdat_box *b, uint8_t *pixels)
+decode_items(HEIF *h, FILE *f, uint8_t *pixels)
 {
-    for (int i = 0; i < h->meta.iinf.entry_count; i ++) {
-        read_item(h, f, i);
-        if (h->meta.iinf.item_infos[i].item_type == TYPE2UINT("mime")) {
+    for (int i = 0; i < h->meta.iloc.item_count; i ++) {
+        pre_read_item(h, f, i);
+        printf("");
+        if (h->items[i].type == TYPE2UINT("mime")) {
             // exif mime, skip it
-            // printf("length %lld, %s\n", h->items[h->meta.iinf.item_infos[i].item_id-1].item->extents[0].extent_length,
-            //     h->items[h->meta.iinf.item_infos[i].item_id-1].data);
-        } else {
+            // hexdump(stdout, "exif:", "", h->items[i].data, h->items[i].length);
+            VDBG(heif, "exif %llu", h->items[i].length);
+        } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
-            VINFO(heif, "decoding id 0x%x len %llu",  h->items[i].item->item_id, h->items[i].length);
-            // decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
+            VINFO(heif, "decoding id 0x%p len %llu",  h->items[i].data, h->items[i].length);
+            decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
         }
     }
 }
@@ -204,7 +206,7 @@ HEIF_load(const char *filename)
     fseek(f, 0, SEEK_SET);
 
     size -= read_ftyp(f, &h->ftyp);
-    h->mdat = malloc(sizeof(struct mdat_box));
+    // h->mdat = malloc(sizeof(struct mdat_box));
     struct box b;
     while (size) {
         uint32_t type = read_box(f, &b, size);
@@ -215,8 +217,8 @@ HEIF_load(const char *filename)
             break;
         case TYPE2UINT("mdat"):
             h->mdat_num ++;
-            h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
-            read_mdat_box(f, h->mdat + h->mdat_num - 1);
+            // h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
+            // read_mdat_box(f, h->mdat + h->mdat_num - 1);
             break;
         default:
             break;
@@ -235,11 +237,23 @@ HEIF_load(const char *filename)
     h->items = malloc(h->meta.iloc.item_count * sizeof(struct heif_item));
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         h->items[i].item = &h->meta.iloc.items[i];
+        for (int j = 0; j < h->meta.iinf.entry_count; j++) {
+            if (h->meta.iinf.item_infos[j].item_id == h->items[i].item->item_id) {
+                h->items[i].type = h->meta.iinf.item_infos[j].item_type;
+            }
+        }
     }
-
+    uint16_t primary_id = h->meta.pitm.item_id;
+    VINFO(heif, "primary id %d", h->meta.pitm.item_id);
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        if (h->meta.iloc.items[i].item_id == primary_id) {
+            VINFO(heif, "primary loc at %llu", h->meta.iloc.items[i].base_offset);
+            break;
+        }
+    }
     // process mdata
     VINFO(heif, "mdat_num %d", h->mdat_num);
-    decode_items(h, f, h->mdat, p->pixels);
+    decode_items(h, f, p->pixels);
 
     fclose(f);
 
@@ -292,10 +306,10 @@ HEIF_free(struct pic *p)
     }
     free(m->iref.refs);
 
-    for (int i = 0; i < h->mdat_num; i ++) {
-        free(h->mdat[i].data);
-    }
-    free(h->mdat);
+    // for (int i = 0; i < h->mdat_num; i ++) {
+    //     free(h->mdat[i].data);
+    // }
+    // free(h->mdat);
     free(h->items);
     pic_free(p);
 }

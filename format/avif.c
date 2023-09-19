@@ -737,8 +737,8 @@ AVIF_info(FILE *f, struct pic* p)
                 fprintf(f, " initial_presentation_delay_minus_one %d\n", av1c->initial_presentation_delay_minus_one);            
         } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("pixi")) {
             struct pixi_box * pixi = (struct pixi_box *)(h->meta.iprp.ipco.property[i]);
-            fprintf(f, "\tchannels : %d\n", pixi->channels);
-            for (int i = 0; i < pixi->channels; i ++) {
+            fprintf(f, "\tnum_channels : %d\n", pixi->num_channels);
+            for (int i = 0; i < pixi->num_channels; i ++) {
                 fprintf(f, "\t\t\t\t bits_per_channel %d\n", pixi->bits_per_channel[i]);
             }
         }

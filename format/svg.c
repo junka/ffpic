@@ -51,23 +51,32 @@ read_context(FILE *f, char *buf)
     return len;
 }
 
-struct xml_node *
+static struct xml_node *
 xml_node_new(struct xml_node *parent)
 {
     struct xml_node *n = malloc(sizeof(struct xml_node));
+    n->attr_num = 0;
     n->parent = parent;
     n->tag = NULL;
     n->value = NULL;
     return n;
 }
 
-void
+static void
 xml_node_free(struct xml_node *n)
 {
     if (n->tag)
         free(n->tag);
     if (n->value)
         free(n->value);
+    for (int i = 0; i < n->attr_num; i ++) {
+        free(n->attr[i].tag);
+        free(n->attr[i].value);
+    }
+    free(n->attr);
+    if (n->parent) {
+        xml_node_free(n->parent);
+    }
     free(n);
 }
 
@@ -84,7 +93,8 @@ read_attrs(FILE *f, struct xml_node* n, char endch)
     char value_end = '\"';
     // char s = read_skip_space(f);
     char s;
-    struct xml_attr * attr;
+    struct xml_attr * attr = NULL;
+    n->attr = malloc(sizeof(struct xml_attr));
 
     fseek(f, -1 , SEEK_CUR);
     long start;
@@ -153,7 +163,7 @@ read_start_tag(struct xml_node * n, FILE *f)
     } state = NAME;
 
     int len;
-    char s;
+    char s = '\0';
 
     fseek(f, -1 , SEEK_CUR);
     long start = ftell(f);
@@ -206,7 +216,7 @@ read_ins(struct xml_node * n, FILE *f)
     } state = NAME;
 
     int len;
-    char s;
+    char s = '\0';
 
     fseek(f, -1, SEEK_CUR);
     long start = ftell(f);
@@ -261,7 +271,7 @@ read_dtd(struct xml_node * n, FILE *f)
     } state = TYPE;
 
     int len;
-    char s;
+    char s = '\0';
 
     fseek(f, -1, SEEK_CUR);
     long start = ftell(f);
@@ -336,7 +346,7 @@ read_comm(FILE *f)
     } state = COMMENT;
 
     int len;
-    char s;
+    char s = '\0';
     
     fseek(f, -1 , SEEK_CUR);
 
@@ -393,7 +403,7 @@ static int
 read_text(FILE *f)
 {
     char s;
-    long start = ftell(f) - 1;
+    // long start = ftell(f) - 1;
 
     fseek(f, -1 , SEEK_CUR);
     while (!feof(f)) {
@@ -424,8 +434,8 @@ read_xml(SVG *g, FILE *f)
 
     char s;
     int len;
-    struct xml_node *root = xml_node_new(NULL);
-    struct xml_node *n;
+    struct xml_node *root = NULL;
+    struct xml_node *n = NULL;
 
     while(!feof(f)) {
         s = getc(f);
@@ -491,7 +501,9 @@ read_xml(SVG *g, FILE *f)
             default:
                 break;
         }
+        root = n;
     }
+    g->r = n;
     return 0;
 }
 
@@ -521,7 +533,7 @@ SVG_probe(const char *filename)
 static struct pic* 
 SVG_load(const char *filename)
 {
-    struct pic * p = malloc(sizeof(SVG));
+    struct pic * p = pic_alloc(sizeof(SVG));
     SVG * s = p->pic;
     FILE *f = fopen(filename, "r");
     read_xml(s, f);
@@ -533,6 +545,7 @@ static void
 SVG_free(struct pic *p)
 {
     SVG * s = (SVG *)p->pic;
+    xml_node_free(s->r);
     pic_free(p);
 }
 

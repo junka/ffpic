@@ -173,6 +173,11 @@ bits_vec_reset_border(struct bits_vec *v)
     }
 }
 
+int bits_vec_position(struct bits_vec *v)
+{
+    return (v->ptr - v->start) * 8 + v->offset;
+}
+
 /* Read a num bit value from stream and add base */
 int
 bits_vec_read_bits_base(struct bits_vec *v, int n, int base)

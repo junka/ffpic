@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 #include "bitstream.h"
 #include "vlog.h"
@@ -31,6 +32,22 @@ AVIF_probe(const char *filename)
         return 0;
     }
     return -EINVAL;
+}
+
+static uint64_t
+read_leb128(struct bits_vec *v)
+{
+    uint64_t value = 0;
+    uint64_t lbe = 0;
+    for (int i = 0; i < 8; i++) {
+        lbe = READ_BITS(v, 8);
+        value |= ((lbe & 0x7F) << (i * 7));
+        lbe += 1;
+        if (!(lbe & 0x80)) {
+            break;
+        }
+    }
+    return value;
 }
 
 static int
@@ -107,9 +124,8 @@ int choose_operating_point()
 }
 
 static struct sequence_header_obu *
-parse_sequence_header_obu(uint8_t *data, int size)
+parse_sequence_header_obu(struct bits_vec *v)
 {
-    struct bits_vec *v = bits_vec_alloc(data, size, BITS_LSB);
     struct sequence_header_obu *obu = malloc(sizeof(*obu));
     obu->seq_profile = READ_BITS(v, 3);
     obu->still_picture = READ_BIT(v);
@@ -238,15 +254,255 @@ parse_sequence_header_obu(uint8_t *data, int size)
     obu->enable_restoration = READ_BIT(v);
     parse_color_config(&obu->cc, obu, v);
     obu->film_grain_params_present = READ_BIT(v);
-    
-    bits_vec_free(v);
+
     return obu;
 }
+
+int parse_metadata_itut_t35(struct metadata_itut_t35 *mi, struct bits_vec *v)
+{
+    mi->itu_t_t35_country_code = READ_BITS(v, 8);
+    if (mi->itu_t_t35_country_code == 0xFF) {
+        mi->itu_t_t35_country_code_extension_byte = READ_BITS(v, 8);
+    }
+    // skip now for mi->itu_t_t35_payload_bytes
+    while(READ_BITS(v, 8)) {
+
+    }
+    return 0;
+}
+
+
+int parse_metadata_hdr_cll(struct metadata_hdr_cll *mh, struct bits_vec *v)
+{
+    mh->max_cll = READ_BITS(v, 16);
+    mh->max_fall = READ_BITS(v, 16);
+    return 0;
+}
+
+int parse_metadata_hdr_mdcv(struct metadata_hdr_mdcv *mh, struct bits_vec *v)
+{
+    for (int i = 0; i < 3; i++ ) {
+        mh->primary_chromaticity_x[i] = READ_BITS(v, 16);
+        mh->primary_chromaticity_y[i] = READ_BITS(v, 16);
+    }
+    mh->white_point_chromaticity_x = READ_BITS(v, 16);
+    mh->white_point_chromaticity_y = READ_BITS(v, 16);
+    mh->luminance_max = READ_BITS(v, 32);
+    mh->luminance_min = READ_BITS(v, 32);
+    return 0;
+}
+
+int parse_metadata_scalability(struct metadata_scalability *ms, struct bits_vec *v)
+{
+    ms->scalability_mode_idc = READ_BITS(v, 8);
+    if (ms->scalability_mode_idc == SCALABILITY_SS) {
+        ms->spatial_layers_cnt_minus_1 =  READ_BITS(v, 2);
+        ms->spatial_layer_dimensions_present_flag =  READ_BIT(v);
+        ms->spatial_layer_description_present_flag =  READ_BIT(v);
+        ms->temporal_group_description_present_flag = READ_BIT(v);
+        ms->scalability_structure_reserved_3bits = READ_BITS(v, 3);
+        if (ms->spatial_layer_dimensions_present_flag) {
+            for (int i = 0; i <= ms->spatial_layers_cnt_minus_1 ; i++ ) {
+                ms->spatial_layer_max_width[i] = READ_BITS(v, 16);
+                ms->spatial_layer_max_height[i] = READ_BITS(v, 16);
+            }
+        }
+        if (ms->spatial_layer_description_present_flag) {
+            for (int i = 0; i <= ms->spatial_layers_cnt_minus_1; i++) {
+                ms->spatial_layer_ref_id[i] = READ_BITS(v, 8);
+            }
+        }
+        if (ms->temporal_group_description_present_flag) {
+            ms->temporal_group_size = READ_BITS(v, 8);
+            ms->groups = malloc(sizeof(struct temporal_group) * ms->temporal_group_size);
+            for (int i = 0; i < ms->temporal_group_size; i++ ) {
+                ms->groups[i].temporal_group_temporal_id = READ_BITS(v, 3);
+                ms->groups[i].temporal_group_temporal_switching_up_point_flag = READ_BIT(v);
+                ms->groups[i].temporal_group_spatial_switching_up_point_flag = READ_BIT(v);
+                ms->groups[i].temporal_group_ref_cnt = READ_BITS(v, 3);
+                for (int j = 0; j < ms->groups[i].temporal_group_ref_cnt; j++) {
+                    ms->groups[i].temporal_group_ref_pic_diff[j] = READ_BITS(v, 8);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+int parse_metadata_timecode(struct metadata_timecode *mt, struct bits_vec *v)
+{
+    mt->counting_type = READ_BITS(v, 5);
+    mt->full_timestamp_flag = READ_BIT(v);
+    mt->discontinuity_flag = READ_BIT(v);
+    mt->cnt_dropped_flag = READ_BIT(v);
+    mt->n_frames = READ_BITS(v, 9);
+    if (mt->full_timestamp_flag) {
+        mt->seconds_value = READ_BITS(v, 6);
+        mt->minutes_value = READ_BITS(v, 6);
+        mt->hours_value = READ_BITS(v, 5);
+    } else {
+        mt->seconds_flag =  READ_BIT(v);
+        if (mt->seconds_flag) {
+            mt->seconds_value = READ_BITS(v, 6);
+            mt->minutes_flag = READ_BIT(v);
+            if (mt->minutes_flag) {
+                mt->minutes_value = READ_BITS(v, 6);
+                mt->hours_flag = READ_BIT(v);
+                if (mt->hours_flag) {
+                    mt->hours_value = READ_BITS(v, 5);
+                }
+            }
+        }
+    }
+    int time_offset_length = READ_BITS(v, 5);
+    if (time_offset_length > 0) {
+        mt->time_offset_value = READ_BITS(v, time_offset_length);
+    }
+    return 0;
+}
+
+struct metadata_obu*
+parse_metadata_obu(struct bits_vec *v)
+{
+    struct metadata_obu *mo = malloc(sizeof(struct metadata_obu));
+    mo->metadata_type = read_leb128(v);
+    if (mo->metadata_type == METADATA_TYPE_ITUT_T35) {
+        parse_metadata_itut_t35(&mo->itut_t35, v);
+    } else if (mo->metadata_type == METADATA_TYPE_HDR_CLL) {
+        parse_metadata_hdr_cll(&mo->hdr_cll, v);
+    } else if (mo->metadata_type == METADATA_TYPE_HDR_MDCV) {
+        parse_metadata_hdr_mdcv(&mo->hdr_mdcv, v);
+    } else if (mo->metadata_type == METADATA_TYPE_SCALABILITY) {
+        parse_metadata_scalability(&mo->scalability, v);
+    } else if (mo->metadata_type == METADATA_TYPE_TIMECODE) {
+        parse_metadata_timecode(&mo->timecode, v);
+    } else {
+
+    }
+    return mo;
+}
+
+struct frame_header_obu * parse_frame_header_obu(struct bits_vec *v)
+{
+    struct frame_header_obu * obu = malloc(sizeof(*obu));
+    return obu;
+}
+
+int parse_tile_group_obu(struct bits_vec *v, int size)
+{
+
+    return 0;
+}
+
+int parse_frame_obu(struct bits_vec *v)
+{
+    return 0;
+}
+
+int parse_tile_list_obu(struct bits_vec *v)
+{
+    return 0;
+}
+
+static int
+parse_obu_header(struct obu_header *h, struct bits_vec *v)
+{
+    h->obu_forbidden_bit = READ_BIT(v);
+    h->obu_type = READ_BITS(v, 4);
+    h->obu_extension_flag = READ_BIT(v);
+    h->obu_has_size_field = READ_BIT(v);
+    h->obu_reserved_1bit = READ_BIT(v);
+    if (h->obu_extension_flag) {
+        h->ext.temporal_id = READ_BITS(v, 3);
+        h->ext.spatial_id = READ_BITS(v, 2);
+        h->ext.extension_header_reserved_3bits = READ_BITS(v, 3);
+    }
+    return 0;
+}
+
+int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx)
+{
+    struct obu_header h;
+    parse_obu_header(&h, v);
+    static struct sequence_header_obu *seqobu = NULL;
+    static int SeenFrameHeader = -1;
+    int obu_size = 0;
+    if (h.obu_has_size_field) {
+        obu_size = read_leb128(v);
+    } else {
+        obu_size = sz - 1 - h.obu_extension_flag;
+    }
+    int op = choose_operating_point();
+    int OperatingPointIdc = seqobu? seqobu->points[op].operating_point_idc : 0;
+    int startPosition = bits_vec_position(v);
+    if (h.obu_type != OBU_SEQUENCE_HEADER &&
+        h.obu_type != OBU_TEMPORAL_DELIMITER &&
+        OperatingPointIdc != 0 &&
+        h.obu_extension_flag == 1) {
+        int inTemporalLayer = (OperatingPointIdc >> h.ext.temporal_id ) & 1;
+        int inSpatialLayer = (OperatingPointIdc >> ( h.ext.spatial_id + 8 ) ) & 1;
+        if (!inTemporalLayer || !inSpatialLayer) {
+            *obu = NULL;
+            SKIP_BITS(v, obu_size * 8);
+            return obu_size;
+        }
+    }
+    if (h.obu_type == OBU_SEQUENCE_HEADER) {
+        seqobu = parse_sequence_header_obu(v); // at most has one
+        seqobu->h = h;
+        *obu = (struct obu_header *)seqobu;
+    } else if (h.obu_type == OBU_TEMPORAL_DELIMITER) {
+        SeenFrameHeader = 0;
+        *obu = NULL;
+    } else if (h.obu_type == OBU_FRAME_HEADER) {
+        struct frame_header_obu * fh = parse_frame_header_obu(v);
+        fh->h = h;
+        *obu = (struct obu_header *)fh;
+    } else if (h.obu_type == OBU_REDUNDANT_FRAME_HEADER) {
+        struct frame_header_obu * fh = parse_frame_header_obu(v);
+        fh->h = h;
+        *obu = (struct obu_header *)fh;
+    } else if (h.obu_type == OBU_TILE_GROUP) {
+        parse_tile_group_obu(v, obu_size);
+    } else if (h.obu_type == OBU_METADATA) {
+        struct metadata_obu *mo = parse_metadata_obu(v);
+        mo->h = h;
+        *obu = (struct obu_header *)mo;
+    } else if (h.obu_type == OBU_FRAME) {
+        parse_frame_obu(v);
+        *obu = NULL;
+    } else if (h.obu_type == OBU_TILE_LIST) {
+        parse_tile_list_obu(v);
+        *obu = NULL;
+    } else if (h.obu_type == OBU_PADDING) {
+        *obu = NULL;
+        SKIP_BITS(v, obu_size * 8);
+        return obu_size + 1 + h.obu_extension_flag;
+    } else {
+        *obu = NULL;
+        SKIP_BITS(v, obu_size * 8);
+        return obu_size + 1 + h.obu_extension_flag;
+    }
+    int currentPosition = bits_vec_position(v);
+    int payloadBits = currentPosition - startPosition;
+    if (obu_size > 0 && h.obu_type != OBU_TILE_GROUP &&
+        h.obu_type != OBU_TILE_LIST &&
+        h.obu_type != OBU_FRAME) {
+        SKIP_BITS(v, obu_size * 8 - payloadBits);
+    }
+
+    return obu_size + 1 + h.obu_extension_flag;
+}
+
 
 static int
 read_av1c_box(FILE *f, struct box **bn)
 {
     struct av1C_box *b = malloc(sizeof(struct av1C_box));
+    b->n_obu = 0;
+    // b->configOBUs = (struct obu_header **)malloc(sizeof(struct obu_header *) * 32);
+    // memset(b->configOBUs, 0, sizeof(struct obu_header *) * 32);
+    assert (b->configOBUs);
     if (*bn == NULL) {
         *bn = (struct box *)b;
     }
@@ -255,19 +511,34 @@ read_av1c_box(FILE *f, struct box **bn)
 
     fread(&b->type + 4, 4, 1, f);
 
-    
     VDBG(avif, "size %d", b->size);
     uint8_t *data = malloc(b->size - 12);
     fread(data, b->size - 12, 1, f);
+    struct bits_vec *v = bits_vec_alloc(data, b->size - 12, BITS_LSB);
     
     // configOBUs field contains zero or more OBUs. Any OBU may be present provided that the following procedures produce compliant AV1 bitstreams:
-    
+
     //the configOBUs field SHALL contain at most one Sequence Header OBU
     // and if present, it SHALL be the first OBU.
-    struct sequence_header_obu *obu = parse_sequence_header_obu(data, b->size - 12);
 
-    VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
-    b->configOBUs = obu;
+    int sz = b->size - 12;
+    while (sz) {
+        // if (b->n_obu >= 32) {
+        //     b->configOBUs = realloc(b->configOBUs, sizeof(void *) *(b->n_obu + 1));
+        // }
+        assert(b->configOBUs);
+        sz -= parse_obu(v, sz, b->configOBUs + b->n_obu, b->n_obu);
+        b->n_obu ++;
+    }
+    bits_vec_free(v);
+    VDBG(avif, "n_obu %d", b->n_obu);
+    for (int i = 0; i < b->n_obu; i ++) {
+        struct obu_header *h = b->configOBUs[i];
+        if (h->obu_type == OBU_SEQUENCE_HEADER) {
+            struct sequence_header_obu *obu = (struct sequence_header_obu *)b->configOBUs[i];
+            VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
+        }
+    }
 
     VDBG(avif, "av1C: version %d, marker 0x%x", b->version,
                 b->marker);

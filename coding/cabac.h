@@ -5,6 +5,8 @@
 extern "C"{
 #endif
 
+#include <stdint.h>
+
 #define STATE_BITS (6)
 #define STATE_NUM  ((1 << STATE_BITS) * 2) // *2 for MPS = [0|1]
 

@@ -98,11 +98,12 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         for (int i = 0; i < 32; i ++) {
             ptl->general_profile_compatibility_flag |= (READ_BIT(v) << i);
         }
-        VDBG(hevc, "general_profile: idc %d, flag 0x%x", ptl->general_profile_idc, ptl->general_profile_compatibility_flag);
+        VDBG(hevc, "general_profile %d idc %d, flag 0x%x", ptl->general_profile_space, ptl->general_profile_idc, ptl->general_profile_compatibility_flag);
         ptl->general_progressive_source_flag = READ_BIT(v);
         ptl->general_interlaced_source_flag = READ_BIT(v);
         ptl->general_non_packed_constraint_flag = READ_BIT(v);
         ptl->general_frame_only_constraint_flag = READ_BIT(v);
+#if 0
         if (JUDGE_PROFILE(ptl->general_profile, 4) || JUDGE_PROFILE(ptl->general_profile, 5) ||
             JUDGE_PROFILE(ptl->general_profile, 6) || JUDGE_PROFILE(ptl->general_profile, 7) ||
             JUDGE_PROFILE(ptl->general_profile, 8) || JUDGE_PROFILE(ptl->general_profile, 9) ||
@@ -142,71 +143,78 @@ parse_profile_tier_level(struct bits_vec *v, struct profile_tier_level *ptl,
         } else {
             SKIP_BITS(v, 1);
         }
-        ptl->general_level_idc = READ_BITS(v, 8);
-        for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
-            ptl->sub_layer_flag[i].sub_layer_profile_present_flag = READ_BIT(v);
-            ptl->sub_layer_flag[i].sub_layer_level_present_flag = READ_BIT(v);
+#else
+        SKIP_BITS(v, 44);
+#endif
+    }
+    ptl->general_level_idc = READ_BITS(v, 8);
+    for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
+        ptl->sub_layer_flag[i].sub_layer_profile_present_flag = READ_BIT(v);
+        ptl->sub_layer_flag[i].sub_layer_level_present_flag = READ_BIT(v);
+    }
+    if (maxNumSubLayersMinus1 > 0) {
+        for (int i = maxNumSubLayersMinus1; i < 8; i ++) {
+            SKIP_BITS(v, 2);
         }
-        if (maxNumSubLayersMinus1 > 0) {
-            for (int i = maxNumSubLayersMinus1; i < 8; i ++) {
-                SKIP_BITS(v, 2);
+    }
+    ptl->sublayers = calloc(maxNumSubLayersMinus1 + 1, sizeof(struct sub_layer));
+    for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
+        if (ptl->sub_layer_flag[i].sub_layer_profile_present_flag) {
+            ptl->sublayers[i].sub_layer_profile_space = READ_BITS(v, 2);
+            ptl->sublayers[i].sub_layer_tier_flag = READ_BIT(v);
+            ptl->sublayers[i].sub_layer_profile_idc = READ_BITS(v, 5);
+            for (int j = 0; j < 32; j ++) {
+                ptl->sublayers[i].sub_layer_profile_compatibility_flag |= READ_BIT(v) << j;
             }
-            ptl->sublayers = calloc(maxNumSubLayersMinus1, sizeof(struct sub_layer));
-            for (int i = 0; i < maxNumSubLayersMinus1; i ++) {
-                if (ptl->sub_layer_flag[i].sub_layer_profile_present_flag) {
-                    ptl->sublayers[i].sub_layer_profile_space = READ_BITS(v, 2);
-                    ptl->sublayers[i].sub_layer_tier_flag = READ_BIT(v);
-                    ptl->sublayers[i].sub_layer_profile_idc = READ_BITS(v, 5);
-                    for (int j = 0; j < 32; j ++) {
-                        ptl->sublayers[i].sub_layer_profile_compatibility_flag |= READ_BIT(v) << j;
-                    }
-                    ptl->sublayers[i].sub_layer_progressive_source_flag = READ_BIT(v);
-                    ptl->sublayers[i].sub_layer_interlaced_source_flag = READ_BIT(v);
-                    ptl->sublayers[i].sub_layer_non_packed_constraint_flag = READ_BIT(v);
-                    ptl->sublayers[i].sub_layer_frame_only_constraint_flag = READ_BIT(v);
-                    if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 6) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 7) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 8) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
-                    {
-                        ptl->sublayers[i].sub_layer_max_12bit_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_max_10bit_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_max_8bit_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_max_422chroma_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_max_420chroma_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_max_monochrome_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_intra_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
-                        ptl->sublayers[i].sub_layer_lower_bit_rate_constraint_flag = READ_BIT(v);
-                        if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
-                            JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
-                        {
-                            ptl->sublayers[i].sub_layer_max_14bit_constraint_flag = READ_BIT(v);
-                            SKIP_BITS(v, 33);
-                        } else {
-                            SKIP_BITS(v, 34);
-                        }
-                    } else if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2)) {
-                        SKIP_BITS(v, 7);
-                        ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
-                        SKIP_BITS(v, 35);
-                    } else {
-                        SKIP_BITS(v, 43);
-                    }
-                    if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 1) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 3) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
-                        JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
-                    {
-                        ptl->sublayers[i].sub_layer_inbld_flag = READ_BIT(v);
-                    } else {
-                        SKIP_BITS(v, 1);
-                    }
+            ptl->sublayers[i].sub_layer_progressive_source_flag = READ_BIT(v);
+            ptl->sublayers[i].sub_layer_interlaced_source_flag = READ_BIT(v);
+            ptl->sublayers[i].sub_layer_non_packed_constraint_flag = READ_BIT(v);
+            ptl->sublayers[i].sub_layer_frame_only_constraint_flag = READ_BIT(v);
+#if 0
+            if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 6) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 7) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 8) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
+            {
+                ptl->sublayers[i].sub_layer_max_12bit_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_max_10bit_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_max_8bit_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_max_422chroma_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_max_420chroma_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_max_monochrome_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_intra_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
+                ptl->sublayers[i].sub_layer_lower_bit_rate_constraint_flag = READ_BIT(v);
+                if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                    JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 10) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
+                {
+                    ptl->sublayers[i].sub_layer_max_14bit_constraint_flag = READ_BIT(v);
+                    SKIP_BITS(v, 33);
+                } else {
+                    SKIP_BITS(v, 34);
                 }
-                if (ptl->sub_layer_flag[i].sub_layer_level_present_flag) {
-                    ptl->sublayers[i].sub_layer_level_idc = READ_BITS(v, 8);
-                }
+            } else if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2)) {
+                SKIP_BITS(v, 7);
+                ptl->sublayers[i].sub_layer_one_picture_only_constraint_flag = READ_BIT(v);
+                SKIP_BITS(v, 35);
+            } else {
+                SKIP_BITS(v, 43);
             }
+            if (JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 1) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 2) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 3) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 4) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 5) || JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 9) ||
+                JUDGE_PROFILE(ptl->sublayers[i].sub_layer_profile, 11))
+            {
+                ptl->sublayers[i].sub_layer_inbld_flag = READ_BIT(v);
+            } else {
+                SKIP_BITS(v, 1);
+            }
+#else
+            SKIP_BITS(v, 44);
+#endif
+        }
+        if (ptl->sub_layer_flag[i].sub_layer_level_present_flag) {
+            ptl->sublayers[i].sub_layer_level_idc = READ_BITS(v, 8);
         }
     }
 }
@@ -507,9 +515,8 @@ parse_pps_scc_extension(struct bits_vec *v, struct pps_scc_extension *pps_scc_ex
 }
 
 static struct pps*
-parse_pps(struct hevc_nalu_header *h, uint8_t *data, uint16_t len)
+parse_pps(struct hevc_nalu_header *h, struct bits_vec *v)
 {
-    struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
     struct pps *pps = calloc(1, sizeof(struct pps));
     pps->pps_pic_parameter_set_id = GOL_UE(v);
     pps->pps_seq_parameter_set_id = GOL_UE(v);
@@ -599,7 +606,6 @@ parse_pps(struct hevc_nalu_header *h, uint8_t *data, uint16_t len)
         }
     }
     rbsp_trailing_bits(v);
-    bits_vec_free(v);
     return pps;
 }
 
@@ -733,10 +739,9 @@ parse_sps_scc_ext(struct sps_scc_extension *scc, struct bits_vec *v, int numComp
 
 //see F.7.3.2.2.1
 static struct sps *
-parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *vps)
+parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
 {
     // hexdump(stdout, "sps:", data, len);
-    struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
     struct sps *sps = calloc(1, sizeof(struct sps));
     sps->sps_video_parameter_set_id = READ_BITS(v, 4);
     VDBG(hevc, "sps: sps_video_parameter_set_id %d", sps->sps_video_parameter_set_id);
@@ -894,7 +899,6 @@ parse_sps(struct hevc_nalu_header * h, uint8_t *data, uint16_t len, struct vps *
         }
     }
     rbsp_trailing_bits(v);
-    bits_vec_free(v);
     return sps;
 }
 
@@ -1211,14 +1215,14 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
             RefPicListTemp0[rIdx] = rps->RefPicSetStCurrAfter[i];
         for (int i = 0; i < rps->NumPocLtCurr && rIdx < NumRpsCurrTempList0; rIdx++, i++)
             RefPicListTemp0[rIdx] = rps->RefPicSetLtCurr[i];
-        if (hps->pps->pps_scc_ext->pps_curr_pic_ref_enabled_flag)
+        if (hps->pps->pps_scc_ext && hps->pps->pps_scc_ext->pps_curr_pic_ref_enabled_flag)
             RefPicListTemp0[rIdx++] = currPic;
     }
     //see (8-9) / f-66
     for (rIdx = 0; rIdx <= slice->num_ref_idx_l0_active_minus1; rIdx++) {
         rps->RefPicList0[rIdx] = slice->ref_pic_list_modification_flag_l0 ? RefPicListTemp0[slice->list_entry_l0[rIdx]] : RefPicListTemp0[rIdx];
     }
-    if (hps->pps->pps_scc_ext->pps_curr_pic_ref_enabled_flag && !slice->ref_pic_list_modification_flag_l0 &&
+    if (hps->pps->pps_scc_ext && hps->pps->pps_scc_ext->pps_curr_pic_ref_enabled_flag && !slice->ref_pic_list_modification_flag_l0 &&
             NumRpsCurrTempList0 > (slice->num_ref_idx_l0_active_minus1 + 1)) {
         rps->RefPicList0[slice->num_ref_idx_l0_active_minus1] = currPic;
     }
@@ -1541,7 +1545,7 @@ parse_vps_timing_info(struct bits_vec *v, struct vps *vps, struct vps_timing_inf
         vps_tim->vps_num_ticks_poc_diff_one_minus1 = GOL_UE(v);
     }
     vps_tim->vps_num_hrd_parameters = GOL_UE(v);
-    printf("vps hrd num %d\n", vps_tim->vps_num_hrd_parameters);
+    VDBG(hevc, "vps hrd num %d", vps_tim->vps_num_hrd_parameters);
     for (int i = 0; i < vps_tim->vps_num_hrd_parameters; i ++) {
         vps_tim->hrd_layer_set_idx[i] =  GOL_UE(v);
         if (i > 0) {
@@ -1983,28 +1987,26 @@ parse_vps_3d_extension(struct bits_vec *v, struct vps *vps, struct vps_3d_extens
 
 //video parameter set F.7.3.2.1 , I.7.3.2.1
 static struct vps *
-parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
+parse_vps(struct hevc_nalu_header *headr, struct bits_vec *v)
 {
-    VDBG(hevc, "vps: len %d", len);
+    // VDBG(hevc, "vps: len %d", len);
     // hexdump(stdout, "vps: ", data, len);
-    uint8_t* p = data;
     struct vps *vps = calloc(1, sizeof(struct vps));
-    struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
     vps->vps_video_parameter_set_id = READ_BITS(v, 4);
     VDBG(hevc, "vps id %d", vps->vps_video_parameter_set_id);
     vps->vps_base_layer_internal_flag = READ_BIT(v);
     vps->vps_base_layer_available_flag = READ_BIT(v);
     vps->vps_max_layers_minus1 = READ_BITS(v, 6);
+    VDBG(hevc, "vps_max_layers_minus1 %d", vps->vps_max_layers_minus1);
     vps->vps_max_sub_layers_minus1 = READ_BITS(v, 3);
     vps->vps_temporal_id_nesting_flag = READ_BIT(v);
+    VDBG(hevc, "vps_max_sub_layers_minus1 %d", vps->vps_max_sub_layers_minus1);
+    VDBG(hevc, "vps_temporal_id_nesting_flag %d", vps->vps_temporal_id_nesting_flag);
 
-    uint16_t vps_reserved_0xffff_16bits = READ_BITS(v, 16);
-    if (vps_reserved_0xffff_16bits != 0xFFFF) {
-        VDBG(hevc, "reserved bits 0x%x", vps_reserved_0xffff_16bits);
-    }
+    // uint16_t vps_reserved_0xffff_16bits = READ_BITS(v, 16);
+    assert(READ_BITS(v, 16) == 0xFFFF);
 
     parse_profile_tier_level(v, &vps->vps_profile_tier_level, 1, vps->vps_max_sub_layers_minus1);
-    VDBG(hevc, "vps_max_sub_layers_minus1 %d", vps->vps_max_sub_layers_minus1);
 
     vps->vps_sub_layer_ordering_info_present_flag = READ_BIT(v);
     VDBG(hevc, "vps_sub_layer_ordering_info_present_flag %d", vps->vps_sub_layer_ordering_info_present_flag);
@@ -2062,14 +2064,13 @@ parse_vps(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
         }
     }
     rbsp_trailing_bits(v);
-    bits_vec_free(v);
     return vps;
 }
 
 static struct sei *
-parse_sei(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len)
+parse_sei(struct hevc_nalu_header *headr, struct bits_vec *v)
 {
-    printf("SEI\n");
+    VDBG(hevc, "SEI");
     struct sei * sei = calloc(1, sizeof(struct sei));
     do {
         sei->num ++;
@@ -2135,6 +2136,9 @@ calc_sps_param_to_slice(struct sps *sps, struct slice_segment_header *slice)
         slice->SubHeightC = 1;
     }
     //see 7-10
+    VDBG(hevc, "log2_min_luma_coding_block_size_minus3 %d", sps->log2_min_luma_coding_block_size_minus3);
+    VDBG(hevc, "log2_diff_max_min_luma_coding_block_size %d", sps->log2_diff_max_min_luma_coding_block_size);
+    
     slice->MinCbLog2SizeY = sps->log2_min_luma_coding_block_size_minus3 + 3;
     //see 7-11
     slice->CtbLog2SizeY = slice->MinCbLog2SizeY + sps->log2_diff_max_min_luma_coding_block_size;
@@ -2142,18 +2146,23 @@ calc_sps_param_to_slice(struct sps *sps, struct slice_segment_header *slice)
     slice->MinCbSizeY = 1 << slice->MinCbLog2SizeY;
     //see 7-13
     slice->CtbSizeY = 1 << slice->CtbLog2SizeY;
+    VDBG(hevc, "CtbSizeY %d", slice->CtbSizeY);
     //see 7-14
     slice->PicWidthInMinCbsY = sps->pic_width_in_luma_samples / slice->MinCbSizeY;
     //see 7-15
     slice->PicWidthInCtbsY = divceil(sps->pic_width_in_luma_samples, slice->CtbSizeY);
+
+    VDBG(hevc, "pic_height_in_luma_samples %d", sps->pic_height_in_luma_samples);
     //see 7-16
     slice->PicHeightInMinCbsY = sps->pic_height_in_luma_samples / slice->MinCbSizeY;
     //see 7-17
     slice->PicHeightInCtbsY = divceil(sps->pic_height_in_luma_samples, slice->CtbSizeY);
+    VDBG(hevc, "PicHeightInCtbsY %d", slice->PicHeightInCtbsY);
     //see 7-18
     slice->PicSizeInMinCbsY = slice->PicWidthInMinCbsY * slice->PicHeightInMinCbsY;
     //see 7-19
     slice->PicSizeInCtbsY = slice->PicWidthInCtbsY * slice->PicHeightInCtbsY;
+    VDBG(hevc, "PicWidthInCtbsY %d, PicHeightInCtbsY %d, PicSizeInCtbsY %d", slice->PicWidthInCtbsY, slice->PicHeightInCtbsY, slice->PicSizeInCtbsY);
     //see 7-20
     slice->PicSizeInSamplesY = sps->pic_width_in_luma_samples * sps->pic_height_in_luma_samples;
     //see 7-21
@@ -2186,6 +2195,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     struct pps *pps = hps->pps;
     struct slice_segment_header *slice = calloc(1, sizeof(*slice));
 
+    // the first VCL NAL unit of the coded picture shall have first_slice_segment_in_pic_flag = 1 
     uint8_t first_slice_segment_in_pic_flag = READ_BIT(v);
     if (headr->nal_unit_type >= BLA_W_LP && headr->nal_unit_type <= RSV_IRAP_VCL23) {
         slice->no_output_of_prior_pics_flag = READ_BIT(v);
@@ -2196,8 +2206,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     VDBG(hevc, "no_output_of_prior_pics_flag %d", slice->no_output_of_prior_pics_flag);
 
     calc_sps_param_to_slice(sps, slice);
-    printf("PicSizeInCtbsY %d, bits %d\n", slice->PicSizeInCtbsY, log2ceil(slice->PicSizeInCtbsY));
-
+    
     uint8_t dependent_slice_segment_flag = 0;
     if (!first_slice_segment_in_pic_flag) {
         if (pps->dependent_slice_segments_enabled_flag) {
@@ -2207,9 +2216,11 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     } else {
         slice->slice_segment_address = 0;
     }
+    VDBG(hevc, "PicSizeInCtbsY %d, bits %d, slice_segment_address %d", slice->PicSizeInCtbsY, log2ceil(slice->PicSizeInCtbsY), slice->slice_segment_address);
+
     assert(slice->slice_segment_address < slice->PicSizeInCtbsY);
     slice->CuQpDeltaVal = 0;
-    printf("dependent_slice_segment_flag %d\n", dependent_slice_segment_flag);
+    VDBG(hevc, "dependent_slice_segment_flag %d", dependent_slice_segment_flag);
     if (dependent_slice_segment_flag) {
         *SliceAddrRs = pps->CtbAddrTsToRs[pps->CtbAddrRsToTs[slice->slice_segment_address] - 1];
     }
@@ -2217,21 +2228,28 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         //see 7.4.7.1 dependent_slice_segment_flag
         *SliceAddrRs = slice->slice_segment_address;
         //FIXME
-        //see I.7.3.6.1
-        int i = 0;
-        if (pps->num_extra_slice_header_bits > i) {
-            i ++;
-            uint8_t discardable_flag = READ_BIT(v);
+        // //see I.7.3.6.1
+        // int i = 0;
+        // VDBG(hevc, "num_extra_slice_header_bits %d", pps->num_extra_slice_header_bits);
+        // if (pps->num_extra_slice_header_bits > i) {
+        //     i ++;
+        //     uint8_t discardable_flag = READ_BIT(v);
+        // }
+        // if (pps->num_extra_slice_header_bits > i) {
+        //     i ++;
+        //     uint8_t cross_layer_bla_flag = READ_BIT(v);
+        // }
+        // for (int i = 0; i < pps->num_extra_slice_header_bits; i++ ){
+        //     // slice_reserved_flag[ i ] = READ_BIT(v);
+        //     SKIP_BITS(v, 1);
+        // }
+        if (pps->num_extra_slice_header_bits) {
+            SKIP_BITS(v, pps->num_extra_slice_header_bits);
         }
-        if (pps->num_extra_slice_header_bits > i) {
-            i ++;
-            uint8_t cross_layer_bla_flag = READ_BIT(v);
-        }
-        for (int i = 0; i < pps->num_extra_slice_header_bits; i++ ){
-            // slice_reserved_flag[ i ] = READ_BIT(v);
-            SKIP_BITS(v, 1);
-        }
+
         slice->slice_type = GOL_UE(v);
+        VDBG(hevc, "slice_type %d, nal_type %d", slice->slice_type, headr->nal_unit_type);
+
         //make an assumation here, cause we have pic only
         assert(slice->slice_type == SLICE_TYPE_I);
         if (pps->output_flag_present_flag) {
@@ -2241,8 +2259,10 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         }
         if (sps->separate_colour_plane_flag == 1) {
             slice->colour_plane_id = READ_BITS(v, 2);
+            // 0, 1, 2 refers to Y, Cb, Cr
+            VDBG(hevc, "color_plane_id %d", slice->colour_plane_id);
         }
-        if (vps->vps_ext && headr->nuh_layer_id > 0 && !vps->vps_ext->poc_lsb_not_present_flag[vps->LayerIdxInVps[headr->nuh_layer_id]] ||
+        if ((vps->vps_ext && headr->nuh_layer_id > 0 && !vps->vps_ext->poc_lsb_not_present_flag[vps->LayerIdxInVps[headr->nuh_layer_id]]) ||
             (headr->nal_unit_type!= IDR_W_RADL && headr->nal_unit_type != IDR_N_LP)) {
             slice->slice_pic_order_cnt_lsb = READ_BITS(v, sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
             VDBG(hevc, "slice_pic_order_cnt_lsb %d\n", slice->slice_pic_order_cnt_lsb);
@@ -2262,7 +2282,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
             } else {
                 slice->CurrRpsIdx = sps->num_short_term_ref_pic_sets;
             }
-
+            VDBG(hevc, "long_term_ref_pics_present_flag %d", sps->long_term_ref_pics_present_flag);
             if (sps->long_term_ref_pics_present_flag) {
                 if (sps->num_long_term_ref_pics_sps > 0) {
                     slice->num_long_term_sps = GOL_UE(v);
@@ -2272,7 +2292,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                 slice->UsedByCurrPicLt = calloc(MAX(sps->num_long_term_ref_pics_sps, slice->num_long_term_sps + slice->num_long_term_pics), 1);
                 slice->terms = calloc((slice->num_long_term_sps + slice->num_long_term_pics), sizeof(struct slice_long_term));
                 slice->DeltaPocMsbCycleLt = calloc(slice->num_long_term_sps, sizeof(int));
-
+                VDBG(hevc, "num_long_term_sps %d, num_long_term_pics %d", slice->num_long_term_sps, slice->num_long_term_pics);
                 for (int i = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i ++) {
                     if (i < slice->num_long_term_sps) {
                         if (sps->num_long_term_ref_pics_sps > 1) {
@@ -2367,15 +2387,17 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
             /* (7-64) */
             slice->NumPositivePics[stRpsIdx] = st->num_positive_pics;
             /* (7-65)*/
-            slice->UsedByCurrPicS0[stRpsIdx][i] = st->used_by_curr_pic_s0_flag[i];
-            slice->UsedByCurrPicS1[stRpsIdx][i] = st->used_by_curr_pic_s1_flag[i];
-            if (i == 0) {
-                /*(7-67)*/
-                slice->DeltaPocS0[stRpsIdx][i] = -(st->delta_poc_s0_minus1[i] + 1);
-                slice->DeltaPocS1[stRpsIdx][i] = st->delta_poc_s1_minus1[i] + 1; 
-            } else {
-                slice->DeltaPocS0[stRpsIdx][i] = slice->DeltaPocS0[stRpsIdx][i - 1] - (st->delta_poc_s0_minus1[i] + 1);
-                slice->DeltaPocS1[stRpsIdx][i] = slice->DeltaPocS1[stRpsIdx][i - 1] + (st->delta_poc_s1_minus1[i] + 1);
+            for (int i = 0; i < st->num_negative_pics; i ++) {
+                slice->UsedByCurrPicS0[stRpsIdx][i] = st->used_by_curr_pic_s0_flag[i];
+                slice->UsedByCurrPicS1[stRpsIdx][i] = st->used_by_curr_pic_s1_flag[i];
+                if (i == 0) {
+                    /*(7-67)*/
+                    slice->DeltaPocS0[stRpsIdx][i] = -(st->delta_poc_s0_minus1[i] + 1);
+                    slice->DeltaPocS1[stRpsIdx][i] = st->delta_poc_s1_minus1[i] + 1; 
+                } else {
+                    slice->DeltaPocS0[stRpsIdx][i] = slice->DeltaPocS0[stRpsIdx][i - 1] - (st->delta_poc_s0_minus1[i] + 1);
+                    slice->DeltaPocS1[stRpsIdx][i] = slice->DeltaPocS1[stRpsIdx][i - 1] + (st->delta_poc_s1_minus1[i] + 1);
+                }
             }
             
         }
@@ -2413,7 +2435,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                     int j = 0;
                     // int refLayerPicIdc[64];
                     for(int i = 0; i < vps->NumRefListLayers[headr->nuh_layer_id]; i++ ) {
-                        int TemporalId = headr->nuh_temporal_id_plus1 - 1;
+                        int TemporalId = headr->nuh_temporal_id;
                         int refLayerIdx = vps->LayerIdxInVps[vps->IdRefListLayer[headr->nuh_layer_id][i]];
                         if( vps->vps_ext->sub_layers_vps_max_minus1[refLayerIdx] >= TemporalId && 
                             ( TemporalId == 0 || vps->vps_ext->max_tid_il_ref_pics_plus1[refLayerIdx][vps->LayerIdxInVps[headr->nuh_layer_id]] > TemporalId))
@@ -2466,22 +2488,38 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         slice->ChromaArrayType = (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc);
         slice->slice_sao_luma_flag = 0;
         slice->slice_sao_chroma_flag = 0;
+
+        VDBG(hevc, "sample_adaptive_offset_enabled_flag %d", sps->sample_adaptive_offset_enabled_flag);
+        VDBG(hevc, "ChromaArrayType %d", slice->ChromaArrayType);
+        
         if (sps->sample_adaptive_offset_enabled_flag) {
             slice->slice_sao_luma_flag = READ_BIT(v);
             if (slice->ChromaArrayType != 0) {
                 slice->slice_sao_chroma_flag = READ_BIT(v);
+            } else {
+                slice->slice_sao_chroma_flag = 0;
             }
+        } else {
+            slice->slice_sao_luma_flag = 0;
         }
+        VDBG(hevc, "slice_sao_luma_flag %d", slice->slice_sao_luma_flag);
+        VDBG(hevc, "slice_sao_chroma_flag %d", slice->slice_sao_chroma_flag);
         if (slice->slice_type == SLICE_TYPE_P || slice->slice_type == SLICE_TYPE_B) {
             uint8_t num_ref_idx_active_override_flag = READ_BIT(v);
             if (num_ref_idx_active_override_flag) {
                 slice->num_ref_idx_l0_active_minus1 = GOL_UE(v);
                 if (slice->slice_type == SLICE_TYPE_B) {
                     slice->num_ref_idx_l1_active_minus1 = GOL_UE(v);
+                } else {
+                    slice->num_ref_idx_l1_active_minus1 = pps->num_ref_idx_l1_default_active_minus1;
                 }
+            } else {
+                slice->num_ref_idx_l0_active_minus1 = pps->num_ref_idx_l0_default_active_minus1;
+                slice->num_ref_idx_l1_active_minus1 = pps->num_ref_idx_l1_default_active_minus1;
             }
 
-
+            VDBG(hevc, "pps->lists_modification_present_flag %d", pps->lists_modification_present_flag);
+            VDBG(hevc, "NumPicTotalCurr %d", slice->NumPicTotalCurr);
             if (pps->lists_modification_present_flag && slice->NumPicTotalCurr > 1 ) {
                 ref_pic_lists_modification(v, slice, slice->NumPicTotalCurr);
             }
@@ -2491,6 +2529,10 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
             if (pps->cabac_init_present_flag) {
                 slice->cabac_init_flag = READ_BIT(v);
             }
+            VDBG(hevc, "mvd_l1_zero_flag %d", slice->mvd_l1_zero_flag);
+            VDBG(hevc, "cabac_init_present_flag %d, cabac_init_flag %d", pps->cabac_init_present_flag, slice->cabac_init_flag);
+
+            VDBG(hevc, "slice_temporal_mvp_enabled_flag %d", slice->slice_temporal_mvp_enabled_flag);
             if (slice->slice_temporal_mvp_enabled_flag) {
                 uint8_t collocated_from_l0_flag = 0;
                 if (slice->slice_type == SLICE_TYPE_B) {
@@ -2503,6 +2545,10 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                     slice->collocated_ref_idx = GOL_UE(v);
                 }
             }
+
+            VDBG(hevc, "weighted_pred_flag %d", pps->weighted_pred_flag);
+            VDBG(hevc, "weighted_bipred_flag %d", pps->weighted_bipred_flag);
+            VDBG(hevc, "NumRefListLayers %d", vps->NumRefListLayers[headr->nuh_layer_id]);
             if ((pps->weighted_pred_flag && slice->slice_type == SLICE_TYPE_P) ||
                 (pps->weighted_bipred_flag && slice->slice_type == SLICE_TYPE_B)) {
                     printf("need pred_weight_table\n");
@@ -2514,25 +2560,39 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                 }
             }
             slice->five_minus_max_num_merge_cand = GOL_UE(v);
+            VDBG(hevc, "five_minus_max_num_merge_cand %d", slice->five_minus_max_num_merge_cand);
+
             if (sps->sps_scc_ext && sps->sps_scc_ext->motion_vector_resolution_control_idc == 2) {
                 slice->use_integer_mv_flag = READ_BIT(v);
             }
         }
 
         slice->slice_qp_delta = GOL_SE(v);
+        VDBG(hevc, "slice_qp_delta %d", slice->slice_qp_delta);
+
         if (pps->pps_slice_chroma_qp_offsets_present_flag) {
             slice->slice_cb_qp_offset = GOL_SE(v);
             slice->slice_cr_qp_offset = GOL_SE(v);
             VDBG(hevc, "slice_cb_qp_offset %d", slice->slice_cb_qp_offset);
             VDBG(hevc, "slice_cr_qp_offset %d", slice->slice_cr_qp_offset);
+        } else {
+            slice->slice_cb_qp_offset = 0;
+            slice->slice_cr_qp_offset = 0;
         }
         if (pps->pps_scc_ext && pps->pps_scc_ext->pps_slice_act_qp_offsets_present_flag) {
             slice->slice_act_y_qp_offset = GOL_SE(v);
             slice->slice_act_cb_qp_offset = GOL_SE(v);
             slice->slice_act_cr_qp_offset = GOL_SE(v);
+        } else {
+            slice->slice_act_y_qp_offset = 0;
+            slice->slice_act_cb_qp_offset = 0;
+            slice->slice_act_cr_qp_offset = 0;
         }
+
         if (pps->pps_range_ext && pps->pps_range_ext->chroma_qp_offset_list_enabled_flag) {
             slice->cu_chroma_qp_offset_enabled_flag = READ_BIT(v);
+        } else {
+            slice->cu_chroma_qp_offset_enabled_flag = 0;
         }
         uint8_t deblocking_filter_override_flag = 0;
         if (pps->deblocking_filter_override_enabled_flag) {
@@ -2555,6 +2615,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         } else {
             slice->slice_loop_filter_across_slices_enabled_flag = pps->pps_loop_filter_across_slices_enabled_flag;
         }
+        // VDBG(hevc, "cp_in_slice_segment_header_flag[ViewIdx] %d", vps->vps_3d_ext->cp[vps->ViewOrderIdx[headr->nuh_layer_id]].cp_in_slice_segment_header_flag);
         // if (cp_in_slice_segment_header_flag[ViewIdx]) {
         //     for (int m = 0; m < num_cp[ViewIdx][m]; m++) {
         //         j = cp_ref_voi[ViewIdx][m];
@@ -2575,7 +2636,10 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                 slice->entry_point_offset_minus1[i] = READ_BITS(v, offset_len_minus1 + 1);
             }
         }
+    } else {
+        slice->num_entry_point_offsets = 0;
     }
+    VDBG(hevc, "slice_segment_header_extension_present_flag %d", pps->slice_segment_header_extension_present_flag);
     if (pps->slice_segment_header_extension_present_flag) {
         slice->slice_segment_header_extension_length = GOL_UE(v);
         uint64_t cur_pos = (v->ptr - v->start) * 8 + 7 - v->offset;
@@ -4412,7 +4476,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 }
 
 static void
-parse_slice_segment_layer(struct hevc_nalu_header *headr, uint8_t *data, uint16_t len,
+parse_slice_segment_layer(struct hevc_nalu_header *headr, struct bits_vec *v,
         struct hevc_param_set * hps)
 {
     uint32_t SliceAddrRs;
@@ -4420,7 +4484,6 @@ parse_slice_segment_layer(struct hevc_nalu_header *headr, uint8_t *data, uint16_
     struct hevc_slice hslice = {
         .nalu = headr,
     };
-    struct bits_vec *v = bits_vec_alloc(data, len, BITS_MSB);
 
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
 
@@ -4431,7 +4494,6 @@ parse_slice_segment_layer(struct hevc_nalu_header *headr, uint8_t *data, uint16_
     parse_slice_segment_data(v, &hslice, hps, SliceAddrRs);
     rbsp_trailing_bits(v);
 
-    bits_vec_free(v);
 }
 
 
@@ -4441,15 +4503,18 @@ void
 parse_nalu(uint8_t *data, int len)
 {
     struct hevc_nalu_header h;
-    h = *(struct hevc_nalu_header*)data;
-    VDBG(hevc, "len %d f %d type %d, layer id %d, tid %d", len, h.forbidden_zero_bit,
-        h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id_plus1);
+    h.forbidden_zero_bit = (data[0] & 0x80) >> 7;
+    h.nal_unit_type = (data[0] & 0x7E) >> 1;
+    h.nuh_layer_id = (((data[0] & 1) << 5) | ((data[1] & 0xF8) >> 3));
+    h.nuh_temporal_id = data[1] & 0x7 - 1;
+    VDBG(hevc, "len %d f %d type %d, layer id %d, temp id %d", len, h.forbidden_zero_bit,
+        h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id);
     assert(h.forbidden_zero_bit == 0);
 
     uint8_t *rbsp = malloc(len - 2);
-    
+
     // See 7.3.1.1
-    uint16_t nrbsp = 0;
+    int nrbsp = 0;
     uint8_t *p = data + 2;
     for (int l = 2; l < len; l ++) {
         if ((l + 2 < len) && ((p[0]<<16| p[1]<<8| p[2]) == 0x3)) {
@@ -4459,37 +4524,42 @@ parse_nalu(uint8_t *data, int len)
             /* skip third byte */
             p += 3;
         } else {
-            rbsp[nrbsp++] = p[0];
-            p ++;
+            rbsp[nrbsp++] = *p;
+            p++;
         }
     }
 
-    // hexdump(stdout, "rbsp: ", "", rbsp, len - 2);
-    // printf("rbsp %d: %02x %02x %02x %02x\n", nrbsp, rbsp[0], rbsp[1], rbsp[2],rbsp[3]);
+    struct bits_vec *v = bits_vec_alloc(rbsp, nrbsp, BITS_MSB);
+   
     switch (h.nal_unit_type) {
+    case IDR_N_LP:
+        // hexdump(stdout, "data: ", "", data, 32);
+        // printf("nrbsp %d\n", nrbsp);
+        // hexdump(stdout, "rbsp: ", "", rbsp, 32);
+        parse_slice_segment_layer(&h, v, &hps);
+        break;
     case VPS_NUT:
-        hps.vps = parse_vps(&h, rbsp, nrbsp);
+        hps.vps = parse_vps(&h, v);
         break;
     case SPS_NUT:
-        hps.sps = parse_sps(&h, rbsp, nrbsp, hps.vps);
+        hps.sps = parse_sps(&h, v, hps.vps);
         if (!hps.sps) {
             VABORT(hevc, "can no parse sps correctly");
         }
         break;
     case PPS_NUT:
-        hps.pps = parse_pps(&h, rbsp, nrbsp);
+        hps.pps = parse_pps(&h, v);
         if (!hps.pps) {
             VABORT(hevc, "can no parse pps correctly");
         }
         break;
-    case IDR_N_LP:
-        parse_slice_segment_layer(&h, rbsp, nrbsp, &hps);
-        break;
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
-        parse_sei(&h, rbsp, nrbsp);
+        parse_sei(&h, v);
         break;
     default:
+        VDBG(hevc, "unhandle nal_unit_type %d", h.nal_unit_type);
         break;
     }
+    bits_vec_free(v);
 }

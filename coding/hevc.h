@@ -5,6 +5,7 @@
 extern "C"{
 #endif
 
+#include "byteorder.h"
 #include "golomb.h"
 #include "basemedia.h"
 
@@ -151,17 +152,10 @@ enum slice_type {
 };
 
 struct hevc_nalu_header {
-// #ifdef LITTLE_ENDIAN
-//     uint16_t nuh_temporal_id_plus1:3;
-//     uint16_t nuh_layer_id:6;
-//     uint16_t nal_unit_type:6;
-//     uint16_t forbidden_zero_bit:1;
-// #else
     uint16_t forbidden_zero_bit:1;
     uint16_t nal_unit_type:6;
     uint16_t nuh_layer_id:6;
-    uint16_t nuh_temporal_id_plus1:3;
-// #endif
+    uint16_t nuh_temporal_id:3;
 };
 
 struct hevc_nalu {

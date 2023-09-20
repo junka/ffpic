@@ -165,7 +165,7 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
 void
 decode_hvc1(HEIF * h, uint8_t *data, uint64_t len, uint8_t* pixels)
 {
-    hexdump(stdout, "coded ", "", data, 256);
+    // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     while (len) {
         int sample_len = p[0] << 24 | p[1] << 16| p[2] << 8| p[3];

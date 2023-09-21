@@ -101,7 +101,7 @@ read_ftyp(FILE *f, void *d)
     if (ftyp->size > 12) {
         ftyp->compatible_brands = malloc(((ftyp->size - 12)));
         len = fread(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
-        if (len < ((ftyp->size - 12)>>2)) {
+        if ((uint32_t)len < ((ftyp->size - 12)>>2)) {
             return -1;
         }
     }
@@ -274,7 +274,7 @@ read_iinf_box(FILE *f, struct iinf_box *b)
         b->entry_count = SWAP(count);
     }
     b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
-    for (int i = 0; i < b->entry_count; i ++) {
+    for (uint32_t i = 0; i < b->entry_count; i ++) {
         read_infe_box(f, b->item_infos + i);
     }
 }
@@ -313,7 +313,7 @@ read_itemtype_box(FILE *f, struct itemtype_ref_box *b)
     b->ref_count = SWAP(b->ref_count);
     b->to_item_ids = malloc(b->ref_count * 2);
     fread(b->to_item_ids, b->ref_count * 2, 1, f);
-    for (int i = 0; i < b->ref_count; i ++) {
+    for (uint32_t i = 0; i < b->ref_count; i ++) {
         b->to_item_ids[i] = SWAP(b->to_item_ids[i]);
     }
 
@@ -411,7 +411,7 @@ read_ipma_box(FILE *f, struct ipma_box *b)
     b->size = SWAP(b->size);
     b->entry_count = SWAP(b->entry_count);
     b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
-    for (int i = 0; i < b->entry_count; i ++) {
+    for (uint32_t i = 0; i < b->entry_count; i ++) {
         if (b->version < 1) {
             fread(b->entries + i, 2, 1, f);
         } else {

@@ -12,7 +12,7 @@ extern "C" {
 
 #define TYPE2UINT(x) (x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
 
-static char *
+static inline char *
 type2name(uint32_t type)
 {
     static char name[5];
@@ -47,7 +47,7 @@ type2name(uint32_t type)
 /* see 14496-12 4.2 */
 struct box {
     BOX_ST;
-    uint8_t buf[0];
+    // uint8_t buf[0];
 };
 
 struct full_box {

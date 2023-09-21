@@ -7,7 +7,7 @@
 #include "file.h"
 #include "vlog.h"
 
-VLOG_REGISTER(bmp, INFO);
+VLOG_REGISTER(bmp, INFO)
 
 static int 
 BMP_probe(const char* filename)
@@ -33,7 +33,7 @@ BMP_probe(const char* filename)
     }
     fclose(f);
 
-    for (int i = 0; i < sizeof(bmptype)/sizeof(bmptype[0]); i++) {
+    for (unsigned long i = 0; i < sizeof(bmptype)/sizeof(bmptype[0]); i++) {
         if (!memcmp(&file_h.file_type, bmptype[i], 2)) {
             return 0;
         }
@@ -346,7 +346,7 @@ BMP_info(FILE* f, struct pic* p)
     };
     BMP *b = (BMP*)(p->pic);
     fprintf(f, "BMP file formart:\n");
-    for (int i = 0; i < sizeof(btypes)/sizeof(btypes[0]); i++) {
+    for (unsigned long i = 0; i < sizeof(btypes)/sizeof(btypes[0]); i++) {
         if (!memcmp(&b->file_header.file_type, btypes[i].name, 2)) {
             fprintf(f, "file type: %s\n", btypes[i].desc);
             break;

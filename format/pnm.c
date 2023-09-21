@@ -229,7 +229,6 @@ read_ppm_ascii_data(PNM *m, FILE *f)
 
 static int 
 read_string_till_delimeter(FILE *f, char *str) {
-    int r = 0;
     uint8_t c = read_skip_delimeter(f);
     while(!feof(f) && c != ' ' && c != '\n' && c != '\t' && c != '\r') {
         *str++ = c;

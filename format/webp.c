@@ -14,7 +14,7 @@
 #include "vlog.h"
 #include "webp.h"
 
-VLOG_REGISTER(webp, DEBUG);
+VLOG_REGISTER(webp, DEBUG)
 
 static int
 WEBP_probe(const char *filename)
@@ -900,7 +900,7 @@ read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
 {
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    // int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
     VDBG(webp, "width in MB block uint:%d", (width + 15) >> 4);
     VDBG(webp, "height in MB block uint:%d", (height + 15) >> 4);
 
@@ -997,7 +997,6 @@ static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
 {
     bool prevCoeffWasZero = false;
     int token = 0;
-    int sign = 0;
     int absValue = 0;
     static int categoryBase[6] = {5, 7, 11, 19, 35, 67};
     /* pCatn specify ranges of unsigned values whose width is
@@ -2013,7 +2012,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = w->fi.height;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    // int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
     int rows = (height + 15) >> 4;
     int cols = (width + 15) >> 4;
 

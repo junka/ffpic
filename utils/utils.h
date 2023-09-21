@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#define UNUSED __attribute__((unused))
 #define LIKELY(CONDITION) __builtin_expect(!!(CONDITION), 1)
 #define UNLIKELY(CONDITION) __builtin_expect(!!(CONDITION), 0)
 

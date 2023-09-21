@@ -9,7 +9,7 @@
 #include "lzw.h"
 #include "vlog.h"
 
-VLOG_REGISTER(tiff, INFO);
+VLOG_REGISTER(tiff, INFO)
 
 static int
 TIFF_probe(const char *filename)
@@ -119,7 +119,7 @@ static void
 read_int_from_de(uint16_t byteorder, struct tiff_directory_entry *de, uint32_t* val)
 {
     if (get_tag_type_size(de->type) * de->num > 4) {
-        for (int i = 0; i < de->num; i ++) {
+        for (uint32_t i = 0; i < de->num; i ++) {
             switch (de->type) {
                 case TAG_BYTE:
                 case TAG_SBYTE:
@@ -177,15 +177,15 @@ read_int_from_de(uint16_t byteorder, struct tiff_directory_entry *de, uint32_t* 
 }
 
 static void
-read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
+read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
 {
     int width = ((ifd->width + 3) >> 2) << 2;
-    int height = ifd->height;
+    // int height = ifd->height;
     int pitch = ((width * 32 + 31) >> 5) << 2;
     fseek(f, ifd->strip_offsets[id], SEEK_SET);
     uint8_t *raw = malloc(ifd->strip_byte_counts[id]);
     uint8_t *decode;
-    int size, n = 0;
+    int n = 0;
     fread(raw, ifd->strip_byte_counts[id], 1, f);
     if (ifd->compression == COMPRESSION_NONE) {
         decode = raw;
@@ -195,7 +195,7 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
         decode = malloc(ifd->rows_per_strip * pitch);
 
         int declen = lzw_decode_tiff(0, 8, raw, ifd->strip_byte_counts[id], decode);
-        if (declen > ifd->rows_per_strip * pitch) {
+        if (declen > (int)ifd->rows_per_strip * pitch) {
             VERR(tiff, "must be some error in decoding");
         }
 
@@ -203,7 +203,7 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
     } else if (ifd->compression == COMPRESSION_PACKBITS) {
         decode = malloc(ifd->rows_per_strip * pitch);
         int i = 0, j =0, rep;
-        while (i < ifd->strip_byte_counts[id]) {
+        while (i < (int)ifd->strip_byte_counts[id]) {
             if (raw[i] < 128) {
                 rep = (raw[i] + 1);
                 i ++;
@@ -226,10 +226,10 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
         free(raw);
     }
 
-    for (int i = 0; i < ifd->rows_per_strip; i ++) {
+    for (uint32_t i = 0; i < ifd->rows_per_strip; i ++) {
         for (int j = 0; j < width; j ++) {
             if (ifd->metric == METRIC_RGB) {
-                for (int k = 0; k < ifd->depth; k ++) {
+                for (uint32_t k = 0; k < ifd->depth; k ++) {
                     ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + ifd->depth - k -1] = decode[n++];
                 }
             } else if (ifd->metric == METRIC_BlackIsZero && ifd->depth == 1) {
@@ -247,7 +247,7 @@ read_strip(TIFF *t, struct tiff_file_directory *ifd, int id, FILE *f)
 
             if (ifd->predictor == 2) {
                 if (j > 0) {
-                    for (int k = 0; k < ifd->depth; k ++) {
+                    for (uint32_t k = 0; k < ifd->depth; k ++) {
                         ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + j * 4 + k] +=
                             ifd->data[id * ifd->rows_per_strip * pitch  + i * pitch + (j - 1) * 4 + k];
                     }
@@ -272,8 +272,8 @@ read_image_data(TIFF *t, FILE *f)
         if (t->ifd[n].strips_num == 1 && t->ifd[n].rows_per_strip == 0) {
             t->ifd[n].rows_per_strip = t->ifd[n].height;
         }
-        for (int i = 0; i < t->ifd[n].strips_num; i ++) {
-            read_strip(t, &t->ifd[n], i, f);
+        for (uint32_t i = 0; i < t->ifd[n].strips_num; i ++) {
+            read_strip(&t->ifd[n], i, f);
         }
     }
 }
@@ -412,7 +412,7 @@ TIFF_info(FILE *f, struct pic* p)
             t->ifd[n].bitpersample[1],t->ifd[n].bitpersample[2], t->ifd[n].rows_per_strip);
         fprintf(f, "\t%dth IFD: predictor %d\n", n, t->ifd[n].predictor);
         fprintf(f, "\t%dth IFD: %s\n", n, ((t->ifd[n].description[0] == '\0')? "":t->ifd[n].description));
-        for(int i = 0; i < t->ifd[n].strips_num; i ++) {
+        for(uint32_t i = 0; i < t->ifd[n].strips_num; i ++) {
             fprintf(f, "\tstrip offset: %d, bytes %d\n", t->ifd[n].strip_offsets[i], t->ifd[n].strip_byte_counts[i]);
         }
     }

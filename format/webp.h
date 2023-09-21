@@ -77,19 +77,19 @@ struct webp_alpha {
     uint8_t filter:2;
     uint8_t compression:2;
 #endif
-    uint8_t bitstream[0];
+    // uint8_t bitstream[0];
 };
 
 struct webp_color {
     uint32_t iccp; /* ICCP ascii code */
     uint32_t size;
-    uint8_t profile[0];
+    // uint8_t profile[0];
 };
 
 struct webp_exif {
     uint32_t exif;
     uint32_t size;
-    uint8_t meta[0];
+    // uint8_t meta[0];
 };
 
 enum vp8_version {

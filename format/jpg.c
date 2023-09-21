@@ -11,7 +11,7 @@
 #include "huffman.h"
 #include "vlog.h"
 
-VLOG_REGISTER(jpg, DEBUG);
+VLOG_REGISTER(jpg, DEBUG)
 
 struct jpg_decoder {
     int prev_dc;
@@ -508,7 +508,7 @@ YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
     }
 }
 
-
+#if 0
 static int 
 read_next_rst_marker(struct jpg_decoder *d)
 {
@@ -546,13 +546,14 @@ read_next_rst_marker(struct jpg_decoder *d)
 
     return 0;
 }
+#endif
 
 void
 JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     // each component owns a decoder, could be CMYK
     struct jpg_decoder *d[4];
-    int yn = j->sof.colors[0].horizontal * j->sof.colors[0].vertical;
+    // int yn = j->sof.colors[0].horizontal * j->sof.colors[0].vertical;
 
     //components_num is 1 or 3
     for (int i = 0; i < j->sof.components_num; i ++) {
@@ -618,7 +619,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                         reset_decoder(d[i]);
                     }
                     huffman_reset_stream();
-                    //read_next_rst_marker(d[0]);
+                    // read_next_rst_marker(d[0]);
                 }
             }
             ptr += bytes_mcu; //skip to next 
@@ -655,8 +656,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 void 
 read_compressed_image(JPG* j, FILE *f)
 {
-    int width = ((j->sof.width + 7) >> 3) << 3;
-    int height = ((j->sof.height + 7) >> 3) << 3;
+    // int width = ((j->sof.width + 7) >> 3) << 3;
+    // int height = ((j->sof.height + 7) >> 3) << 3;
     size_t pos = ftell(f);
     fseek(f, 0, SEEK_END);
     size_t last = ftell(f);
@@ -679,7 +680,7 @@ read_compressed_image(JPG* j, FILE *f)
             compressed[l++] = 0xFF;
             prev = 0;
             c = fgetc(f);
-        } else if (prev == 0xFF && (c >= 0xD0 || c <= 0xD7)) {
+        } else if (prev == 0xFF && (c >= 0xD0 && c <= 0xD7)) {
             prev = 0;
             c = fgetc(f);
         } else if (prev == 0xFF && c == 0xFF) {
@@ -848,10 +849,10 @@ JPG_info(FILE *f, struct pic* p)
         for (uint8_t i = 0; i < 16; i++) {
             if (j->dht[ac][i].huffman_id == i && j->dht[ac][i].table_class == ac) {
                 fprintf(f, "%s DHT %d: ", (j->dht[ac][i].table_class == 0 ? "DC" : "AC"), i);
-                int len = 0, n = 0;
+                int n = 0;
                 for (int k = 0; k < 16; k ++) {
                     fprintf(f, "%02d ",  j->dht[ac][i].num_codecs[k]);
-                    len += j->dht[ac][i].num_codecs[k];
+                    // len += j->dht[ac][i].num_codecs[k];
                 }
                 fprintf(f, "\n");
                 for (int k = 0; k < 16; k ++) {

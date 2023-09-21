@@ -969,7 +969,6 @@ struct sei_msg {
 
 };
 
-
 struct sei {
     int num;
     struct sei_msg * msg;

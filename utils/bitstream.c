@@ -26,9 +26,9 @@ bits_vec_free(struct bits_vec *v)
 int
 bits_vec_eof_bits(struct bits_vec *v, int n)
 {
-    if (v->ptr + n/8 - v->start > v->len) {
+    if (v->ptr + n/8 - v->start > (long)v->len) {
         return 1;
-    } else if (v->ptr + n/8 - v->start == v->len) {
+    } else if (v->ptr + n/8 - v->start == (long)v->len) {
         if (v->offset + n % 8 > 8) {
             return 1;
         }
@@ -93,7 +93,7 @@ read_bits(struct bits_vec *v, int n)
 int 
 bits_vec_read_bit(struct bits_vec *v)
 {
-    if (v->ptr - v->start > v->len)
+    if (v->ptr - v->start > (long)v->len)
         return -1;
     int ret, shift;
     if (v->msb)
@@ -185,10 +185,9 @@ bits_vec_read_bits_base(struct bits_vec *v, int n, int base)
     return base + (n ? bits_vec_read_bits(v, n) : 0);
 }
 
-
 void
 bits_vec_dump(struct bits_vec *v)
 {
     printf("stream start %p, current %ld, len %ld, bits in use %d\n", 
-        v->start, v->ptr - v->start, v->len, v->offset);
+        (void *)v->start, v->ptr - v->start, v->len, v->offset);
 }

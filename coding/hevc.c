@@ -9,13 +9,14 @@
 #include "hevc.h"
 #include "cabac.h"
 
-VLOG_REGISTER(hevc, DEBUG);
+VLOG_REGISTER(hevc, DEBUG)
 
 static void
 rbsp_trailing_bits(struct bits_vec *v)
 {
     //should be 1
-    uint8_t rbsp_stop_one_bit = READ_BIT(v);
+    // uint8_t rbsp_stop_one_bit = READ_BIT(v);
+    assert(READ_BIT(v) == 1);
     while (!BYTE_ALIGNED(v)) {
         SKIP_BITS(v, 1);
     }
@@ -24,7 +25,8 @@ rbsp_trailing_bits(struct bits_vec *v)
 static void
 byte_alignment(struct bits_vec *v)
 {
-    uint8_t alignment_bit_equal_to_one = READ_BIT(v);
+    // uint8_t alignment_bit_equal_to_one = READ_BIT(v);
+    assert(READ_BIT(v) == 1);
     while (!BYTE_ALIGNED(v)) {
         SKIP_BITS(v, 1);
     }
@@ -360,7 +362,7 @@ static void
 parse_color_mapping_table(struct bits_vec *v, struct color_mapping_table *t)
 {
     t->num_cm_ref_layers_minus1 = GOL_UE(v);
-    for (int i = 0; i <= t->num_cm_ref_layers_minus1; i ++) {
+    for (uint32_t i = 0; i <= t->num_cm_ref_layers_minus1; i ++) {
         t->cm_ref_layer_id[i] = READ_BITS(v, 6);
     }
     t->cm_octant_depth = READ_BITS(v, 2);
@@ -388,7 +390,7 @@ parse_pps_range_extension(struct bits_vec *v, struct pps *pps, struct pps_range_
         if (pps_range->chroma_qp_offset_list_enabled_flag) {
             pps_range->diff_cu_chroma_qp_offset_depth = GOL_UE(v);
             pps_range->chroma_qp_offset_list_len_minus1 = GOL_UE(v);
-            for (int i = 0; i <= pps_range->chroma_qp_offset_list_len_minus1; i ++) {
+            for (uint32_t i = 0; i <= pps_range->chroma_qp_offset_list_len_minus1; i ++) {
                 pps_range->cb_qp_offset_list[i] = GOL_SE(v);
                 pps_range->cr_qp_offset_list[i] = GOL_SE(v);
             }
@@ -406,7 +408,7 @@ parse_pps_multilayer_extension(struct bits_vec *v, struct pps_multilayer_extensi
         multilayer->pps_scaling_list_ref_layer_id = READ_BITS(v, 6);
     }
     multilayer->num_ref_loc_offsets = GOL_UE(v);
-    for (int i = 0; i < multilayer->num_ref_loc_offsets; i ++) {
+    for (uint32_t i = 0; i < multilayer->num_ref_loc_offsets; i ++) {
         multilayer->reflayer[i].ref_loc_offset_layer_id = READ_BITS(v, 6);
         multilayer->reflayer[i].scaled_ref_layer_offset_present_flag = READ_BIT(v);
         if (multilayer->reflayer[i].scaled_ref_layer_offset_present_flag) {
@@ -444,7 +446,7 @@ parse_pps_3d_extension(struct bits_vec *v, struct pps_3d_extension *pps_3d_ext)
     if (pps_3d_ext->dlts_present_flag) {
         pps_3d_ext->pps_depth_layers_minus1 = READ_BITS(v, 6);
         pps_3d_ext->pps_bit_depth_for_depth_layers_minus8 = READ_BITS(v, 4);
-        for (int i = 0; i < pps_3d_ext->pps_depth_layers_minus1; i ++) {
+        for (int8_t i = 0; i < pps_3d_ext->pps_depth_layers_minus1; i ++) {
             pps_3d_ext->pps_3d_layers[i].dlt_flag = READ_BIT(v);
             if (pps_3d_ext->pps_3d_layers[i].dlt_flag) {
                 pps_3d_ext->pps_3d_layers[i].dlt_pred_flag = READ_BIT(v);
@@ -502,7 +504,7 @@ parse_pps_scc_extension(struct bits_vec *v, struct pps_scc_extension *pps_scc_ex
             }
             int numComps = pps_scc_ext->monochrome_palette_flag? 1 : 3;
             for (int comp = 0; comp < numComps; comp ++) {
-                for (int i = 0; i < pps_scc_ext->pps_num_palette_predictor_initializers; i ++) {
+                for (uint32_t i = 0; i < pps_scc_ext->pps_num_palette_predictor_initializers; i ++) {
                     if (i == 0) {
                         pps_scc_ext->pps_palette_predictor_initializer[comp][i] = READ_BITS(v, pps_scc_ext->luma_bit_depth_entry_minus8 + 8);
                     } else {
@@ -515,7 +517,7 @@ parse_pps_scc_extension(struct bits_vec *v, struct pps_scc_extension *pps_scc_ex
 }
 
 static struct pps*
-parse_pps(struct hevc_nalu_header *h, struct bits_vec *v)
+parse_pps(struct bits_vec *v)
 {
     struct pps *pps = calloc(1, sizeof(struct pps));
     pps->pps_pic_parameter_set_id = GOL_UE(v);
@@ -549,11 +551,11 @@ parse_pps(struct hevc_nalu_header *h, struct bits_vec *v)
         pps->uniform_spacing_flag = READ_BIT(v);
         if (!pps->uniform_spacing_flag) {
             pps->column_width_minus1 = calloc(pps->num_tile_columns_minus1, 4);
-            for (int i = 0; i < pps->num_tile_columns_minus1; i ++) {
+            for (uint32_t i = 0; i < pps->num_tile_columns_minus1; i ++) {
                 pps->column_width_minus1[i] = GOL_UE(v);
             }
             pps->row_height_minus1 = calloc(pps->num_tile_rows_minus1, 4);
-            for (int i = 0; i< pps->num_tile_rows_minus1; i ++) {
+            for (uint32_t i = 0; i< pps->num_tile_rows_minus1; i ++) {
                 pps->row_height_minus1[i] = GOL_UE(v);
             }
         }
@@ -602,7 +604,9 @@ parse_pps(struct hevc_nalu_header *h, struct bits_vec *v)
     }
     if (pps->pps_extension_4bits) {
         while(more_rbsp_data(v)) {
-            uint8_t pps_extension_data_flag = READ_BIT(v);
+            // uint8_t pps_extension_data_flag = READ_BIT(v);
+            //for now, no meaningful use for pps_extension_data_flag, just skip
+            SKIP_BITS(v, 1);
         }
     }
     rbsp_trailing_bits(v);
@@ -614,7 +618,7 @@ parse_lt_ref_set(struct bits_vec *v, struct sps *sps, struct lt_ref_pic_set *lt)
 {
     lt->lt_ref_pic_poc_lsb_sps = calloc(sps->num_long_term_ref_pics_sps, 1);
     lt->used_by_curr_pic_lt_sps_flag = calloc(sps->num_long_term_ref_pics_sps, 1);
-    for (int i = 0; i < sps->num_long_term_ref_pics_sps; i ++) {
+    for (uint32_t i = 0; i < sps->num_long_term_ref_pics_sps; i ++) {
         lt->lt_ref_pic_poc_lsb_sps[i] = READ_BITS(v, 8);
         lt->used_by_curr_pic_lt_sps_flag[i] = READ_BIT(v);
     }
@@ -662,13 +666,13 @@ parse_st_ref_set(struct bits_vec *v, struct st_ref_pic_set *st, int idx, int num
         // NumNegativePics[idx] = st->num_negative_pics;
         //see 7-64
         // NumPositivePics[idx] = st->num_positive_pics;
-        for (int i = 0; i < st->num_negative_pics; i ++) {
+        for (uint32_t i = 0; i < st->num_negative_pics; i ++) {
             st->delta_poc_s0_minus1[i] = GOL_UE(v);
             st->used_by_curr_pic_s0_flag[i] = READ_BIT(v);
             //see 7-65
             // UsedByCurrPicS0[idx][i] = used_by_curr_pic_s0_flag[i];
         }
-        for (int i = 0; i < st->num_positive_pics; i ++) {
+        for (uint32_t i = 0; i < st->num_positive_pics; i ++) {
             st->delta_poc_s1_minus1[i] = GOL_UE(v);
             st->used_by_curr_pic_s1_flag[i] = READ_BIT(v);
             //see 7-66
@@ -727,7 +731,7 @@ parse_sps_scc_ext(struct sps_scc_extension *scc, struct bits_vec *v, int numComp
         if (scc->sps_palette_predictor_initializers_present_flag) {
             scc->sps_num_palette_predictor_initializers_minus1 = GOL_UE(v);
             for (int comp = 0; comp < numComps; comp++ ) {
-                for (int i = 0; i <= scc->sps_num_palette_predictor_initializers_minus1; i++) {
+                for (uint32_t i = 0; i <= scc->sps_num_palette_predictor_initializers_minus1; i++) {
                     scc->sps_palette_predictor_initializer[comp][i] = READ_BITS(v, 8);  // variable
                 }
             }
@@ -851,7 +855,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     // should be less than 64
     if (sps->num_short_term_ref_pic_sets) {
         sps->sps_st_ref = calloc(sps->num_short_term_ref_pic_sets, sizeof(struct st_ref_pic_set));
-        for (int i = 0; i < sps->num_short_term_ref_pic_sets; i++) {
+        for (uint32_t i = 0; i < sps->num_short_term_ref_pic_sets; i++) {
             parse_st_ref_set(v, sps->sps_st_ref + i, i, sps->num_short_term_ref_pic_sets);
         }
     }
@@ -895,7 +899,8 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     }
     if (sps->sps_extension_4bits) {
         while(more_rbsp_data(v)) {
-            uint8_t sps_extension_data_flag = READ_BIT(v);
+            // uint8_t sps_extension_data_flag = READ_BIT(v);
+            SKIP_BITS(v, 1);
         }
     }
     rbsp_trailing_bits(v);
@@ -982,10 +987,10 @@ PicOrderCnt(struct hevc_slice *hslice, struct sps *sps, int picX, bool IRAP)
         PicOrderCntMsb = 0;
     } else {
         //see (8-1)
-        if ((slice->slice_pic_order_cnt_lsb < prevPicOrderCntLsb) &&
+        if ((slice->slice_pic_order_cnt_lsb < (uint32_t)prevPicOrderCntLsb) &&
             ((prevPicOrderCntLsb - slice->slice_pic_order_cnt_lsb) >= (MaxPicOrderCntLsb / 2))) {
             PicOrderCntMsb = prevPicOrderCntMsb + MaxPicOrderCntLsb;
-        } else if ((slice->slice_pic_order_cnt_lsb > prevPicOrderCntLsb ) &&
+        } else if ((slice->slice_pic_order_cnt_lsb > (uint32_t)prevPicOrderCntLsb ) &&
             ((slice->slice_pic_order_cnt_lsb - prevPicOrderCntLsb) > (MaxPicOrderCntLsb / 2))) {
             PicOrderCntMsb = prevPicOrderCntMsb - MaxPicOrderCntLsb;
         } else {
@@ -1075,7 +1080,7 @@ process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_p
         }
         rps->NumPocStCurrAfter = j;
         rps->NumPocStFoll = k;
-        for (i = 0, j = 0, k = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i++) {
+        for (i = 0, j = 0, k = 0; i < (int)slice->num_long_term_sps + (int)slice->num_long_term_pics; i++) {
             int pocLt = slice->PocLsbLt[i];
             if (slice->terms[i].delta_poc_msb_present_flag) {
                 pocLt += PicOrderCntVal - slice->DeltaPocMsbCycleLt[i] * MaxPicOrderCntLsb -
@@ -1203,10 +1208,10 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
     if (slice->slice_type == SLICE_TYPE_I) {
         return ;
     }
-    int NumRpsCurrTempList0 = MAX(slice->num_ref_idx_l0_active_minus1 + 1, slice->NumPicTotalCurr);
+    int NumRpsCurrTempList0 = MAX((int)(slice->num_ref_idx_l0_active_minus1) + 1, slice->NumPicTotalCurr);
     //see (8-8)/ f-65 , F.8.3.4 Decoding process for reference picture lists construction
     int rIdx = 0;
-    int currPic;
+    int currPic = 0;
     int * RefPicListTemp0 = calloc(NumRpsCurrTempList0, sizeof(int));
     while (rIdx < NumRpsCurrTempList0) {
         for (int i = 0; i < rps->NumPocStCurrBefore && rIdx < NumRpsCurrTempList0; rIdx++, i++)
@@ -1219,7 +1224,7 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
             RefPicListTemp0[rIdx++] = currPic;
     }
     //see (8-9) / f-66
-    for (rIdx = 0; rIdx <= slice->num_ref_idx_l0_active_minus1; rIdx++) {
+    for (rIdx = 0; rIdx <= (int)slice->num_ref_idx_l0_active_minus1; rIdx++) {
         rps->RefPicList0[rIdx] = slice->ref_pic_list_modification_flag_l0 ? RefPicListTemp0[slice->list_entry_l0[rIdx]] : RefPicListTemp0[rIdx];
     }
     if (hps->pps->pps_scc_ext && hps->pps->pps_scc_ext->pps_curr_pic_ref_enabled_flag && !slice->ref_pic_list_modification_flag_l0 &&
@@ -1227,7 +1232,7 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
         rps->RefPicList0[slice->num_ref_idx_l0_active_minus1] = currPic;
     }
     if (slice->slice_type == SLICE_TYPE_B) {
-        int NumRpsCurrTempList1 = MAX(slice->num_ref_idx_l1_active_minus1 + 1, slice->NumPicTotalCurr);
+        int NumRpsCurrTempList1 = MAX((int)slice->num_ref_idx_l1_active_minus1 + 1, slice->NumPicTotalCurr);
         int * RefPicListTemp1 = calloc(NumRpsCurrTempList1, sizeof(int));
         /* (8-10) */
         rIdx = 0;
@@ -1242,7 +1247,7 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
                 RefPicListTemp1[rIdx++] = currPic;
         }
         /* (8-11) */
-        for( rIdx = 0; rIdx <= slice->num_ref_idx_l1_active_minus1; rIdx++) {
+        for( rIdx = 0; rIdx <= (int)slice->num_ref_idx_l1_active_minus1; rIdx++) {
             rps->RefPicList1[rIdx] = slice->ref_pic_list_modification_flag_l1 ? RefPicListTemp1[slice->list_entry_l1[rIdx]] :
                 RefPicListTemp1[rIdx];
         }
@@ -1258,13 +1263,13 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
    after decoding of the slice header as well as the invocation of the
    decoding process for reference picture set as specified in clause 8.3.2
 */
-static void
-process_collocated_picture_and_no_backward_predication_flag(struct slice_segment_header *slice, struct hevc_param_set * hps)
-{
-    if (slice->slice_type == SLICE_TYPE_I) {
-        return;
-    }
-}
+// static void
+// process_collocated_picture_and_no_backward_predication_flag(struct slice_segment_header *slice, struct hevc_param_set * hps)
+// {
+//     if (slice->slice_type == SLICE_TYPE_I) {
+//         return;
+//     }
+// }
 
 //I.8.3.5, when the current slice is a P or B slice.
 static void
@@ -1284,7 +1289,7 @@ process_target_reference_index_for_residual_predication(struct hevc_slice *hslic
     for (int x = 0; x <= ((slice->slice_type == SLICE_TYPE_B) ? 1 : 0); x++) {
         int minPocDiff = (1 << 15) - 1;
         if (x == 0) {
-            for (int i = 0; i <= slice->num_ref_idx_l0_active_minus1; i ++) {
+            for (uint32_t i = 0; i <= slice->num_ref_idx_l0_active_minus1; i ++) {
                 int pocDiff = ABS(DiffPicOrderCnt(hslice, sps, CurrPic, rps->RefPicList0[i]));
                 if (pocDiff !=0 && pocDiff < minPocDiff) {
                     minPocDiff = pocDiff;
@@ -1293,7 +1298,7 @@ process_target_reference_index_for_residual_predication(struct hevc_slice *hslic
                 }
             }
         } else if (x == 1) {
-            for (int i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++) {
+            for (uint32_t i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++) {
                 int pocDiff = ABS(DiffPicOrderCnt(hslice, sps, CurrPic, rps->RefPicList1[i]));
                 if (pocDiff !=0 && pocDiff < minPocDiff) {
                     minPocDiff = pocDiff;
@@ -1314,7 +1319,7 @@ parse_dpb_size(struct bits_vec *v, struct dpb_size* d, struct vps* vps, int NumO
     int OlsIdxToLsIdx[], int MaxSubLayersInLayerSetMinus1[],
     int NecessaryLayerFlag[][64])
 {
-    struct vps_extension *vps_ext = vps->vps_ext;
+    // struct vps_extension *vps_ext = vps->vps_ext;
     // const struct vps *vps = CONTAIN_OF(vps_ext, struct vps, vps_ext);
     for (int i = 0; i < NumOutputLayerSets; i ++) {
         int currLsIdx = OlsIdxToLsIdx[i];
@@ -1357,7 +1362,7 @@ parse_vps_vui_bsp_hrd_params(struct bits_vec *v, struct vps_vui_bsp_hrd_params *
 {
     hrd->vps_num_add_hrd_params = GOL_UE(v);
     hrd->vps_vui_bsp_hrd = calloc(hrd->vps_num_add_hrd_params, sizeof(struct hrd_parameters));
-    for (int i = vps_num_hrd_parameters; i < vps_num_hrd_parameters + hrd->vps_num_add_hrd_params; i++) {
+    for (int i = vps_num_hrd_parameters; i < vps_num_hrd_parameters + (int)hrd->vps_num_add_hrd_params; i++) {
         uint8_t cprms_add_present_flag = 0;
         if (i > 0) {
             cprms_add_present_flag = READ_BIT(v);
@@ -1371,9 +1376,9 @@ parse_vps_vui_bsp_hrd_params(struct bits_vec *v, struct vps_vui_bsp_hrd_params *
         for (int h = 1; h < NumOutputLayerSets; h ++) {
             uint32_t num_signalled_partitioning_schemes = GOL_UE(v);
             hrd->num_partitions_in_scheme_minus1[h] = calloc(num_signalled_partitioning_schemes, sizeof(uint32_t));
-            for (int j = 1; j < num_signalled_partitioning_schemes; j++) {
+            for (uint32_t j = 1; j < num_signalled_partitioning_schemes; j++) {
                 hrd->num_partitions_in_scheme_minus1[h][j] = GOL_UE(v);
-                for(int k = 0; k <= hrd->num_partitions_in_scheme_minus1[h][j]; k++ ) {
+                for(uint32_t k = 0; k <= hrd->num_partitions_in_scheme_minus1[h][j]; k++) {
                     for (int r = 0; r < vps->NumLayersInIdList[OlsIdxToLsIdx[h]]; r++ ) {
                         // layer_included_in_partition_flag[h][j][k][r] = READ_BIT(v);
                         SKIP_BITS(v, 1);
@@ -1382,11 +1387,11 @@ parse_vps_vui_bsp_hrd_params(struct bits_vec *v, struct vps_vui_bsp_hrd_params *
             }
             uint32_t BpBitRate[64][2][2][2][2];
             uint32_t BpbSize[64][2][2][2][2];
-            for (int i = 0; i < num_signalled_partitioning_schemes + 1; i ++) {
+            for (uint32_t i = 0; i < num_signalled_partitioning_schemes + 1; i ++) {
                 for(int t = 0; t <= MaxSubLayersInLayerSetMinus1[OlsIdxToLsIdx[h]]; t++ ) {
                     uint32_t num_bsp_schedules_minus1 = GOL_UE(v);
-                    for (int j = 0; j < num_bsp_schedules_minus1; j ++) {
-                        for (int k =0; k < hrd->num_partitions_in_scheme_minus1[h][i]; j ++) {
+                    for (uint32_t j = 0; j < num_bsp_schedules_minus1; j ++) {
+                        for (uint32_t k =0; k < hrd->num_partitions_in_scheme_minus1[h][i]; j ++) {
                             if (vps_num_hrd_parameters + hrd->vps_num_add_hrd_params > 1) {
                                 // bsp_hrd_idx[h][i][t][j][k] = 
                                 uint32_t bsIdx = READ_BITS(v, log2ceil(vps_num_hrd_parameters + hrd->vps_num_add_hrd_params));
@@ -1546,7 +1551,7 @@ parse_vps_timing_info(struct bits_vec *v, struct vps *vps, struct vps_timing_inf
     }
     vps_tim->vps_num_hrd_parameters = GOL_UE(v);
     VDBG(hevc, "vps hrd num %d", vps_tim->vps_num_hrd_parameters);
-    for (int i = 0; i < vps_tim->vps_num_hrd_parameters; i ++) {
+    for (uint32_t i = 0; i < vps_tim->vps_num_hrd_parameters; i ++) {
         vps_tim->hrd_layer_set_idx[i] =  GOL_UE(v);
         if (i > 0) {
             vps_tim->cprms_present_flag[i] = READ_BIT(v);
@@ -1752,7 +1757,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     int NecessaryLayerFlag[64][64];
     int NumNecessaryLayers[64];
     vps_ext->highest_layer_idx_plus1 = calloc(vps_ext->num_add_layer_sets, sizeof(uint16_t *));
-    for (int i = 0; i < vps_ext->num_add_layer_sets; i ++) {
+    for (uint32_t i = 0; i < vps_ext->num_add_layer_sets; i ++) {
         vps_ext->highest_layer_idx_plus1[i] = calloc(NumIndependentLayers, sizeof(uint16_t));
         for (int j = 1; j < NumIndependentLayers; j ++) {
             vps_ext->highest_layer_idx_plus1[i][j] = READ_BITS(v, log2ceil(NumLayersInTreePartition[j]+1));
@@ -1800,7 +1805,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     }
     vps_ext->default_ref_layers_active_flag = READ_BIT(v);
     vps_ext->vps_num_profile_tier_level_minus1 = GOL_UE(v);
-    for (int i = vps->vps_base_layer_internal_flag ? 2 : 1;
+    for (uint32_t i = vps->vps_base_layer_internal_flag ? 2 : 1;
         i <= vps_ext->vps_num_profile_tier_level_minus1; i++ ) {
         uint8_t vps_profile_present_flag = READ_BIT(v);
         parse_profile_tier_level(v, vps_ext->vps_ext_profile_tier_level, vps_profile_present_flag, vps->vps_max_sub_layers_minus1);
@@ -1824,14 +1829,14 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
         }
         // (F-11)
         OlsIdxToLsIdx[i] = (i < NumLayerSets) ? i : (vps_ext->layer_set_idx_for_ols_minus1[i] + 1); 
-        if (i > vps->vps_num_layer_sets_minus1 || defaultOutputLayerIdc == 2) {
+        if (i > (int)vps->vps_num_layer_sets_minus1 || defaultOutputLayerIdc == 2) {
             vps_ext->output_layer_flag[i] = calloc(vps->NumLayersInIdList[OlsIdxToLsIdx[i]], 1);
             for (int j = 0; j < vps->NumLayersInIdList[OlsIdxToLsIdx[i]]; j++) {
                 vps_ext->output_layer_flag[i][j] = READ_BIT(v);
             }
         }
         // (F-12)
-        if (i >= ((defaultOutputLayerIdc == 2) ? 0: (vps->vps_num_layer_sets_minus1 + 1))) {
+        if (i >= (int)((defaultOutputLayerIdc == 2) ? 0: (vps->vps_num_layer_sets_minus1 + 1))) {
             NumOutputLayersInOutputLayerSet[i] = 0;
             for (int j = 0; j < vps->NumLayersInIdList[OlsIdxToLsIdx[i]]; j++ ) {
                 NumOutputLayersInOutputLayerSet[i] += vps_ext->output_layer_flag[i][j];
@@ -1877,7 +1882,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     }
     vps_ext->vps_num_rep_formats_minus1 = GOL_UE(v);
     vps_ext->vps_rep_format = calloc(vps_ext->vps_num_rep_formats_minus1, sizeof(struct vps_rep_format));
-    for(int i = 0; i <= vps_ext->vps_num_rep_formats_minus1; i++ ) {
+    for(uint32_t i = 0; i <= vps_ext->vps_num_rep_formats_minus1; i++ ) {
         parse_rep_format(v, vps_ext->vps_rep_format + i);
     }
     uint8_t rep_format_idx_present_flag = 0;
@@ -1939,7 +1944,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
 
     uint32_t vps_non_vui_extension_length = GOL_UE(v);
     vps_ext->vps_non_vui_extension_data_byte = calloc(vps_non_vui_extension_length, 1);
-    for(int i = 0; i < vps_non_vui_extension_length; i++) {
+    for(uint32_t i = 0; i < vps_non_vui_extension_length; i++) {
         vps_ext->vps_non_vui_extension_data_byte[i] = READ_BITS(v, 8);
     }
     // uint8_t vps_vui_present_flag = READ_BIT(v);
@@ -1987,7 +1992,7 @@ parse_vps_3d_extension(struct bits_vec *v, struct vps *vps, struct vps_3d_extens
 
 //video parameter set F.7.3.2.1 , I.7.3.2.1
 static struct vps *
-parse_vps(struct hevc_nalu_header *headr, struct bits_vec *v)
+parse_vps(struct bits_vec *v)
 {
     // VDBG(hevc, "vps: len %d", len);
     // hexdump(stdout, "vps: ", data, len);
@@ -2024,9 +2029,9 @@ parse_vps(struct hevc_nalu_header *headr, struct bits_vec *v)
     VDBG(hevc, "vps_max_layer_id %d", vps->vps_max_layer_id);
     VDBG(hevc, "vps_num_layer_sets_minus1 %d", vps->vps_num_layer_sets_minus1);
 
-    for (int i = 1; i <= vps->vps_num_layer_sets_minus1; i ++) {
+    for (uint32_t i = 1; i <= vps->vps_num_layer_sets_minus1; i ++) {
         int n = 0;
-        for (int j = 0; j <= vps->vps_max_layer_id; j ++) {
+        for (uint32_t j = 0; j <= vps->vps_max_layer_id; j ++) {
             uint8_t layer_id_included_flag = READ_BIT(v);
             vps->layer_id_included_flag[i] |= (layer_id_included_flag << j);
             //(7-3)
@@ -2068,24 +2073,25 @@ parse_vps(struct hevc_nalu_header *headr, struct bits_vec *v)
 }
 
 static struct sei *
-parse_sei(struct hevc_nalu_header *headr, struct bits_vec *v)
+parse_sei(struct bits_vec *v)
 {
     VDBG(hevc, "SEI");
     struct sei * sei = calloc(1, sizeof(struct sei));
-    do {
-        sei->num ++;
-        if (sei->msg == NULL)
-            sei->msg = calloc(1, sizeof(struct sei_msg));
-        else
-            sei->msg = realloc(sei->msg, sizeof(struct sei_msg) * sei->num);
-        struct sei_msg *m = &sei->msg[sei->num - 1];
-        switch (m->last_paylod_type) {
-            case 0:
-            break;
-            default:
-            break;
-        }
-    } while(1);
+    SKIP_BITS(v, v->len * 8);
+    // do {
+    //     sei->num ++;
+    //     if (sei->msg == NULL)
+    //         sei->msg = calloc(1, sizeof(struct sei_msg));
+    //     else
+    //         sei->msg = realloc(sei->msg, sizeof(struct sei_msg) * sei->num);
+    //     struct sei_msg *m = &sei->msg[sei->num - 1];
+    //     switch (m->last_paylod_type) {
+    //         case 0:
+    //         break;
+    //         default:
+    //         break;
+    //     }
+    // } while(1);
     return sei;
 }
 
@@ -2106,7 +2112,7 @@ ref_pic_lists_modification(struct bits_vec *v, struct slice_segment_header *slic
     slice->ref_pic_list_modification_flag_l0 = READ_BIT(v);
     if (slice->ref_pic_list_modification_flag_l0) {
         slice->list_entry_l0 = calloc((slice->num_ref_idx_l0_active_minus1 +1)* 4, 1);
-        for (int i = 0; i <= slice->num_ref_idx_l0_active_minus1; i++ ) {
+        for (uint32_t i = 0; i <= slice->num_ref_idx_l0_active_minus1; i++ ) {
             slice->list_entry_l0[i] = READ_BITS(v, log2ceil(NumPicTotalCurr));
         }
     }
@@ -2114,7 +2120,7 @@ ref_pic_lists_modification(struct bits_vec *v, struct slice_segment_header *slic
         slice->ref_pic_list_modification_flag_l1 = READ_BIT(v);
         if (slice->ref_pic_list_modification_flag_l1) {
             slice->list_entry_l1 = calloc((slice->num_ref_idx_l1_active_minus1+1) *4, 1);
-            for (int i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++ ) {
+            for (uint32_t i = 0; i <= slice->num_ref_idx_l1_active_minus1; i++ ) {
                 slice->list_entry_l1[i] = READ_BITS(v, log2ceil(NumPicTotalCurr));
             }
         }
@@ -2218,7 +2224,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     }
     VDBG(hevc, "PicSizeInCtbsY %d, bits %d, slice_segment_address %d", slice->PicSizeInCtbsY, log2ceil(slice->PicSizeInCtbsY), slice->slice_segment_address);
 
-    assert(slice->slice_segment_address < slice->PicSizeInCtbsY);
+    assert(slice->slice_segment_address < (uint32_t)slice->PicSizeInCtbsY);
     slice->CuQpDeltaVal = 0;
     VDBG(hevc, "dependent_slice_segment_flag %d", dependent_slice_segment_flag);
     if (dependent_slice_segment_flag) {
@@ -2293,7 +2299,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                 slice->terms = calloc((slice->num_long_term_sps + slice->num_long_term_pics), sizeof(struct slice_long_term));
                 slice->DeltaPocMsbCycleLt = calloc(slice->num_long_term_sps, sizeof(int));
                 VDBG(hevc, "num_long_term_sps %d, num_long_term_pics %d", slice->num_long_term_sps, slice->num_long_term_pics);
-                for (int i = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i ++) {
+                for (uint32_t i = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i ++) {
                     if (i < slice->num_long_term_sps) {
                         if (sps->num_long_term_ref_pics_sps > 1) {
                             slice->terms[i].lt_idx_sps = READ_BITS(v, log2ceil(sps->num_long_term_ref_pics_sps));
@@ -2387,7 +2393,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
             /* (7-64) */
             slice->NumPositivePics[stRpsIdx] = st->num_positive_pics;
             /* (7-65)*/
-            for (int i = 0; i < st->num_negative_pics; i ++) {
+            for (uint32_t i = 0; i < st->num_negative_pics; i ++) {
                 slice->UsedByCurrPicS0[stRpsIdx][i] = st->used_by_curr_pic_s0_flag[i];
                 slice->UsedByCurrPicS1[stRpsIdx][i] = st->used_by_curr_pic_s1_flag[i];
                 if (i == 0) {
@@ -2414,7 +2420,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
                 slice->NumPicTotalCurr ++;
             }
         }
-        for (int i = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i++) {
+        for (uint32_t i = 0; i < slice->num_long_term_sps + slice->num_long_term_pics; i++) {
             if(slice->UsedByCurrPicLt[i]) {
                 slice->NumPicTotalCurr++;
             }
@@ -2608,6 +2614,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         } else {
             slice_deblocking_filter_disabled_flag = pps->pps_deblocking_filter_disabled_flag;
         }
+        VDBG(hevc, "slice_deblocking_filter_disabled_flag %d", slice_deblocking_filter_disabled_flag);
         if (pps->pps_loop_filter_across_slices_enabled_flag &&
                 (slice->slice_sao_luma_flag || slice->slice_sao_chroma_flag ||
                 !slice_deblocking_filter_disabled_flag )) {
@@ -2632,13 +2639,14 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         if (slice->num_entry_point_offsets > 0) {
             uint32_t offset_len_minus1 = GOL_UE(v);
             slice->entry_point_offset_minus1 = calloc(slice->num_entry_point_offsets, sizeof(uint32_t));
-            for (int i = 0; i < slice->num_entry_point_offsets; i++) {
+            for (uint32_t i = 0; i < slice->num_entry_point_offsets; i++) {
                 slice->entry_point_offset_minus1[i] = READ_BITS(v, offset_len_minus1 + 1);
             }
         }
     } else {
         slice->num_entry_point_offsets = 0;
     }
+    VDBG(hevc, "num_entry_point_offsets %d", slice->num_entry_point_offsets);
     VDBG(hevc, "slice_segment_header_extension_present_flag %d", pps->slice_segment_header_extension_present_flag);
     if (pps->slice_segment_header_extension_present_flag) {
         slice->slice_segment_header_extension_length = GOL_UE(v);
@@ -2717,7 +2725,7 @@ parse_cu_extension(struct bits_vec *v, struct hevc_slice *hslice,
     struct hevc_nalu_header *headr = hslice->nalu;
     struct vps *vps = hps->vps;
     struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
+    // struct pps *pps = hps->pps;
 
     struct cu_extension *ext = &cu->ext[x0][y0];
 
@@ -3171,7 +3179,7 @@ parse_palette_coding(struct bits_vec *v, struct palette_coding* pc, struct cu *c
             palettePredictionFinished = 1;
         }
     }
-    if (NumPredictedPaletteEntries < sps->sps_scc_ext->palette_max_size) {
+    if (NumPredictedPaletteEntries < (int)sps->sps_scc_ext->palette_max_size) {
         pc->num_signalled_palette_entries = CABAC(v);
     }
 
@@ -3191,7 +3199,7 @@ parse_palette_coding(struct bits_vec *v, struct palette_coding* pc, struct cu *c
     }
 
     for (int cIdx = 0; cIdx < numComps; cIdx++ ) {
-        for(int i = 0; i < pc->num_signalled_palette_entries; i++ ) {
+        for(uint32_t i = 0; i < pc->num_signalled_palette_entries; i++ ) {
             pc->new_palette_entries[cIdx][i] = CABAC(v);
             CurrentPaletteEntries[cIdx][NumPredictedPaletteEntries + i] = pc->new_palette_entries[cIdx][i];
         }
@@ -3232,7 +3240,7 @@ parse_palette_coding(struct bits_vec *v, struct palette_coding* pc, struct cu *c
     if (MaxPaletteIndex > 0) {
         pc->num_palette_indices_minus1 = CABAC(v);
         int adjust = 0;
-        for (int i = 0; i <= pc->num_palette_indices_minus1; i++ ) {
+        for (uint32_t i = 0; i <= pc->num_palette_indices_minus1; i++ ) {
             if (MaxPaletteIndex - adjust > 0 ) {
                 int palette_idx_idc = CABAC(v);
                 pc->PaletteIndexIdc[i] = palette_idx_idc;
@@ -3353,7 +3361,7 @@ parse_residual_coding(struct bits_vec *v, struct cu *cu, struct slice_segment_he
                       struct hevc_param_set *hps,
                       int x0, int y0, int log2TrafoSize, int cIdx)
 {
-    struct vps *vps = hps->vps;
+    // struct vps *vps = hps->vps;
     struct pps *pps = hps->pps;
     struct sps *sps = hps->sps;
 
@@ -3522,9 +3530,9 @@ parse_transform_unit(struct bits_vec *v, struct cu *cu, struct trans_tree *tt, s
     struct hevc_param_set *hps,
     int x0, int y0, int xBase, int yBase, int log2TrafoSize, int trafoDepth, int blkIdx)
 {
-    struct vps *vps = hps->vps;
+    // struct vps *vps = hps->vps;
     struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+    // struct sps *sps = hps->sps;
     struct trans_unit *tu = calloc(1, sizeof(*tu));
     uint8_t ChromaArrayType = slice->ChromaArrayType;
     int log2TrafoSizeC = MAX(2, log2TrafoSize - (ChromaArrayType == 3 ? 0 : 1));
@@ -3613,9 +3621,9 @@ parse_transform_tree(struct bits_vec *v, struct cu *cu, struct slice_segment_hea
     struct hevc_param_set *hps,
     int x0, int y0, int xBase, int yBase, int log2TrafoSize, int trafoDepth, int blkIdx)
 {
-    struct vps *vps = hps->vps;
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+    // struct vps *vps = hps->vps;
+    // struct pps *pps = hps->pps;
+    // struct sps *sps = hps->sps;
     struct trans_tree *tt = calloc(1, sizeof(*tt));
     if (log2TrafoSize <= slice->MaxTbLog2SizeY &&
         log2TrafoSize > slice->MinTbLog2SizeY &&
@@ -4368,12 +4376,12 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     //see (6-3)
     uint32_t *colWidth = calloc((pps->num_tile_columns_minus1 + 1), 4);
     if (pps->uniform_spacing_flag )
-        for (int i = 0; i <= pps->num_tile_columns_minus1; i++)
+        for (uint32_t i = 0; i <= pps->num_tile_columns_minus1; i++)
             colWidth[i] = ((i + 1) * slice->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1) -
                         (i * slice->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1);
     else {
         colWidth[pps->num_tile_columns_minus1] = slice->PicWidthInCtbsY;
-        for (int i = 0; i < pps->num_tile_columns_minus1; i++) {
+        for (uint32_t i = 0; i < pps->num_tile_columns_minus1; i++) {
             colWidth[i] = pps->column_width_minus1[i] + 1;
             colWidth[pps->num_tile_columns_minus1] -= colWidth[i];
         }
@@ -4458,10 +4466,11 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     uint32_t CtbAddrInRs = slice->slice_segment_address;
     uint32_t CtbAddrInTs = pps->CtbAddrRsToTs[CtbAddrInRs];
     do {
-        bits_vec_dump(v);
-        printf("CtbAddrInTs %u, CtbAddrInRs %u\n", CtbAddrInTs, CtbAddrInRs);
+        // bits_vec_dump(v);
+        VDBG(hevc, "CtbAddrInTs %u, CtbAddrInRs %u", CtbAddrInTs, CtbAddrInRs);
         struct ctu * ctu = coding_tree_unit(v, hslice, hps, CtbAddrInTs, CtbAddrInRs, SliceAddrRs, TileId);
         end_of_slice_segment_flag = CABAC(v);
+        VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
         CtbAddrInTs ++;
         CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
         if (!end_of_slice_segment_flag && ((pps->tiles_enabled_flag && TileId[CtbAddrInTs] != TileId[CtbAddrInTs - 1]) ||
@@ -4539,7 +4548,7 @@ parse_nalu(uint8_t *data, int len)
         parse_slice_segment_layer(&h, v, &hps);
         break;
     case VPS_NUT:
-        hps.vps = parse_vps(&h, v);
+        hps.vps = parse_vps(v);
         break;
     case SPS_NUT:
         hps.sps = parse_sps(&h, v, hps.vps);
@@ -4548,14 +4557,15 @@ parse_nalu(uint8_t *data, int len)
         }
         break;
     case PPS_NUT:
-        hps.pps = parse_pps(&h, v);
+        hps.pps = parse_pps(v);
         if (!hps.pps) {
             VABORT(hevc, "can no parse pps correctly");
         }
         break;
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
-        parse_sei(&h, v);
+        /* this is not necessary for decoding a picture */
+        parse_sei(v);
         break;
     default:
         VDBG(hevc, "unhandle nal_unit_type %d", h.nal_unit_type);

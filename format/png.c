@@ -12,7 +12,7 @@
 #include "crc.h"
 #include "vlog.h"
 
-VLOG_REGISTER(png, INFO);
+VLOG_REGISTER(png, INFO)
 
 #define CRC_ASSER(a, b) b = ntohl(b);  assert(a == b);
 
@@ -199,14 +199,15 @@ remove_padding_bits(unsigned char *out, const unsigned char *in,
 static void
 PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 {
-    uint8_t type = *buf;
+    // uint8_t type = *buf;
     int depth = calc_png_bits_per_pixel(p);
     unsigned bytewidth = (depth + 7) / 8;    /*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
     unsigned linebytes = (p->ihdr.width * depth + 7) / 8;
 
     unsigned char *prevline = 0;
+    assert((1 + linebytes) * p->ihdr.height <= (uint32_t)size);
 
-    for (int y = 0; y < p->ihdr.height; y++) {
+    for (uint32_t y = 0; y < p->ihdr.height; y++) {
         unsigned long outindex = linebytes * y;
         unsigned long pos = (1 + linebytes) * y;    /*the extra filterbyte added to each row */
         unsigned char filterType = buf[pos];
@@ -223,38 +224,38 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 static struct pic* 
 PNG_load(const char* filename)
 {
-    const char *chunk_types[] = {
-        "IHDR",
-        "cHRM",
-        "gAMA",
-        "sBIT",
-        "PLTE",
-        "bKGD",
-        "hIST",
-        "tRNS",
-        "oFFs",
-        "pHYs",
-        "sCAL",
-        "IDAT",
-        "tIME",
-        "tEXt",
-        "zTXt",
-        "fRAc",
-        "gIFg",
-        "gIFx",
-        "IEND"
-    };
+    // const char *chunk_types[] = {
+    //     "IHDR",
+    //     "cHRM",
+    //     "gAMA",
+    //     "sBIT",
+    //     "PLTE",
+    //     "bKGD",
+    //     "hIST",
+    //     "tRNS",
+    //     "oFFs",
+    //     "pHYs",
+    //     "sCAL",
+    //     "IDAT",
+    //     "tIME",
+    //     "tEXt",
+    //     "zTXt",
+    //     "fRAc",
+    //     "gIFg",
+    //     "gIFx",
+    //     "IEND"
+    // };
     struct pic *p = pic_alloc(sizeof(struct pic));
     PNG * b = p->pic;
 
     FILE *f = fopen(filename, "rb");
     fread(&b->sig, sizeof(struct png_file_header), 1, f);
 
-    uint8_t nullbyte;
-    uint32_t length;
+    // uint8_t nullbyte;
     uint32_t chunk_type = 0;
+    uint32_t length;
     uint8_t keybuff[80];
-    uint8_t t, i = 0, j = 0, k = 0;
+    uint8_t i = 0, j = 0, k = 0;
 
     uint8_t *data = NULL, *compressed = NULL;
     int compressed_size = 0;
@@ -280,7 +281,7 @@ PNG_load(const char* filename)
                 break;
             case CHARS2UINT("IDAT"):
                 compressed_size += length;
-                if (compressed_size == length) {
+                if ((uint32_t)compressed_size == length) {
                     compressed = malloc(compressed_size);
                     fread(compressed, 1, length, f);
                     crc32 = update_crc(crc32, (uint8_t *)compressed, length);
@@ -530,21 +531,21 @@ PNG_info(FILE* f, struct pic* p)
     if (b->n_text) {
         fprintf(f, "\tTextual data:\n");
     }
-    for (int i = 0; i < b->n_text; i ++) {
+    for (uint32_t i = 0; i < b->n_text; i ++) {
         struct textual_data *t = (b->textual + i);
         fprintf(f, "\t%s:%s\n", t->keyword, t->text);
     }
     if (b->n_ctext) {
         fprintf(f, "\tCompressed Textual data:\n");
     }
-    for (int i = 0; i < b->n_ctext; i ++) {
+    for (uint32_t i = 0; i < b->n_ctext; i ++) {
         struct compressed_textual_data *t = (b->ctextual + i);
         fprintf(f, "\t%s:%d:%s\n", t->keyword, t->compression_method, t->compressed_text);
     }
     if (b->n_itext) {
         fprintf(f, "\tInternatianal Textual data:\n");
     }
-    for (int i = 0; i < b->n_itext; i ++) {
+    for (uint32_t i = 0; i < b->n_itext; i ++) {
         struct international_textual_data *t = (b->itextual + i);
         if (t->compression_flag)
             fprintf(f, "\tcompression %d\n", t->compression_method);

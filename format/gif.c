@@ -8,7 +8,7 @@
 #include "lzw.h"
 #include "vlog.h"
 
-VLOG_REGISTER(gif, INFO);
+VLOG_REGISTER(gif, INFO)
 
 #define GRAPHIC_PLAINTEXT      0x01
 #define GRAPHIC_IMAGE          0x2C

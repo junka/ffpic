@@ -10,7 +10,7 @@
 #include "file.h"
 #include "vlog.h"
 
-VLOG_REGISTER(exr, INFO);
+VLOG_REGISTER(exr, INFO)
 
 static int 
 EXR_probe(const char* filename)
@@ -72,7 +72,7 @@ read_chlist(EXR *e, FILE *f, int size)
 }
 
 void
-read_attribute_value(EXR *e, FILE *f, char *name, char * type, int size)
+read_attribute_value(EXR *e, FILE *f, char *name, int size)
 {
     if (!strcmp("compression", name)) {
         e->compression = fgetc(f);
@@ -109,7 +109,7 @@ read_attribute(EXR *e, FILE *f)
     read_str_till_null(f, type);
     fread(&size, 4, 1, f);
     VINFO(exr, "%s: %s: %d", name, type, size);
-    read_attribute_value(e, f, name, type, size);
+    read_attribute_value(e, f, name, size);
 }
 
 bool
@@ -192,7 +192,7 @@ EXR_load(const char* filename)
     }
 
     uint32_t width, height;
-    uint8_t *data;
+    // uint8_t *data;
     width = e->data_win.xMax - e->data_win.xMin + 1;
     height = e->data_win.yMax - e->data_win.yMin + 1;
 
@@ -202,7 +202,7 @@ EXR_load(const char* filename)
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     
     e->data = malloc(height * p->pitch);
-    int data_len;
+    // int data_len;
     uint64_t* offset;
     /* read offset table */
     if (!e->h.multipart) {
@@ -214,7 +214,7 @@ EXR_load(const char* filename)
 
     /*read pixel data*/
     uint32_t data_size;
-    int ystart, yend, ydelta;
+    int ystart = 0, yend = 0, ydelta = 0;
     if (INCREASING_Y == e->lineorder) {
         ystart = 0;
         ydelta = 1;
@@ -228,7 +228,7 @@ EXR_load(const char* filename)
         fseek(f, offset[y], SEEK_SET);
         fread(&data_size, 4, 1, f);
         for (int i = 0; i < e->chnl_num; i ++) {
-            for (int x = 0; x < width; x ++) {
+            for (uint32_t x = 0; x < width; x ++) {
                 float a = read_pixel(f, e->chnls[i].pixel_type);
                 e->data[p->pitch * y + 4 * x + i] = exr_to_rgb(a);
             }

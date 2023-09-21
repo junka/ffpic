@@ -6,6 +6,7 @@
 #include <ctype.h>
 
 #include "file.h"
+#include "utils.h"
 #include "svg.h"
 
 
@@ -42,7 +43,7 @@ read_till_space(FILE *f, char *s)
     return i;
 }
 
-static int
+static int UNUSED
 read_context(FILE *f, char *buf)
 {
     read_skip_space(f);
@@ -345,7 +346,7 @@ read_comm(FILE *f)
         MINUS2,
     } state = COMMENT;
 
-    int len;
+    // int len;
     char s = '\0';
     
     fseek(f, -1 , SEEK_CUR);
@@ -433,7 +434,7 @@ read_xml(SVG *g, FILE *f)
     } state = NONE;
 
     char s;
-    int len;
+    // int len;
     struct xml_node *root = NULL;
     struct xml_node *n = NULL;
 
@@ -550,7 +551,7 @@ SVG_free(struct pic *p)
 }
 
 static void
-SVG_info(FILE *f, struct pic* p)
+SVG_info(FILE *f, struct pic* p UNUSED)
 {
     fprintf(f, "SVG file formart\n");
 }

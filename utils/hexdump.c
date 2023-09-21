@@ -14,7 +14,7 @@ hexdump(FILE *f, const char *title, const char *prefix, const void *buf, unsigne
     char line[LINE_LEN];    /* space needed 8+16*3+3+16 == 75 */
 
     fprintf(f, "%s at [%p], len=%u\n",
-        title ? : "  Dump data", data, len);
+        title ? title : "  Dump data", (void *)data, len);
     ofs = 0;
     while (ofs < len) {
         /* format the line in the buffer */

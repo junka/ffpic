@@ -8,7 +8,7 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(booldec, DEBUG);
+VLOG_REGISTER(booldec, DEBUG)
 
 const uint8_t
 vp8_norm[256] __attribute__((aligned(16))) =

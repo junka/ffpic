@@ -1,5 +1,5 @@
-#ifndef _GIF_H
-#define _GIF_H
+#ifndef _GIF_H_
+#define _GIF_H_
 
 #ifdef __cplusplus
 extern "C" {
@@ -160,4 +160,4 @@ void GIF_init(void);
 }
 #endif
 
-#endif
+#endif /* _GIF_H_*/

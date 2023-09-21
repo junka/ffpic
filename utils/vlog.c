@@ -63,7 +63,7 @@ vlog_get_stream(void)
          * of stderr, even if the application closes and
          * reopens it.
          */
-        return default_log_stream ? : stderr;
+        return default_log_stream ? default_log_stream : stderr;
     }
     return f;
 }
@@ -287,7 +287,7 @@ vlog_uninit(void)
     if (vlogs.file != NULL) {
         fclose(vlogs.file);
     }
-    for (int i = 0; i < vlogs.dynamic_types_len; i ++) {
+    for (size_t i = 0; i < vlogs.dynamic_types_len; i ++) {
         char *name = (char *)vlogs.dynamic_types[i].name;
         free(name);
     }

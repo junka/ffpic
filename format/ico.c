@@ -8,7 +8,7 @@
 #include "file.h"
 #include "vlog.h"
 
-VLOG_REGISTER(ico, INFO);
+VLOG_REGISTER(ico, INFO)
 
 static int
 ICO_probe(const char *filename)

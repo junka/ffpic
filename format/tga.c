@@ -15,10 +15,10 @@ TGA_probe(const char *filename)
         printf("fail to open %s\n", filename);
         return -ENOENT;
     }
-    size_t extra_size = 0;
+    // size_t extra_size = 0;
     struct tga_footer tailer;
     fseek(f, -sizeof(struct tga_footer), SEEK_END);
-    size_t filesize = ftell(f) + sizeof(struct tga_footer);
+    // size_t filesize = ftell(f) + sizeof(struct tga_footer);
     size_t len = fread(&tailer, sizeof(struct tga_footer), 1, f);
     if (len < 1) {
         fclose(f);
@@ -39,10 +39,10 @@ TGA_probe(const char *filename)
         return -EBADF;
     }
     fclose(f);
-    extra_size += header.ident_size;
-    if (header.color_map_type == 1) {
-        extra_size += header.color_map_length * (header.color_map_entry_size >> 3);
-    }
+    // extra_size += header.ident_size;
+    // if (header.color_map_type == 1) {
+    //     extra_size += header.color_map_length * (header.color_map_entry_size >> 3);
+    // }
     //judge by section size
     if (header.bits_depth>>3 > 0 && header.bits_depth%8 == 0) 
         return 0;

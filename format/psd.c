@@ -9,7 +9,7 @@
 #include "psd.h"
 #include "vlog.h"
 
-VLOG_REGISTER(psd, INFO);
+VLOG_REGISTER(psd, INFO)
 
 static int
 PSD_probe(const char *filename)

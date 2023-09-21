@@ -45,14 +45,14 @@ list(APPEND FFPIC_CODING
   "${FFPIC_ROOT}/coding/booldec.c"
   "${FFPIC_ROOT}/coding/golomb.c"
   "${FFPIC_ROOT}/coding/cabac.c"
-  "${FFPIC_ROOT}/coding/hevc.c"
   "${FFPIC_ROOT}/utils/crc.c"
   "${FFPIC_ROOT}/utils/alder.c"
   "${FFPIC_ROOT}/utils/hexdump.c"
   "${FFPIC_ROOT}/utils/bitstream.c"
   "${FFPIC_ROOT}/utils/utils.c"
   "${FFPIC_ROOT}/utils/vlog.c"
-  "${FFPIC_ROOT}/utils/byteorder.c")
+  "${FFPIC_ROOT}/utils/byteorder.c"
+  "${FFPIC_ROOT}/coding/hevc.c")
 
 list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/png.c"
@@ -62,22 +62,23 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/pnm.c"
   "${FFPIC_ROOT}/format/jpg.c"
   "${FFPIC_ROOT}/format/tga.c"
-  "${FFPIC_ROOT}/format/webp.c"
-  "${FFPIC_ROOT}/format/heif.c"
-  "${FFPIC_ROOT}/format/avif.c"
   "${FFPIC_ROOT}/format/ico.c"
-  "${FFPIC_ROOT}/format/jp2.c"
   "${FFPIC_ROOT}/format/basemedia.c"
   "${FFPIC_ROOT}/format/exr.c"
   "${FFPIC_ROOT}/format/psd.c"
   "${FFPIC_ROOT}/format/svg.c"
   "${FFPIC_ROOT}/format/file.c"
+  "${FFPIC_ROOT}/format/webp.c"
+  "${FFPIC_ROOT}/format/jp2.c"
+  "${FFPIC_ROOT}/format/heif.c"
+  "${FFPIC_ROOT}/format/avif.c"
   "${FFPIC_ROOT}/format/predict.c")
 
 find_package(SDL2)
 
-add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_CODING} ${FFPIC_FORMART} ${FFPIC_SDL})
+add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
+# target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" $<TARGET_OBJECTS:ffpic>)
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})

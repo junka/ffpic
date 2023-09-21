@@ -5,7 +5,7 @@
 #include "golomb.h"
 #include "vlog.h"
 
-VLOG_REGISTER(golomb, DEBUG);
+VLOG_REGISTER(golomb, DEBUG)
 
 //h264 and h265 use 0th order exp
 //kth order exp-golomb see h266 9.2

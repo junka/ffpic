@@ -56,9 +56,8 @@ struct bmp_color_header {
     uint32_t unused[16];       // Unused data for sRGB color space
 };
 
-struct bmp_v5_header {
-
-};
+// struct bmp_v5_header {
+// };
 
 enum halftoning_algrithm {
    NONE = 0,

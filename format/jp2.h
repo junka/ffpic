@@ -138,9 +138,9 @@ struct jp2_cmap_component {
     uint8_t palette_id;  
 };
 
-struct jp2_cmap {
+// struct jp2_cmap {
 
-};
+// };
 
 struct pclr_chan {
     uint8_t sign:1;
@@ -171,15 +171,15 @@ struct jp2_cdef {
 struct jp2h_box {
     struct jp2_ihdr ihdr;
     struct jp2_colr colr;
-    struct jp2_cmap cmap;
+    // struct jp2_cmap cmap;
     struct jp2_cdef cdef;
     struct jp2_pclr pclr;
 };
 
 
-struct jp2c_box {
+// struct jp2c_box {
 
-};
+// };
 
 struct jp2_xml {
     uint8_t * data;
@@ -379,7 +379,7 @@ struct tile_header {
 typedef struct {
     struct ftyp_box ftyp;
     struct jp2h_box jp2h;
-    struct jp2c_box *jp2c;
+    // struct jp2c_box *jp2c;
     struct jp2_uuid uuid;
     int xml_num;
     struct jp2_xml* xml;

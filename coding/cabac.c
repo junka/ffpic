@@ -7,7 +7,7 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(cabac, DEBUG);
+VLOG_REGISTER(cabac, DEBUG)
 
 
 //see Table 9-53 state transition
@@ -118,7 +118,7 @@ static cabac_dec **dec_list = NULL;
 cabac_dec *
 cabac_lookup(struct bits_vec *v)
 {
-    cabac_dec *d;
+    // cabac_dec *d;
     for (int i = 0; i < dec_num; i ++) {
         if (dec_list[i]->bits == v) {
             return dec_list[i];
@@ -203,7 +203,7 @@ cabac_dec_bypass(cabac_dec *dec)
     return binVal;
 }
 
-static int
+static int UNUSED
 cabac_dec_terminate(cabac_dec *dec)
 {
     /*Figure 9-9 */
@@ -260,3 +260,4 @@ cabac_dec_bin(cabac_dec *dec)
 
     return cabac_dec_decision(dec);
 }
+

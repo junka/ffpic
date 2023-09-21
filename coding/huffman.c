@@ -7,13 +7,13 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(huffman, INFO);
+VLOG_REGISTER(huffman, INFO)
 
 #define MAX_BIT_LENGTH 16 /* largest bitlen used by any tree type */
 #define MAX_SYMBOLS 256   /* largest number of symbols used by any tree type */
 
 huffman_tree* 
-huffman_tree_init()
+huffman_tree_init(void)
 {
     huffman_tree* tree = malloc(sizeof(huffman_tree));
     memset(tree->fast[0], 0xFF, FAST_HF_SIZE);
@@ -39,7 +39,7 @@ huffman_cleanup(huffman_tree* tree)
 void
 huffman_dump_table(FILE *f, huffman_tree* tree)
 {
-    fprintf(f, "%p: %s %d\n", tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
+    fprintf(f, "%p: %s %d\n", (void *)tree, tree->dc_ac == 0 ? "DC": "AC", tree->tid);
     fprintf(f, "fast lookup table:\n");
     for (int i = 0; i < FAST_HF_SIZE; i ++) {
         fprintf(f, "\t%d\t%x\t%d\n", i, tree->fast[0][i], tree->fast[1][i]);
@@ -60,9 +60,8 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 {
     uint16_t coding[MAX_SYMBOLS];
     uint8_t bitlen[MAX_SYMBOLS];
-    unsigned bits, n = 0, i = 0;
+    int bits, n = 0, i = 0;
     int maxbitlen = 0, n_codes = 0;
-    int k = 0;
 
     tree->dc_ac = dc;
     tree->tid = id;
@@ -127,8 +126,8 @@ huffman_build_lookup_table(huffman_tree* tree, uint8_t dc, uint8_t id, const uin
 
 static int 
 decode_symbol(struct bits_vec * v, huffman_tree* tree) {
-    int pos = 0, ct = 0xFF;
-    int c = -1, cbits = 0, bl = 0;
+    int ct = 0xFF;
+    int c = -1, bl = 0;
     if (EOF_BITS(v, FAST_HF_BITS)) {
         VERR(huffman, "end of stream %ld, %ld\n", v->ptr - v->start, v->len);
         return -1;

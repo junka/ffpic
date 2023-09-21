@@ -8,7 +8,7 @@
 #include "deflate.h"
 #include "vlog.h"
 
-VLOG_REGISTER(deflate, INFO);
+VLOG_REGISTER(deflate, INFO)
 
 struct deflate_tree {
     uint16_t counts[16]; /* Number of codes with a given length */
@@ -151,7 +151,7 @@ deflate_build_tree(struct deflate_tree *t, const uint8_t *lengths,
 static int 
 deflate_nocompression_block(struct deflate_decoder *d)
 {
-    uint32_t length, invlength;
+    int length, invlength;
 
     /* Get length */
     length = READ_BITS(d->v, 16);
@@ -357,7 +357,7 @@ deflate_decode_trees(struct deflate_decoder *d, struct deflate_tree *lt,
     }
 
     /* Read code lengths for code length alphabet */
-    for (int i = 0; i < hclen; ++i) {
+    for (uint32_t i = 0; i < hclen; ++i) {
         /* Get 3 bits code length (0-7) */
         lengths[clcidx[i]] = READ_BITS(d->v, 3);
     }
@@ -471,7 +471,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
 
     struct zlib_header h;
     uint16_t check;
-    uint32_t alder32 = *(uint32_t *)(compressed + compressed_length - 4);
+    // uint32_t alder32 = *(uint32_t *)(compressed + compressed_length - 4);
 
     memcpy(&h, compressed, 2);
     if (h.compress_method != 8) {

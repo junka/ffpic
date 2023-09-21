@@ -5,7 +5,7 @@
 
 #include "display.h"
 #include "bmpwriter.h"
-
+#include "utils.h"
 
 
 struct bmp_private {
@@ -58,15 +58,14 @@ bmp_writer_init(const char* title, int w, int h)
 }
 
 int 
-bmp_writer_puts(void *buff, int left, int top, int width, int height, int depth, int pitch,
-            uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
+bmp_writer_puts(void *buff, int left UNUSED, int top UNUSED, int width, int height, int depth, int pitch UNUSED,
+            uint32_t rmask UNUSED, uint32_t gmask UNUSED, uint32_t bmask UNUSED, uint32_t amask UNUSED)
 {
 
     FILE *fd = bmp_pri.fp;
     long file_length = (width * height * (depth>>3)) + 54;
     uint8_t *file_p = bmp_pri.data;
     uint8_t *file_p_tmp = NULL;
-    uint8_t byte_copy = 0;
     uint8_t *b = (uint8_t *)buff;
 
     file_p_tmp = file_p;

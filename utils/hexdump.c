@@ -45,14 +45,15 @@ hexdump(FILE *f, const char *title, const char *prefix, const void *buf, unsigne
 }
 
 
-// for macro block size 8 * 8
-void mcu_dump(FILE *f, const char *title, const int *buf)
+// for macro block size 8 * 8, 4 * 4, 16 * 16
+void mb_dump(FILE *f, const char *title, const uint8_t *buf, int size, int stride)
 {
     fprintf(f, "%s:\n", title);
-    for (int i = 0; i < 8; i ++) {
-        for (int j = 0; j < 8; j ++) {
-            fprintf(f, "%04x ", buf[i * 8 + j]);
+    for (int i = 0; i < size; i ++) {
+        for (int j = 0; j < size; j ++) {
+            fprintf(f, "%02x ", *(buf+j));
         }
+        buf += stride;
         fprintf(f, "\n");
     }
 }

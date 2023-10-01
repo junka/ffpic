@@ -295,6 +295,8 @@ typedef struct {
     struct vp8_key_frame_header k;
     struct partition p[MAX_PARTI_NUM];
     struct WEBP_decoder d[4]; // different segment has different parameters
+
+    uint8_t *data;
 } WEBP;
 
 void WEBP_init(void);

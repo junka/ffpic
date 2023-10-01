@@ -5,13 +5,15 @@
 extern "C" {
 #endif
 
+#include <stdio.h>
+
 #define UNUSED __attribute__((unused))
 #define LIKELY(CONDITION) __builtin_expect(!!(CONDITION), 1)
 #define UNLIKELY(CONDITION) __builtin_expect(!!(CONDITION), 0)
 
 void hexdump(FILE *f, const char *title, const char *prefix, const void *buf, unsigned int len);
 
-void mcu_dump(FILE *f, const char *title, const int *buf);
+void mb_dump(FILE *f, const char *title, const uint8_t *buf, int size, int stride);
 
 int log2floor(uint32_t n);
 int log2ceil(uint32_t n);

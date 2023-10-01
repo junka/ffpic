@@ -96,6 +96,8 @@ void vlog_init(void);
 void vlog_uninit(void);
 void vlog_dump(FILE *f);
 
+FILE *vlog_get_stream(void);
+
 #ifdef __cplusplus
 }
 #endif

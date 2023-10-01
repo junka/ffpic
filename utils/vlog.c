@@ -50,7 +50,7 @@ vlog_set_global_level(uint32_t level)
     vlogs.level = (uint32_t)level;
 }
 
-static FILE *
+FILE *
 vlog_get_stream(void)
 {
     FILE *f = vlogs.file;

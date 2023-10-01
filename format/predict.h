@@ -26,18 +26,23 @@ enum {
 enum {
     // 16X16 intra mode: Luma16 or UV modes
     DC_PRED = B_DC_PRED,
+    TM_PRED = B_TM_PRED,
     V_PRED = B_VE_PRED,
     H_PRED = B_HE_PRED,
-    TM_PRED = B_TM_PRED,
-    B_PRED = NUM_BMODES, // refined I4x4 mode
-    NUM_PRED_MODES = 4,
-
-    // special modes
-    B_DC_PRED_NOTOP = 4,
-    B_DC_PRED_NOLEFT = 5,
-    B_DC_PRED_NOTOPLEFT = 6,
-    NUM_B_DC_MODES = 7
+    B_PRED = 4, // refined I4x4 mode
+    NUM_PRED_MODES = 5,
 };
+
+
+void
+pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst,
+          int stride, int x, int y);
+
+void
+pred_chrome(int imode, uint8_t *uout, uint8_t *vout,
+            int stride, int x, int y);
+
+
 
 #ifdef __cplusplus
 }

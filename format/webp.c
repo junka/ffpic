@@ -1534,36 +1534,6 @@ vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
     // int width = ((w->fi.width + 3) >> 2) << 2;
     // int height = w->fi.height;
 
-// #define BPS (16 * 2)
-// #define YUV_SIZE (BPS * 17 + BPS * 9)
-// #define Y_OFF (BPS * 1 + 8)
-// #define U_OFF (Y_OFF + BPS * 16 + BPS)
-// #define V_OFF (U_OFF + 16)
-
-    // uint8_t* const y_dst = yuv_b + (y_stride * y + block->x) * 16;
-    // uint8_t* const u_dst = yuv_b + U_OFF;
-    // uint8_t* const v_dst = yuv_b + V_OFF;
-
-    // Initialize left-most block.
-    // for (int j = 0; j < 16; ++j) {
-    //     y_dst[j * BPS - 1] = 129;
-    // }
-    // for (int j = 0; j < 8; ++j) {
-    //     u_dst[j * BPS - 1] = 129;
-    //     v_dst[j * BPS - 1] = 129;
-    // }
-
-    // Init top-left sample on left column too.
-    // if (y > 0) {
-    //     y_dst[-1 - BPS] = u_dst[-1 - BPS] = v_dst[-1 - BPS] = 129;
-    // } else {
-    //     // we only need to do this init once at block (0,0).
-    //     // Afterward, it remains valid for the whole topmost row.
-    //     memset(y_dst - BPS - 1, 127, 16 + 4 + 1);
-    //     memset(u_dst - BPS - 1, 127, 8 + 1);
-    //     memset(v_dst - BPS - 1, 127, 8 + 1);
-    // }
-
     //predict luma
         // struct macro_block *mb = blocks + y * ((width + 15) >> 4) + x;
         // VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
@@ -1583,65 +1553,13 @@ vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
         // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
 
         pred_luma(block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
-        VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
-        mb_dump(vlog_get_stream(), "", yout, 16, y_stride);
-        // VDBG(webp, "y %d, x %d, pred%d %d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x",
-        // y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0],
-        // yout[0], yout[1], yout[2], yout[3], yout[4], yout[5], yout[6], yout[7],
-        // yout[8], yout[9], yout[10], yout[11], yout[12], yout[13], yout[14], yout[15],
-        // yout[y_stride], yout[y_stride+1], yout[y_stride+2], yout[y_stride+3], yout[y_stride+4], yout[y_stride+5], yout[y_stride+6], yout[y_stride+7],
-        // yout[y_stride+8], yout[y_stride+9], yout[y_stride+10], yout[y_stride+11], yout[y_stride+12], yout[y_stride+13], yout[y_stride+14], yout[y_stride+15],
-        // yout[y_stride*2], yout[y_stride*2+1], yout[y_stride*2+2], yout[y_stride*2+3], yout[y_stride*2+4], yout[y_stride*2+5], yout[y_stride*2+6], yout[y_stride*2+7],
-        // yout[y_stride*2+8], yout[y_stride*2+9], yout[y_stride*2+10], yout[y_stride*2+11], yout[y_stride*2+12], yout[y_stride*2+13], yout[y_stride*2+14], yout[y_stride*2+15],
-        // yout[y_stride*3], yout[y_stride*3+1], yout[y_stride*3+2], yout[y_stride*3+3], yout[y_stride*3+4], yout[y_stride*3+5], yout[y_stride*3+6], yout[y_stride*3+7],
-        // yout[y_stride*3+8], yout[y_stride*3+9], yout[y_stride*3+10], yout[y_stride*3+11], yout[y_stride*3+12], yout[y_stride*3+13], yout[y_stride*3+14], yout[y_stride*3+15],
-        // yout[y_stride*4], yout[y_stride*4+1], yout[y_stride*4+2], yout[y_stride*4+3], yout[y_stride*4+4], yout[y_stride*4+5], yout[y_stride*4+6], yout[y_stride*4+7],
-        // yout[y_stride*4+8], yout[y_stride*4+9], yout[y_stride*4+10], yout[y_stride*4+11], yout[y_stride*4+12], yout[y_stride*4+13], yout[y_stride*4+14], yout[y_stride*4+15],
-        // yout[y_stride*5], yout[y_stride*5+1], yout[y_stride*5+2], yout[y_stride*5+3], yout[y_stride*5+4], yout[y_stride*5+5], yout[y_stride*5+6], yout[y_stride*5+7],
-        // yout[y_stride*5+8], yout[y_stride*5+9], yout[y_stride*5+10], yout[y_stride*5+11], yout[y_stride*5+12], yout[y_stride*5+13], yout[y_stride*5+14], yout[y_stride*5+15],
-        // yout[y_stride*6], yout[y_stride*6+1], yout[y_stride*6+2], yout[y_stride*6+3], yout[y_stride*6+4], yout[y_stride*6+5], yout[y_stride*6+6], yout[y_stride*6+7],
-        // yout[y_stride*6+8], yout[y_stride*6+9], yout[y_stride*6+10], yout[y_stride*6+11], yout[y_stride*6+12], yout[y_stride*6+13], yout[y_stride*6+14], yout[y_stride*6+15],
-        // yout[y_stride*7], yout[y_stride*7+1], yout[y_stride*7+2], yout[y_stride*7+3], yout[y_stride*7+4], yout[y_stride*7+5], yout[y_stride*7+6], yout[y_stride*7+7],
-        // yout[y_stride*7+8], yout[y_stride*7+9], yout[y_stride*7+10], yout[y_stride*7+11], yout[y_stride*7+12], yout[y_stride*7+13], yout[y_stride*7+14], yout[y_stride*7+15]);
+        // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
 
-        // if (block->intra_y_mode == B_PRED) {
-        //     assert(0);
-        // }
+        pred_chrome(block->intra_uv_mode, uout, vout, uv_stride, block->x, y);
+        VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
+        mb_dump(vlog_get_stream(), "", uout, 8, uv_stride);
+        mb_dump(vlog_get_stream(), "", vout, 8, uv_stride);
 
-        // predict and add residuals
-        // if (mb->intra_y_mode == B_PRED) { // 4x4
-        //     // uint32_t* const top_right = (uint32_t*)(y_dst - BPS + 16);
-
-        //     // if (y > 0) {
-        //     //     if (block->x >= ((width + 15) >> 4) - 1) {    // on rightmost border
-        //     //         memset(top_right, top_yuv[0].y[15], sizeof(*top_right));
-        //     //     } else {
-        //     //         memcpy(top_right, top_yuv[1].y, sizeof(*top_right));
-        //     //     }
-        //     // }
-        //     // // replicate the top-right pixels below
-        //     // top_right[BPS] = top_right[2 * BPS] = top_right[3 * BPS] = top_right[0];
-
-        //     // predict and add residuals for all 4x4 blocks in turn.
-        //     for (int n = 0; n < 16; ++n, bits <<= 2) {
-        //         uint8_t* const dst = y_dst + kScan[n];
-        //         // VP8PredLuma4[block->imodes[n]](dst);
-        //         pred_luma(block->intra_y_mode, block->imodes, dst, stride);
-        //         // DoTransform(bits, coeffs + n * 16, dst);
-        //     }
-        // } else { // 16x16
-        //     const int pred_func = CheckMode(block->x, y, block->imodes[0]);
-        //     // VP8PredLuma16[pred_func](y_dst);
-        //     if (bits != 0) {
-        //         for (int n = 0; n < 16; ++n, bits <<= 2) {
-        //             // DoTransform(bits, coeffs + n * 16, y_dst + kScan[n]);
-        //         }
-        //     }
-        // }
-
-
-
-        // pred_chrome(block->imodes[0], uout, vout, uv_stride, block->x, y);
         // Chroma
         // const uint32_t bits_uv = mb->non_zero_uv;
         // const int pred_func = CheckMode(x, y, mb->intra_uv_mode);

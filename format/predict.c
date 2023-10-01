@@ -544,7 +544,7 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
     uint8_t *left = &left_default[0];
     uint8_t *topright = &top_default[5];
 #ifndef NDEBUG
-    int dx = 17, dy = 85;
+    int dx = 999, dy = 999;
 #endif
 
 
@@ -578,19 +578,19 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
             int xs = (n % 4);
             int ys = (n / 4);
             if (x > 0 || xs > 0) {
-              for (int m = 0; m < 4; m ++) {
-                  left[m] = *(dst + (ys * 4 + m) * stride + xs * 4 - 1);
-              }
+                for (int m = 0; m < 4; m ++) {
+                    left[m] = *(dst + (ys * 4 + m) * stride + xs * 4 - 1);
+                }
             } else {
-              memset(left_default, 129, 4);
+                memset(left_default, 129, 4);
             }
 #ifndef NDEBUG
             if (y == dy && x == dx) {
-                  printf("left: ");
-              for (int m = 0; m < 4; m ++) {
-                  printf("%02x ", left[m]);
-              }
-              printf("\n");
+                printf("left: ");
+                for (int m = 0; m < 4; m ++) {
+                    printf("%02x ", left[m]);
+                }
+                printf("\n");
             }
 #endif
             if (y == 0 && ys == 0) {
@@ -603,22 +603,10 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
                 } else {
                     top[-1] = 129;
                 }
-                // fill the top when sub-block overflow for only ys == 0, other subblock shares that from subblock 3
                 if (x == ((stride / 16) - 1) && xs == 3) {
                     memset(topright, 127, 4);
                 }
             } else {
-                // if (x == 0 && xs == 0) {
-                //     memcpy(top, dst + (ys * 4)* stride - stride, 8);
-                //     top[-1] = 129;
-                // } else if ((x > 0 && xs == 0) || (xs > 0 && xs < 3)) {
-                //     memcpy(top - 1, dst + (ys * 4)* stride + xs * 4 - stride
-                //     - 1, 9);
-                // } else if (xs == 3) {
-                //     memcpy(top-1, dst - stride -1, 5);
-                //     memset(topright, 127, 4);
-                // }
-                // use the right value from xs == 3 and ys == 0
                 memcpy(top, dst + (ys * 4)* stride + xs * 4 - stride, 4);
                 if (xs == 3) {
                     memcpy(topright, dst + 3 * 4 - stride + 4, 4);
@@ -633,13 +621,13 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
             }
 #ifndef NDEBUG
             if (y == dy && x == dx) {
-              printf("top from -1 ");
-              for (int m = -1; m < 8; m ++) {
-                printf("%02x ", top[m]);
-                if (m == 7) {
-                  printf("\n");
+                printf("top from -1 ");
+                for (int m = -1; m < 8; m ++) {
+                    printf("%02x ", top[m]);
+                    if (m == 7) {
+                        printf("\n");
+                    }
                 }
-              }
             }
 #endif
 
@@ -674,13 +662,11 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
                 printf("%02x ", left[i]);
             }
             printf("\n");
-        }
-        if (x == dx && y == dy) {
-          printf("top from -1: ");
-          for (int i = -1; i < 16; i ++) {
-            printf("%02x ", top[i]);
-          }
-          printf("\n");
+            printf("top from -1: ");
+            for (int i = -1; i < 16; i ++) {
+                printf("%02x ", top[i]);
+            }
+            printf("\n");
         }
 #endif
         /* 16X16 */
@@ -700,9 +686,52 @@ void pred_chrome(int imode, uint8_t *uout, uint8_t *vout, int stride,
     assert(imode < NUM_BMODES);
     PredFunc chromafunc = PredChroma8[imode];
 
-    // U
-    chromafunc(uout, NULL, NULL, stride, x, y);
+    uint8_t leftu_default[8] = {129, 129, 129, 129, 129, 129, 129, 129};
+    uint8_t topu_default[9] = {
+        127, 127, 127, 127, 127, 127, 127, 127, 127
+    };
+    uint8_t leftv_default[8] = {129, 129, 129, 129, 129, 129, 129, 129};
+    uint8_t topv_default[9] = {127, 127, 127, 127, 127, 127, 127, 127, 127};
 
+    uint8_t *topu = &topu_default[1]; // so we can access top[-1]
+    uint8_t *leftu = &leftu_default[0];
+    uint8_t *topv = &topv_default[1]; // so we can access top[-1]
+    uint8_t *leftv = &leftv_default[0];
+#ifndef NDEBUG
+    int dx = 999, dy = 999;
+#endif
+    if (x > 0) {
+        // fill left with value from prev left block value
+        for (int i = 0; i < 8; i++) {
+            leftu[i] = *(uout + stride * i - 1);
+            leftv[i] = *(vout + stride * i - 1);
+        }
+    }
+    if (y > 0) {
+        if (x > 0) {
+            memcpy(topu - 1, uout - stride - 1, 9);
+            memcpy(topv - 1, vout - stride - 1, 9);
+        } else {
+            memcpy(topu, uout - stride, 8);
+            memcpy(topv, vout - stride, 8);
+            topu[-1] = 129;
+            topv[-1] = 129;
+        }
+    }
+
+    // U
+    chromafunc(uout, topu, leftu, stride, x, y);
+#ifndef NDEBUG
+    if (x == dx && y == dy) {
+        printf("%d %d: mode %d ", y, x, imode);
+        mb_dump(stdout, "", uout, 8, stride);
+    }
+#endif
     // V
-    chromafunc(vout, NULL, NULL, stride, x, y);
+    chromafunc(vout, topv, leftv, stride, x, y);
+#ifndef NDEBUG
+    if (x == dx && y == dy) {
+        mb_dump(stdout, "", vout, 8, stride);
+    }
+#endif
 }

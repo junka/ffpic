@@ -1515,15 +1515,21 @@ typedef struct {
     int uv_stride;
 } cache;
 
-// //see H264 table 7-8
-// int intra16x16PredMode [] = {
-//     0, 1, 2, 3,
-//     0, 1, 2, 3,
-//     0, 1, 2, 3,
-//     0, 1, 2, 3,
-//     0, 1, 2, 3,
-//     0, 1, 2, 3,
-// };
+static void add_residue(int16_t *coff, uint8_t *yout, uint8_t *uout,
+                        uint8_t *vout)
+{
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 16; j++) {
+            coff[i * 16 + j] = clamp(coff[i * 16 + j] + yout[i * 16 + j], 255);
+        }
+    }
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++) {
+            coff[16*16 + i * 8 + j] = clamp(coff[16*16 + i * 8 + j] + uout[i * 8 + j], 255);
+            coff[16*16 + 8 * 8 + i * 8 + j] = clamp(coff[16*16 + 8 * 8 + i * 8 + j] + vout[i * 8 + j], 255);
+        }
+    }
+}
 
 /* see h264 8.3 */
 static void
@@ -1531,69 +1537,25 @@ vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
                 uint8_t* yout, uint8_t* uout, uint8_t* vout,
                 int y_stride, int uv_stride)
 {
-    // int width = ((w->fi.width + 3) >> 2) << 2;
-    // int height = w->fi.height;
 
     //predict luma
-        // struct macro_block *mb = blocks + y * ((width + 15) >> 4) + x;
-        // VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
+    const int16_t* coeffs = block->coeffs;
 
-        // topsamples* const top_yuv = &yuv_t;
-        const int16_t* coeffs = block->coeffs;
-        // uint32_t bits = mb->non_zero_y;
-        // int n;
+    // VDBG(webp, "left %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+    // left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7],
+    // left[8], left[9], left[10], left[11], left[12], left[13], left[14], left[15]);
 
-            // printf("x %d y %d\n",block->x, y);
+    // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
 
+    pred_luma(block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
+    // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
 
-        // VDBG(webp, "left %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
-        // left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7],
-        // left[8], left[9], left[10], left[11], left[12], left[13], left[14], left[15]);
+    pred_chrome(block->intra_uv_mode, uout, vout, uv_stride, block->x, y);
+    VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
+    // mb_dump(vlog_get_stream(), "", uout, 8, uv_stride);
+    // mb_dump(vlog_get_stream(), "", vout, 8, uv_stride);
+    add_residue(block->coeffs, yout, uout, vout);
 
-        // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
-
-        pred_luma(block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
-        // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
-
-        pred_chrome(block->intra_uv_mode, uout, vout, uv_stride, block->x, y);
-        VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
-        mb_dump(vlog_get_stream(), "", uout, 8, uv_stride);
-        mb_dump(vlog_get_stream(), "", vout, 8, uv_stride);
-
-        // Chroma
-        // const uint32_t bits_uv = mb->non_zero_uv;
-        // const int pred_func = CheckMode(x, y, mb->intra_uv_mode);
-        // VP8PredChroma8[pred_func](u_dst);
-        // VP8PredChroma8[pred_func](v_dst);
-        // DoUVTransform(bits_uv >> 0, coeffs + 16 * 16, u_dst);
-        // DoUVTransform(bits_uv >> 8, coeffs + 20 * 16, v_dst);
-
-        // // stash away top samples for next block
-        // if (y < ((height + 15) >> 4)- 1) {
-        //     memcpy(top_yuv[0].y, y_dst + 15 * BPS, 16);
-        //     memcpy(top_yuv[0].u, u_dst +  7 * BPS,  8);
-        //     memcpy(top_yuv[0].v, v_dst +  7 * BPS,  8);
-        // }
-    
-        // // Transfer reconstructed samples from yuv_b cache to final destination.
-    
-        // const int y_offset = cache_id * 16 * y_stride;
-        // const int uv_offset = cache_id * 8 * uv_stride;
-        // uint8_t* const y_out = c->y + block->x * 16 + y_offset;
-        // uint8_t* const u_out = c->u + block->x * 8 + uv_offset;
-        // uint8_t* const v_out = c->v + block->x * 8 + uv_offset;
-        // // printf("Y: ");
-        // for (int j = 0; j < 16; ++j) {
-        //     memcpy(y_out + j * y_stride, y_dst + j * BPS, 16);
-        //     // for (int ls = 0; ls < 16; ls ++) {
-        //     // printf("%d ", *(y_out + j * y_stride + ls));
-        //     // }
-        //     // printf("\n");
-        // }
-        // for (int j = 0; j < 8; ++j) {
-        //     memcpy(u_out + j * c->uv_stride, u_dst + j * BPS, 8);
-        //     memcpy(v_out + j * c->uv_stride, v_dst + j * BPS, 8);
-        // }
 }
 
 //-------------------------------------------------------------------------

@@ -52,6 +52,7 @@ static inline int clip3(int minv, int maxv, int v)
     const typeof(((type *)0)->member) *__mptr = (ptr); \
     (type *)( (char *)__mptr - OFFSET_OF(type, member) );})
 
+#define DIV_ROUND_UP(num, den) (((num) + (den)-1) / (den))
 
 #ifdef __cplusplus
 }

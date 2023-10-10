@@ -1908,12 +1908,6 @@ static void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t* yout, uint8_t *uo
     uint8_t r, g, b;
 
     VDBG(webp, "pitch %d, right space %d", pitch, right_space);
-    /*
-  p XXXX p2
-    XXXX XXXX XXXX
-    XXXX XXXX XXXX
-    */
-
     for (int y = 0; y < mbrows; y++) {
         for (int x = 0; x < mbcols; x++) {
             Y = yout + y_stride * y * 16 + x * 16;
@@ -2063,6 +2057,112 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     return 0;
 }
 
+#define AVG2(a, b) (((a) + (b))/ 2)
+
+// BGRA
+#define ALPHA(a) ((a) & 0xFF)
+#define RED(a) ((a>>8)&0xFF)
+#define GREEN(a) ((a>>16)&0xFF)
+#define BLUE(a) ((a>>24)&0xFF)
+
+static uint32_t predict_transform_select(uint32_t L, uint32_t T, uint32_t TL) {
+    // L = left pixel, T = top pixel, TL = top-left pixel.
+
+    // ARGB component estimates for prediction.
+    int pAlpha = ALPHA(L) + ALPHA(T) - ALPHA(TL);
+    int pRed = RED(L) + RED(T) - RED(TL);
+    int pGreen = GREEN(L) + GREEN(T) - GREEN(TL);
+    int pBlue = BLUE(L) + BLUE(T) - BLUE(TL);
+
+    // Manhattan distances to estimates for left and top pixels.
+    int pL = ABS(pAlpha - ALPHA(L)) + ABS(pRed - RED(L)) +
+             ABS(pGreen - GREEN(L)) + ABS(pBlue - BLUE(L));
+    int pT = ABS(pAlpha - ALPHA(T)) + ABS(pRed - RED(T)) +
+             ABS(pGreen - GREEN(T)) + ABS(pBlue - BLUE(T));
+
+    // Return either left or top, the one closer to the prediction.
+    if (pL < pT) {
+        return L;
+    } else {
+        return T;
+    }
+}
+void predictor_transform_output(uint32_t residual, uint32_t pred, uint8_t *alpha,
+                              uint8_t *red, uint8_t *green, uint8_t *blue) {
+    *alpha = ALPHA(residual) + ALPHA(pred);
+    *red = RED(residual) + RED(pred);
+    *green = GREEN(residual) + GREEN(pred);
+    *blue = BLUE(residual) + BLUE(pred);
+}
+
+static void webpl_predicator_transform(WEBP *w, struct bits_vec *v) {
+    int size_bits = READ_BITS(v, 3) + 2;
+    int block_width = (1 << size_bits);
+    int block_height = (1 << size_bits);
+    int block_xsize = DIV_ROUND_UP(w->fi.width, 1 << size_bits);
+    printf("block width %d, xsize %d\n", block_width, block_xsize);
+
+    for (int y = 0; y < w->fi.height; y++) {
+        for (int x = 0; x < w->fi.width; x ++) {
+            int block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+
+        }
+    }
+}
+
+static void webpl_color_transform(WEBP *w, struct bits_vec *v) {
+    int size_bits = READ_BITS(v, 3) + 2;
+    int block_width = 1 << size_bits;
+    int block_height = 1 << size_bits;
+}
+static void webpl_sub_green_transform(WEBP *w, struct bits_vec *v) {}
+
+static void webpl_color_index_transform(WEBP *w, struct bits_vec *v) {}
+
+static void webpl_read_transform(WEBP *w, struct bits_vec *v) {
+    while(READ_BIT(v)) {
+        int ttype = READ_BITS(v, 2);
+        switch (ttype) {
+            case PREDICTOR_TRANSFORM:
+            webpl_predicator_transform(w, v);
+            break;
+            case COLOR_TRANSFORM:
+            webpl_color_transform(w, v);
+            break;
+            case SUBTRACT_GREEN_TRANSFORM:
+            webpl_sub_green_transform(w, v);
+            break;
+            case COLOR_INDEXING_TRANSFORM:
+            webpl_color_index_transform(w, v);
+            break;
+            default:
+            break;
+        }
+    }
+}
+
+int WEBP_read_lossless(WEBP *w, FILE *f)
+{
+    unsigned char b; // magic byte 0x2f
+    fread(&b, 1, 1, f);
+    if (b != 0x2f) {
+        VERR(webp, "invalid magic value %x", b);
+        return -1;
+    }
+    uint8_t *buf = malloc(w->vp8l.size);
+    fread(buf, w->vp8l.size, 1, f);
+    // struct bool_dec *d = bool_dec_init(buf, w->vp8l.size);
+    struct bits_vec * v = bits_vec_alloc(buf, w->vp8l.size, BITS_LSB);
+    w->fi.width = READ_BITS(v, 14) + 1;
+    w->fi.height = READ_BITS(v, 14) + 1;
+    int is_alpha_used = READ_BIT(v);
+    int version_num = READ_BITS(v, 3);
+    printf("alpha_use %d, version_num %d\n", is_alpha_used, version_num);
+    webpl_read_transform(w, v);
+    bits_vec_free(v);
+    return 0;
+}
+
 static struct pic* 
 WEBP_load(const char *filename)
 {
@@ -2115,7 +2215,7 @@ WEBP_load(const char *filename)
             fseek(f, -4, SEEK_CUR);
             fread(&w->vp8l, sizeof(struct webp_vp8l), 1, f);
             VINFO(webp, "VP8L\n");
-            if (WEBP_read_frame(w, f) < 0) {
+            if (WEBP_read_lossless(w, f) < 0) {
                 pic_free(p);
                 fclose(f);
                 return NULL;

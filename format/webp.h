@@ -252,14 +252,18 @@ struct macro_block {
 
     uint8_t dither;        // local dithering strength (deduced from non_zero_*)
 
-    int x;
+    int x; // the col idx
 };
 
 
 #pragma pack(pop)
 
-
-
+enum TransformType {
+    PREDICTOR_TRANSFORM = 0,
+    COLOR_TRANSFORM = 1,
+    SUBTRACT_GREEN_TRANSFORM = 2,
+    COLOR_INDEXING_TRANSFORM = 3,
+};
 
 #define MAX_PARTI_NUM (4)
 

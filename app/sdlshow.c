@@ -7,6 +7,7 @@
 #include "sdl_screen.h"
 #include "file.h"
 #include "gif.h"
+#include "vlog.h"
 
 #define SCREEN_WIDTH   640
 #define SCREEN_HEIGHT  480
@@ -25,6 +26,9 @@ main(int argc, const char *argv[])
         return -1;
     }
     char title[128];
+    FILE *logf = fopen("picinfo.log", "w+");
+    vlog_init();
+    vlog_openlog_stream(logf);
 
     file_ops_init();
     sdl_screen_register();

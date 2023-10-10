@@ -1059,14 +1059,14 @@ static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
                 absValue = -absValue;
             }
         }
-
+        /* 4X4 block zigzag values */
         out[kZigzag[n]] = absValue * (n > 0 ? quant_ac : quant_dc);
     }
     return 16;
 }
 
-//in out for 4*4
-static void IWHT_C(const int16_t* in, int16_t* out)
+//in out for 4*4, but make it fast to 0, 16, 32,.. for out
+static void IWHT_long(const int16_t* in, int16_t* out)
 {
     int tmp[16];
     int i;
@@ -1082,50 +1082,59 @@ static void IWHT_C(const int16_t* in, int16_t* out)
     }
     // pass two
     for (i = 0; i < 4; ++i) {
-        const int dc = tmp[0 + i * 4] + 3;    // w/ rounder
-        const int a0 = dc             + tmp[3 + i * 4];
+        const int a0 = tmp[0 + i * 4] + tmp[3 + i * 4];
         const int a1 = tmp[1 + i * 4] + tmp[2 + i * 4];
         const int a2 = tmp[1 + i * 4] - tmp[2 + i * 4];
-        const int a3 = dc             - tmp[3 + i * 4];
-        out[4 * i + 0] = (a0 + a1) >> 3;
-        out[4 * i + 1] = (a3 + a2) >> 3;
-        out[4 * i + 2] = (a0 - a1) >> 3;
-        out[4 * i + 3] = (a3 - a2) >> 3;
-        // out += 64;
+        const int a3 = tmp[0 + i * 4] - tmp[3 + i * 4];
+        // out[4 * i + 0] = (a0 + a1 + 3) >> 3;
+        // out[4 * i + 1] = (a3 + a2 + 3) >> 3;
+        // out[4 * i + 2] = (a0 - a1 + 3) >> 3;
+        // out[4 * i + 3] = (a3 - a2 + 3) >> 3;
+        out[64 * i ] = (a0 + a1 + 3) >> 3;
+        out[64 * i + 16] = (a3 + a2 + 3) >> 3;
+        out[64 * i + 32] = (a0 - a1 + 3) >> 3;
+        out[64 * i + 48] = (a3 - a2 + 3) >> 3;
     }
 }
 
-#if 0
-static void IDCT_C(const int16_t *in, int16_t *out)
+static void IWHT_fast(int16_t *input, int16_t *output) {
+    int i;
+    int16_t *op = output;
+    int dc0 = ((input[0] + 3) >> 3);
+
+    for (i = 0; i < 16; i++) {
+        op[i* 16] = dc0;
+    }
+}
+
+// do idct for every 16 block unit
+static void IDCT(const int16_t *in, int16_t *out)
 {
-    const int c1 = 20091;
-    const int c2 = 35468;
+    static const int c1 = 20091;
+    static const int c2 = 35468;
     int tmp[16];
     int i;
     for (i = 0; i < 4; ++i) {
         const int a0 = in[0 + i] + in[8 + i];
         const int a1 = in[0 + i] - in[8 + i];
         const int a2 = ((in[4 + i] * c2) >> 16) - in[12 + i] - ((in[12 + i] * c1) >> 16);
-        const int a3 = in[4 + i] + ((in[4 + i] * c1) >> 16) - ((in[12 + i] * c2) >> 16);
+        const int a3 = in[4 + i] + ((in[4 + i] * c1) >> 16) + ((in[12 + i] * c2) >> 16);
         tmp[0 + i] = a0 + a3;
-        tmp[12 + i] = a1 - a3;
-        tmp[4 + i] = a2 + a3;
-        tmp[8 + i] = a2 - a3;
+        tmp[12 + i] = a0 - a3;
+        tmp[4 + i] = a1 + a2;
+        tmp[8 + i] = a1 - a2;
     }
     for (i = 0; i < 4; ++i) {
-        const int dc = tmp[0 + i * 4] + 3; // w/ rounder
         const int a0 = tmp[0 + i * 4] + tmp[2 + i * 4];
         const int a1 = tmp[0 + i * 4] - tmp[2 + i * 4];
         const int a2 = (tmp[1 + i * 4] * c2 >> 16) - tmp[3 + i * 4] - (tmp[3 + i * 4] * c1 >> 16);
         const int a3 = tmp[1 + i * 4] + (tmp[1 + i * 4] * c1 >> 16) + (tmp[3 + i * 4] * c2 >> 16);
-        out[4 * i] = (a0 + a3 + 4) >> 3;
+        out[4 * i + 0] = (a0 + a3 + 4) >> 3;
         out[4 * i + 3] = (a0 - a3 + 4) >> 3;
         out[4 * i + 1] = (a1 + a2 + 4) >> 3;
         out[4 * i + 2] = (a1 - a2 + 4) >> 3;
-        // out += 64;
     }
 }
-#endif
 
 struct context {
     int ctx[9];
@@ -1155,7 +1164,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
     const VP8BandProbas *bands[NUM_TYPES][16];
     int16_t* dst = block->coeffs;
     memset(dst, 0, 384 * sizeof(*dst));
-    // 384 = 16 * (16 + 4 + 4) which is Y U V
+    // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
 
     struct WEBP_decoder *d = &w->d[block->segment_id];
 
@@ -1167,22 +1176,22 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
             bands[t][b] = &w->k.coeff_prob[t][coeff_bands[b]];
         }
     }
-    // Y2
+    // Y2, 0-16 to 0, 16, 32, 48, 64, ...
     if (block->intra_y_mode != B_PRED) {
         int16_t dc[16] = {0};
         int ctx = top[block->x].ctx[0] + left->ctx[0];
         const int nz = vp8_get_coefficients(bt, dc, bands[1], 0, ctx, d->y2_dc, d->y2_ac);
         top[block->x].ctx[0] = left->ctx[0] = ((nz > 0) ? 1 : 0);
-        if (nz > 1) {   // more than just the DC -> perform the full transform
-            IWHT_C(dc, dst);
-            // for (int i = 0; i < 16; i += 1) {
-            //     dst[i * 16] = dst[i];
-            // }
-        } else {        // only DC is non-zero -> inlined simplified transform
-            const int dc0 = (dc[0] + 3) >> 3;
-            for (int i = 0; i < 16; i ++) {
-                dst[i * 16] = dc0;
-            }
+
+        // VDBG(webp, "Y2 coeff: %d:", nz);
+        // VDBG(webp, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d ", dc[0],
+        //      dc[1], dc[2], dc[3], dc[4], dc[5], dc[6], dc[7], dc[8], dc[9],
+        //      dc[10], dc[11], dc[12], dc[13], dc[14], dc[15]);
+
+        if (nz > 1) {   // more than just the DC
+            IWHT_long(dc, dst);
+        } else {        // only DC is non-zero
+            IWHT_fast(dc, dst);
         }
         firstCoeff = 1;
         ac_proba = bands[0];
@@ -1191,39 +1200,31 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
         ac_proba = bands[3];
     }
 
-    // 16Y
-    // int16_t dc[16] = {0};
+    // 16 Y, we have 16 Ys, each is 0-16, but is 4x4 block, so its range 0-256
     for (int y = 0; y < 4; ++y) {
         uint8_t l = left->ctx[y+1];
         for (int x = 0; x < 4; ++x) {
             int ctx = top[block->x].ctx[x + 1] + l;
             const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
-            // if (nz > 1) {
-            //     IDCT_C(dc, dst);
-            // }
-            // for (int i = 0; i < 16; i ++) {
-            //     dst[(x + y * 4) * 16 + i] = dc[i];
-            // }
+            if (nz > 1 || dst[0] != 0) {
+                IDCT(dst, dst);
+            }
             dst += 16;
             l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
         }
         left->ctx[y+1] = l;
     }
 
-    //4U 4V
-    // memset(dc, 0, 16 * 2);
+    //4U 4V ranges from 256-384
     for (int ch = 5; ch <= 7; ch += 2) {
         for (int y = 0; y < 2; ++y) {
             uint8_t l = left->ctx[y + ch];
             for (int x = 0; x < 2; ++x) {
                 int ctx = l + top[block->x].ctx[x + ch];
                 const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
-                // if (nz > 1) {
-                //     IDCT_C(dc, dst);
-                // }
-                // for (int i = 0; i < 16; i++) {
-                //     dst[(x + y * 2 + ((ch == 5) ? 16 : 20)) * 16 + i] = dc[i];
-                // }
+                if (nz > 1 || dst[0] != 0) {
+                    IDCT(dst, dst);
+                }
                 dst += 16;
                 l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;
             }
@@ -1266,9 +1267,7 @@ static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
             top[block->x].ctx[i] = 0;
         }
         block->dither = 0;
-        // memset(block->coeffs, 0, 384 * sizeof(int16_t));
     }
-    //VDBG(webp, "%d %d %d %d %d %d %d", block->coeffs[0], block->coeffs[16], block->coeffs[64], block->coeffs[65], block->coeffs[381], block->coeffs[382], block->coeffs[383]);
 
     // if (filter_type) {
     //     *finfo = fstrengths[block->segment_id][block->intra_y_mode==B_PRED];
@@ -1515,47 +1514,28 @@ typedef struct {
     int uv_stride;
 } cache;
 
-static void add_residue(int16_t *coff, uint8_t *yout, uint8_t *uout,
-                        uint8_t *vout)
-{
-    for (int i = 0; i < 16; i++) {
-        for (int j = 0; j < 16; j++) {
-            coff[i * 16 + j] = clamp(coff[i * 16 + j] + yout[i * 16 + j], 255);
-        }
-    }
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
-            coff[16*16 + i * 8 + j] = clamp(coff[16*16 + i * 8 + j] + uout[i * 8 + j], 255);
-            coff[16*16 + 8 * 8 + i * 8 + j] = clamp(coff[16*16 + 8 * 8 + i * 8 + j] + vout[i * 8 + j], 255);
-        }
-    }
-}
-
 /* see h264 8.3 */
 static void
 vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
                 uint8_t* yout, uint8_t* uout, uint8_t* vout,
                 int y_stride, int uv_stride)
 {
-
-    //predict luma
-    const int16_t* coeffs = block->coeffs;
-
     // VDBG(webp, "left %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
     // left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7],
     // left[8], left[9], left[10], left[11], left[12], left[13], left[14], left[15]);
 
     // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
 
-    pred_luma(block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
+    VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
+
+    pred_luma(block->coeffs, block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
     // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
 
-    pred_chrome(block->intra_uv_mode, uout, vout, uv_stride, block->x, y);
-    VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
+    pred_chrome(block->coeffs+256, block->intra_uv_mode, uout, vout, uv_stride,
+                block->x, y);
+    mb_dump(vlog_get_stream(), "after pred", yout, 16, y_stride);
     // mb_dump(vlog_get_stream(), "", uout, 8, uv_stride);
     // mb_dump(vlog_get_stream(), "", vout, 8, uv_stride);
-    add_residue(block->coeffs, yout, uout, vout);
-
 }
 
 //-------------------------------------------------------------------------
@@ -1915,25 +1895,71 @@ precompute_filter(WEBP *w)
     }
 }
 
+static void YUV420_to_BGRA32(uint8_t *ptr, uint8_t* yout, uint8_t *uout, uint8_t *vout,
+                            int y_stride, int uv_stride, int mbrows, int mbcols)
+{
+    int pitch = y_stride * 4;
+    uint8_t *p = ptr, *p2 = ptr;
+    int next_off = pitch - 16 * 4;
+    int height = mbrows * 16;
+    int width = mbcols * 16;
+    int right_space = pitch - width * 4;
+    uint8_t *Y, *U, *V;
+    int16_t yy, u, v;
+    uint8_t r, g, b;
+
+    VDBG(webp, "pitch %d, right space %d\n", pitch, right_space);
+
+    for (int y = 0; y < mbrows; y++) {
+        for (int x = 0; x < mbcols; x++) {
+            Y = yout + y_stride * y * 16 + x * 16;
+            U = uout + 8 * uv_stride * y + x * 8;
+            V = vout + 8 * uv_stride * y + x * 8;
+            p = p2;
+            for (int i = 0; i < 16; i++) {
+                for (int j = 0; j < 16; j++) {
+                    yy = Y[i * y_stride + j]; // -16;
+                    u = U[(i / 2) * uv_stride + (j / 2)] - 128;
+                    v = V[(i / 2) * uv_stride + (j / 2)] - 128;
+                    r = clamp(yy + 1.4075 * v, 255);
+                    g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
+                    b = clamp(yy + 1.779 * u, 255);
+                    *p++ = b;
+                    *p++ = g;
+                    *p++ = r;
+                    *p++ = 0xFF;
+                }
+                if (i == 0) {
+                    p2 = p;
+                }
+                if (i < 16) {
+                    p += (y_stride - 16) * 4;
+                }
+            }
+        }
+        p2 = p + right_space;
+    }
+}
+
 static void
 vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 {
     struct macro_block *block;
     
     int width = ((w->fi.width + 3) >> 2) << 2;
-    int height = w->fi.height;
+    int height = ((w->fi.height + 3) >> 2) << 2;
     int mbrows = (height + 15) >> 4;
     int mbcols = (width + 15) >> 4;
     int y_stride = mbcols * 16;       // 16 * 16 Y
     int uv_stride = y_stride >> 1;  // 8 * 8   U
 
     //reserve YUV data
-    // w->data = malloc(mbrows * (y_stride * 16 + uv_stride * 2 * 8));
-    uint8_t *Y = malloc(y_stride * 16 * mbrows);
+    w->data = malloc(4 * height * (y_stride));
+    uint8_t *Y = malloc(mbrows * 16 * y_stride);
     uint8_t *U = malloc(mbrows * 8 * uv_stride);
     uint8_t *V = malloc(mbrows * 8 * uv_stride);
 
-    precompute_filter(w);
+    // precompute_filter(w);
 
     struct macro_block *blocks = malloc(sizeof(struct macro_block)* (mbcols * mbrows));
     // one more struct for left of zero col
@@ -1976,26 +2002,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
             // loopfilter(w, x, y, block);
         }
     }
-    // cache c;
-    // c.m = malloc((cols * sizeof(topsamples)) *
-    //                 ((16 * 1 + extra_rows) * 3 / 2));
 
-    // c.y = c.m + extra_rows * c.y_stride;
-    // c.u = c.y + 16 * c.y_stride + (extra_rows / 2) * c.uv_stride;
-    // c.v = c.u + 8 * c.uv_stride + (extra_rows / 2) * c.uv_stride;
-    // printf("y %d, u %d, v %d, extra %d, cache size %ld\n", extra_rows
-    // * c.y_stride, 16 * c.y_stride + (extra_rows / 2) * c.uv_stride, 8
-    // * c.uv_stride + (extra_rows / 2) * c.uv_stride, extra_rows,
-    //     (cols * sizeof(topsamples)) * ((16*1 + extra_rows) * 3 / 2));
-
-    /* reconstruct the row with filter */
-    // for (int y = 0; y < (height + 15) >> 4; y ++) {
-    //     reconstruct_row(w, blocks, yuv_b, y, &c, NULL);
-    //     finish_row(w, filter_type, y, &c, NULL);
-    // }
-
-    // free(yuv_b);
-    // free(c.m);
+    YUV420_to_BGRA32(w->data, Y, U, V, y_stride, uv_stride, mbrows, mbcols);
 }
 
 int WEBP_read_frame(WEBP *w, FILE *f)
@@ -2117,13 +2125,26 @@ WEBP_load(const char *filename)
     }
 
     fclose(f);
+    if (!p->width) {
+        p->width = ((w->fi.width + 3) >> 2) << 2;
+    }
+    if (!p->height) {
+        p->height = ((w->fi.height + 3) >> 2) << 2;
+    }
+    p->depth = 32;
+    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
+    // printf("width %d, pitch %d\n", p->width, p->pitch);
+    p->pixels = w->data;
 
     return p;
 }
 
-void 
-WEBP_free(struct pic * p)
+void WEBP_free(struct pic *p)
 {
+    WEBP *w = (WEBP *)p->pic;
+    if (w->data) {
+        free(w->data);
+    }
     pic_free(p);
 }
 

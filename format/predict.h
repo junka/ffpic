@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+#include <stdint.h>
 /* VP8 and H264 have the same predication algrithm */
 
 // intra prediction modes
@@ -35,14 +35,11 @@ enum {
 
 
 void
-pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst,
+pred_luma(int16_t *coff, int ymode, uint8_t imodes[16], uint8_t *dst,
           int stride, int x, int y);
 
-void
-pred_chrome(int imode, uint8_t *uout, uint8_t *vout,
-            int stride, int x, int y);
-
-
+void pred_chrome(int16_t *coff, int imode, uint8_t *uout, uint8_t *vout,
+                 int stride, int x, int y);
 
 #ifdef __cplusplus
 }

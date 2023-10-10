@@ -343,8 +343,8 @@ static void pred_B_VR(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     DST(1, 2) = DST(3, 3) = AVG3P(top + 1);
     DST(1, 3) = AVG3P(top + 2);
 
-    DST(3, 0) = AVG3P(left + 2);
-    DST(2, 0) = AVG3(left[0], left[1], top[-1]);
+    DST(3, 0) = AVG3P(left + 1);
+    DST(2, 0) = AVG3(left[1], left[0], top[-1]);
 }
 
 static void pred_B_VL(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
@@ -381,8 +381,8 @@ static void pred_B_HD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
 
     DST(0, 3) = AVG3P(top + 1);
     DST(0, 2) = AVG3P(top);
-    DST(0, 1) = DST(1, 3) = AVG3(left[0], *(top - 1), top[0]);
-    DST(1, 1) = DST(2, 3) = AVG3(left[0], left[1], top[-1]);
+    DST(0, 1) = DST(1, 3) = AVG3(left[0], top[-1], top[0]);
+    DST(1, 1) = DST(2, 3) = AVG3(left[1], left[0], top[-1]);
     DST(2, 1) = DST(3, 3) = AVG3P(left + 1);
     DST(3, 1) = AVG3P(left + 2);
 }
@@ -527,7 +527,55 @@ static PredFunc PredLuma16[4] = {
     pred_HE_16,
 };
 
-void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, int y) {
+static void add_residue_subblock(int16_t *coff, uint8_t *dst, int stride)
+{
+    /* each subblock is 4*4 size, it has 16 coffs in order */
+    int16_t *c = coff;
+    uint8_t *d = dst;
+    for (int l = 0; l < 16; l++) {
+        d[l % 4] = clamp((*c++) + d[l % 4], 255);
+        if (l % 4 == 3) {
+          d += stride;
+        }
+    }
+}
+
+static void add_luma_block(int16_t *coff, uint8_t *yout, int y_stride)
+{
+    int16_t *c = coff;
+    uint8_t *y = yout;
+    /* each X is 4X4 subblock, it has 16 coffs in order
+        XXXX
+        XXXX
+        XXXX
+        XXXX
+    */
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+          y = yout + i * 4 * y_stride + j * 4;
+          add_residue_subblock(c, y, y_stride);
+          c += 16;
+        }
+    }
+}
+
+static void add_chrome_block(int16_t *coff, uint8_t *uvout, int uv_stride)
+{
+    int16_t *c = coff;
+    uint8_t *uv;
+    /* each X is 4X4 subblock, it has 16 coffs in order
+        XX
+        XX
+    */
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            uv = uvout + i * 4 * uv_stride + j * 4;
+            add_residue_subblock(c, uv, uv_stride);
+            c += 16;
+        }
+    }
+}
+void pred_luma(int16_t *coff, int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, int y) {
     assert(ymode <= NUM_PRED_MODES);
 
     uint8_t left_default[16] = {
@@ -632,6 +680,7 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
 #endif
 
             lumabfunc(dst + ys * stride * 4 + xs * 4, top, left, stride, x, y);
+            add_residue_subblock(coff+16*n, dst + ys * stride * 4 + xs * 4, stride);
 #ifndef NDEBUG
             if (y == dy && x == dx) {
                 printf("%d %d: mode %d ", ys, xs, imodes[n]);
@@ -675,13 +724,22 @@ void pred_luma(int ymode, uint8_t imodes[16], uint8_t *dst, int stride, int x, i
 #ifndef NDEBUG
         if (x == dx && y == dy) {
             printf("%d %d: mode %d ", y, x, ymode);
-            mb_dump(stdout, "", dst, 16, stride);
+            mb_dump(stdout, "pred", dst, 16, stride);
+            // mb_dump(stdout, "coff", coff, 16, 16);
+            fprintf(stdout, "coff:\n");
+            for (int i = 0; i < 16; i++) {
+                for (int j = 0; j < 16; j++) {
+                    fprintf(stdout, "%03d ", *(coff + 16*i + j));
+                }
+                fprintf(stdout, "\n");
+            }
         }
 #endif
+        add_luma_block(coff, dst, stride);
     }
 }
 
-void pred_chrome(int imode, uint8_t *uout, uint8_t *vout, int stride,
+void pred_chrome(int16_t *coff, int imode, uint8_t *uout, uint8_t *vout, int stride,
                  int x, int y) {
     assert(imode < NUM_BMODES);
     PredFunc chromafunc = PredChroma8[imode];
@@ -721,14 +779,16 @@ void pred_chrome(int imode, uint8_t *uout, uint8_t *vout, int stride,
 
     // U
     chromafunc(uout, topu, leftu, stride, x, y);
+    add_chrome_block(coff, uout, stride);
 #ifndef NDEBUG
-    if (x == dx && y == dy) {
+        if (x == dx && y == dy) {
         printf("%d %d: mode %d ", y, x, imode);
         mb_dump(stdout, "", uout, 8, stride);
     }
 #endif
     // V
     chromafunc(vout, topv, leftv, stride, x, y);
+    add_chrome_block(coff+64, vout, stride);
 #ifndef NDEBUG
     if (x == dx && y == dy) {
         mb_dump(stdout, "", vout, 8, stride);

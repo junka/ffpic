@@ -5,33 +5,8 @@
 #include "predict.h"
 #include "utils.h"
 
-#define BPS (32)
-#define YUV_SIZE (BPS * 17 + BPS * 9)
-#define Y_OFF (BPS * 1 + 8)
-#define U_OFF (Y_OFF + BPS * 16 + BPS)
-#define V_OFF (U_OFF + 16)
-
 #define DST(y, x) dst[x + y*stride]
-//------------------------------------------------------------------------------
-// Transforms (Paragraph 14.4)
-static inline uint8_t clip_8b(int v) {
-    return (!(v & ~0xff)) ? v : (v < 0) ? 0 : 255;
-}
 
-#define STORE(x, y, v)                                                         \
-    dst[(x) + (y)*BPS] = clip_8b(dst[(x) + (y)*BPS] + ((v) >> 3))
-
-#define STORE2(y, dc, d, c)                                                    \
-    do {                                                                       \
-        const int DC = (dc);                                                   \
-        STORE(0, y, DC + (d));                                                 \
-        STORE(1, y, DC + (c));                                                 \
-        STORE(2, y, DC - (c));                                                 \
-        STORE(3, y, DC - (d));                                                 \
-    } while (0)
-
-#define MUL1(a) ((((a)*20091) >> 16) + (a))
-#define MUL2(a) (((a)*35468) >> 16)
 
 static inline void pred_TM(uint8_t *dst, uint8_t *top, uint8_t *left, int size, int stride) {
 
@@ -43,126 +18,8 @@ static inline void pred_TM(uint8_t *dst, uint8_t *top, uint8_t *left, int size, 
     }
 }
 
-static void TransformOne_C(const int16_t *in, uint8_t *dst) {
-    int C[4 * 4], *tmp;
-    int i;
-    tmp = C;
-    for (i = 0; i < 4; ++i) {                     // vertical pass
-        const int a = in[0] + in[8];              // [-4096, 4094]
-        const int b = in[0] - in[8];              // [-4095, 4095]
-        const int c = MUL2(in[4]) - MUL1(in[12]); // [-3783, 3783]
-        const int d = MUL1(in[4]) + MUL2(in[12]); // [-3785, 3781]
-        tmp[0] = a + d;                           // [-7881, 7875]
-        tmp[1] = b + c;                           // [-7878, 7878]
-        tmp[2] = b - c;                           // [-7878, 7878]
-        tmp[3] = a - d;                           // [-7877, 7879]
-        tmp += 4;
-        in++;
-    }
-    // Each pass is expanding the dynamic range by ~3.85 (upper bound).
-    // The exact value is (2. + (20091 + 35468) / 65536).
-    // After the second pass, maximum interval is [-3794, 3794], assuming
-    // an input in [-2048, 2047] interval. We then need to add a dst value
-    // in the [0, 255] range.
-    // In the worst case scenario, the input to clip_8b() can be as large as
-    // [-60713, 60968].
-    tmp = C;
-    for (i = 0; i < 4; ++i) { // horizontal pass
-        const int dc = tmp[0] + 4;
-        const int a = dc + tmp[8];
-        const int b = dc - tmp[8];
-        const int c = MUL2(tmp[4]) - MUL1(tmp[12]);
-        const int d = MUL1(tmp[4]) + MUL2(tmp[12]);
-        STORE(0, 0, a + d);
-        STORE(1, 0, b + c);
-        STORE(2, 0, b - c);
-        STORE(3, 0, a - d);
-        tmp++;
-        dst += BPS;
-    }
-}
-
-// Simplified transform when only in[0], in[1] and in[4] are non-zero
-static void TransformAC3_C(const int16_t *in, uint8_t *dst) {
-    const int a = in[0] + 4;
-    const int c4 = MUL2(in[4]);
-    const int d4 = MUL1(in[4]);
-    const int c1 = MUL2(in[1]);
-    const int d1 = MUL1(in[1]);
-    STORE2(0, a + d4, d1, c1);
-    STORE2(1, a + c4, d1, c1);
-    STORE2(2, a - c4, d1, c1);
-    STORE2(3, a - d4, d1, c1);
-}
-
-#undef MUL1
-#undef MUL2
-#undef STORE2
-
-static void TransformTwo_C(const int16_t *in, uint8_t *dst, int do_two) {
-    TransformOne_C(in, dst);
-    if (do_two) {
-        TransformOne_C(in + 16, dst + 4);
-    }
-}
-
-static void TransformUV_C(const int16_t *in, uint8_t *dst) {
-    TransformTwo_C(in + 0 * 16, dst, 1);
-    TransformTwo_C(in + 2 * 16, dst + 4 * BPS, 1);
-}
-
-static void TransformDC_C(const int16_t *in, uint8_t *dst) {
-    const int DC = in[0] + 4;
-    int i, j;
-    for (j = 0; j < 4; ++j) {
-        for (i = 0; i < 4; ++i) {
-            STORE(i, j, DC);
-        }
-    }
-}
-
-static void TransformDCUV_C(const int16_t *in, uint8_t *dst) {
-    if (in[0 * 16])
-        TransformDC_C(in + 0 * 16, dst);
-    if (in[1 * 16])
-        TransformDC_C(in + 1 * 16, dst + 4);
-    if (in[2 * 16])
-        TransformDC_C(in + 2 * 16, dst + 4 * BPS);
-    if (in[3 * 16])
-        TransformDC_C(in + 3 * 16, dst + 4 * BPS + 4);
-}
-
 //------------------------------------------------------------------------------
 // Main reconstruction function.
-
-static inline void DoTransform(uint32_t bits, const int16_t *const src,
-                               uint8_t *const dst) {
-    switch (bits >> 30) {
-    case 3:
-        TransformTwo_C(src, dst, 0);
-        break;
-    case 2:
-        TransformAC3_C(src, dst);
-        break;
-    case 1:
-        TransformDC_C(src, dst);
-        break;
-    default:
-        break;
-    }
-}
-
-static void DoUVTransform(uint32_t bits, const int16_t *const src,
-                          uint8_t *const dst) {
-    if (bits & 0xff) {     // any non-zero coeff at all?
-        if (bits & 0xaa) { // any non-zero AC coefficient?
-            TransformUV_C(src,
-                          dst); // note we don't use the AC3 variant for U/V
-        } else {
-            TransformDCUV_C(src, dst);
-        }
-    }
-}
 
 #define AVG3(a, b, c)  ((uint8_t)(((uint32_t)(a) + ((uint32_t)(b) * 2) + (c) + 2) >> 2))
 #define AVG2(a, b) (((a) + (b) + 1) >> 1)

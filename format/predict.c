@@ -35,9 +35,6 @@ static void pred_B_DC(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     // DC
     uint32_t dc = 0;
     int i;
-    // for (i = 0; i < 4; ++i)
-    //   dc += dst[i - BPS] + dst[-1 + i * BPS];
-    // dc >>= 3;
     for (i = 0; i < 4; i++) {
         dc += left[i] + top[i];
     }
@@ -84,7 +81,6 @@ static void pred_B_VE(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
     | L3 | | | | | | | | |   |   |   |   |
     |----|---|---|---|---|---|---|---|---|
     */
-    // const uint8_t *top = dst - BPS;
     const uint8_t vals[4] = {
         AVG3P(top),
         AVG3P(top + 1),
@@ -158,15 +154,6 @@ static void pred_B_RD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     | L  | \ | \ | \ | \ |   |   |   |   |
     |----|---|---|---|---|---|---|---|---|
     */
-    // const int I = dst[-1 + 0 * BPS];
-    // const int J = dst[-1 + 1 * BPS];
-    // const int K = dst[-1 + 2 * BPS];
-    // const int L = dst[-1 + 3 * BPS];
-    // const int X = dst[-1 - BPS];
-    // const int A = dst[0 - BPS];
-    // const int B = dst[1 - BPS];
-    // const int C = dst[2 - BPS];
-    // const int D = dst[3 - BPS];
     DST(0, 3) = AVG3P(top + 2);
     DST(1, 3) = DST(0, 2) = AVG3P(top + 1);
     DST(2, 3) = DST(1, 2) = DST(0, 1) = AVG3P(top);

@@ -444,7 +444,7 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
     for (int i = 0; i < num; i ++)
     {
         int partsize = size[i*3] | size[i*3 + 1] << 8 | size[i*3 + 2] << 16;
-        VDBG(webp, "partsize %d\n", partsize);
+        VDBG(webp, "partsize %d", partsize);
         w->p[i].start = next_part;
         w->p[i].len = partsize;
 
@@ -1526,16 +1526,17 @@ vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
 
     // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
 
-    VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
 
     pred_luma(block->coeffs, block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
-    // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
-
+    
     pred_chrome(block->coeffs+256, block->intra_uv_mode, uout, vout, uv_stride,
                 block->x, y);
-    mb_dump(vlog_get_stream(), "after pred", yout, 16, y_stride);
-    // mb_dump(vlog_get_stream(), "", uout, 8, uv_stride);
-    // mb_dump(vlog_get_stream(), "", vout, 8, uv_stride);
+    // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
+    // mb_dump(vlog_get_stream(), "after pred", yout, 16, y_stride);
+
+    // VDBG(webp, "y %d, x %d, mode %d:", y, block->x, block->intra_uv_mode);
+    // mb_dump(vlog_get_stream(), "after pred", uout, 8, uv_stride);
+    // mb_dump(vlog_get_stream(), "after pred", vout, 8, uv_stride);
 }
 
 //-------------------------------------------------------------------------
@@ -1895,12 +1896,10 @@ precompute_filter(WEBP *w)
     }
 }
 
-static void YUV420_to_BGRA32(uint8_t *ptr, uint8_t* yout, uint8_t *uout, uint8_t *vout,
+static void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t* yout, uint8_t *uout, uint8_t *vout,
                             int y_stride, int uv_stride, int mbrows, int mbcols)
 {
-    int pitch = y_stride * 4;
     uint8_t *p = ptr, *p2 = ptr;
-    int next_off = pitch - 16 * 4;
     int height = mbrows * 16;
     int width = mbcols * 16;
     int right_space = pitch - width * 4;
@@ -1908,7 +1907,12 @@ static void YUV420_to_BGRA32(uint8_t *ptr, uint8_t* yout, uint8_t *uout, uint8_t
     int16_t yy, u, v;
     uint8_t r, g, b;
 
-    VDBG(webp, "pitch %d, right space %d\n", pitch, right_space);
+    VDBG(webp, "pitch %d, right space %d", pitch, right_space);
+    /*
+  p XXXX p2
+    XXXX XXXX XXXX
+    XXXX XXXX XXXX
+    */
 
     for (int y = 0; y < mbrows; y++) {
         for (int x = 0; x < mbcols; x++) {
@@ -1917,27 +1921,25 @@ static void YUV420_to_BGRA32(uint8_t *ptr, uint8_t* yout, uint8_t *uout, uint8_t
             V = vout + 8 * uv_stride * y + x * 8;
             p = p2;
             for (int i = 0; i < 16; i++) {
+                if (i == 0) {
+                    p2 = p + 16 * 4;
+                }
                 for (int j = 0; j < 16; j++) {
-                    yy = Y[i * y_stride + j]; // -16;
+                    yy = Y[i * y_stride + j] - 16;
                     u = U[(i / 2) * uv_stride + (j / 2)] - 128;
                     v = V[(i / 2) * uv_stride + (j / 2)] - 128;
                     r = clamp(yy + 1.4075 * v, 255);
                     g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
                     b = clamp(yy + 1.779 * u, 255);
-                    *p++ = b;
-                    *p++ = g;
-                    *p++ = r;
-                    *p++ = 0xFF;
+                    p[4 * j] = b;
+                    p[4 * j + 1] = g;
+                    p[4 * j + 2] = r;
+                    p[4 * j + 3] = 0xFF;
                 }
-                if (i == 0) {
-                    p2 = p;
-                }
-                if (i < 16) {
-                    p += (y_stride - 16) * 4;
-                }
+                p += pitch;
             }
         }
-        p2 = p + right_space;
+        p2 = p - pitch + 16 * 4 + right_space;
     }
 }
 
@@ -1952,6 +1954,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int mbcols = (width + 15) >> 4;
     int y_stride = mbcols * 16;       // 16 * 16 Y
     int uv_stride = y_stride >> 1;  // 8 * 8   U
+    int pitch = ((width * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
 
     //reserve YUV data
     w->data = malloc(4 * height * (y_stride));
@@ -1965,7 +1968,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     // one more struct for left of zero col
     struct context *top = calloc(mbcols, sizeof(struct context));
 
-    VDBG(webp, "rows %d, cols %d\n", mbrows, mbcols);
+    VDBG(webp, "rows %d, cols %d", mbrows, mbcols);
 
     // Section 19.3: Macroblock header & Data
     for (int y = 0; y < mbrows; y++) {
@@ -2003,7 +2006,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
         }
     }
 
-    YUV420_to_BGRA32(w->data, Y, U, V, y_stride, uv_stride, mbrows, mbcols);
+    YUV420_to_BGRA32(w->data, pitch, Y, U, V, y_stride, uv_stride, mbrows,
+                     mbcols);
 }
 
 int WEBP_read_frame(WEBP *w, FILE *f)
@@ -2133,7 +2137,11 @@ WEBP_load(const char *filename)
     }
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    // printf("width %d, pitch %d\n", p->width, p->pitch);
+    p->rmask = 0x00ff0000u;
+    p->gmask = 0x0000ff00u;
+    p->bmask = 0x000000ffu;
+    p->amask = 0xff000000u;
+    VDBG(webp, "decoded with width %d, pitch %d\n", p->width, p->pitch);
     p->pixels = w->data;
 
     return p;

@@ -248,7 +248,7 @@ struct macro_block {
     uint8_t intra_uv_mode; // chroma prediction mode
     uint8_t imodes[16];    // one 16x16 mode (#0) or sixteen 4x4 modes
 
-    int16_t coeffs[384];   // 384 coeffs = (16+4+4) * 4*4
+    // int16_t coeffs[384];   // 384 coeffs = (16+4+4) * 4*4
 
     uint8_t dither;        // local dithering strength (deduced from non_zero_*)
 

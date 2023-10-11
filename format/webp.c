@@ -1154,17 +1154,13 @@ struct context {
  * @return an integer value of 0.
  */
 static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
-                                     struct context *left, struct context *top,
-                                     bool_dec *bt) 
-{
+                                     int16_t *dst, struct context *left,
+                                     struct context *top, bool_dec *bt) {
 
     static const int coeff_bands[16] = {0, 1, 2, 3, 6, 4, 5, 6,
                                  6, 6, 6, 6, 6, 6, 6, 7};
 
     const VP8BandProbas *bands[NUM_TYPES][16];
-    int16_t* dst = block->coeffs;
-    memset(dst, 0, 384 * sizeof(*dst));
-    // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
 
     struct WEBP_decoder *d = &w->d[block->segment_id];
 
@@ -1245,17 +1241,19 @@ typedef struct {  // filter specs
 static VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
 static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
-                                    bool_dec *bt, struct context *left,
-                                    struct context *top, VP8FInfo *finfo) 
-{
+                                    int16_t *coeffs, bool_dec *bt,
+                                    struct context *left, struct context *top,
+                                    VP8FInfo *finfo) {
   // int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
-  //     w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
-  // 0=off, 1=simple, 2=complex
+  //        w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
+  //  0=none, 1=simple, 2=complex
 
   // see section 19.3
   if (!block->mb_skip_coeff) {
-        vp8_decode_residual_block(w, block, left, top, bt);
-    } else {
+        // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
+        memset(coeffs, 0, 384 * sizeof(int16_t));
+        vp8_decode_residual_block(w, block, coeffs, left, top, bt);
+  } else {
         // 1 DC
         if (block->intra_y_mode != B_PRED) {
             left->ctx[0] = 0;
@@ -1267,7 +1265,7 @@ static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
             top[block->x].ctx[i] = 0;
         }
         block->dither = 0;
-    }
+  }
 
     // if (filter_type) {
     //     *finfo = fstrengths[block->segment_id][block->intra_y_mode==B_PRED];
@@ -1332,12 +1330,13 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
     struct macro_block fake_left = {
         .intra_y_mode = 0,
     };
+    struct macro_block fake_top = {
+        .intra_y_mode = 0,
+    };
     int width = ((w->fi.width + 3) >> 2) << 2;
     int cols = (width + 15) >> 4;
-    // int intra_size = (width + 15) >> 2;
 
     mb->x = x;
-
     // see 9.3.5, section 10, ref section 20.11
     if (w->k.segmentation.update_mb_segmentation_map) {
         mb->segment_id = !BOOL_DECODE(bt, w->k.segmentation.segment_prob[0]) ?
@@ -1481,9 +1480,8 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
     mb->imodes[0] = intra_y_mode;
     if (intra_y_mode == B_PRED) {
         // Paragraph 11.5
-        struct macro_block *above = mb - cols;
         for (int i = 0; i < 16; i++) {
-            int a = above_block_mode(mb, above, i);
+            int a = above_block_mode(mb, (y > 0) ? mb - cols : &fake_top, i);
             int l = left_block_mode(mb, (x > 0) ? (mb - 1 ) : &fake_left, i);
             int intra_b_mode = BOOL_TREE(bt, bmode_tree, kf_bmode_prob[a][l]);
             mb->imodes[i] = intra_b_mode;
@@ -1501,25 +1499,10 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
     // VDBG(webp, "y %d, x %d: ymode %d, uvmode %d", y, x, mb->intra_y_mode, mb->intra_uv_mode);
 }
 
-// typedef struct {
-//     uint8_t y[16], u[8], v[8];
-// } topsamples;
-
-typedef struct {
-    uint8_t *m;
-    uint8_t *y;
-    uint8_t *u;
-    uint8_t *v;
-    int y_stride;
-    int uv_stride;
-} cache;
-
 /* see h264 8.3 */
-static void
-vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
-                uint8_t* yout, uint8_t* uout, uint8_t* vout,
-                int y_stride, int uv_stride)
-{
+static void vp8_prerdict_mb(WEBP *w, struct macro_block *block, int16_t *coeffs,
+                            int y, uint8_t *yout, uint8_t *uout, uint8_t *vout,
+                            int y_stride, int uv_stride) {
     // VDBG(webp, "left %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
     // left[0], left[1], left[2], left[3], left[4], left[5], left[6], left[7],
     // left[8], left[9], left[10], left[11], left[12], left[13], left[14], left[15]);
@@ -1527,9 +1510,9 @@ vp8_prerdict_mb(WEBP *w, struct macro_block *block, int y,
     // VDBG(webp, "ymode %d, imodes0 %d", block->intra_y_mode, block->imodes[0]);
 
 
-    pred_luma(block->coeffs, block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
+    pred_luma(coeffs, block->intra_y_mode, block->imodes, yout, y_stride, block->x, y);
     
-    pred_chrome(block->coeffs+256, block->intra_uv_mode, uout, vout, uv_stride,
+    pred_chrome(coeffs+256, block->intra_uv_mode, uout, vout, uv_stride,
                 block->x, y);
     // VDBG(webp, "y %d, x %d, pred%d %d:", y, block->x, block->intra_y_mode == B_PRED ? 4 : 16, block->imodes[0]);
     // mb_dump(vlog_get_stream(), "after pred", yout, 16, y_stride);
@@ -1757,87 +1740,85 @@ static void HFilter8i_C(uint8_t* u, uint8_t* v, int stride,
 }
 
 static void
-DoFilter(WEBP *w, int filter_type, int x, int y, cache *c, VP8FInfo *finfo)
+DoFilter(WEBP *w, int filter_type, int x, int y, uint8_t *Y, uint8_t *U, uint8_t *V, int y_stride, int uv_stride, VP8FInfo *finfo)
 {
     int cache_id = 0;
-    int y_bps = c->y_stride;
-    uint8_t* const y_dst = c->y + cache_id * 16 * y_bps + x * 16;
+    uint8_t* const y_dst = Y + cache_id * 16 * y_stride + x * 16;
     const int ilevel = finfo->f_ilevel;
     const int limit = finfo->f_limit;
 
     if (filter_type == 1) {
         if (x > 0) {
-            SimpleHFilter16_C(y_dst, y_bps, limit + 4);
+            SimpleHFilter16_C(y_dst, y_stride, limit + 4);
         }
         if (finfo->f_inner) {
-            SimpleHFilter16i_C(y_dst, y_bps, limit);
+            SimpleHFilter16i_C(y_dst, y_stride, limit);
         }
         if (y > 0) {
-            SimpleVFilter16_C(y_dst, y_bps, limit + 4);
+            SimpleVFilter16_C(y_dst, y_stride, limit + 4);
         }
         if (finfo->f_inner) {
-            SimpleVFilter16i_C(y_dst, y_bps, limit);
+            SimpleVFilter16i_C(y_dst, y_stride, limit);
         }
     } else { //complex
-        int uv_bps = c->uv_stride;
-        uint8_t * u_dst = c->u + x * 8 + cache_id * uv_bps * 8;
-        uint8_t * v_dst = c->v + x * 8 + cache_id * uv_bps * 8;
+        uint8_t *u_dst = U + x * 8 + cache_id * uv_stride * 8;
+        uint8_t *v_dst = V + x * 8 + cache_id * uv_stride * 8;
         const int hev_thresh = finfo->hev_thresh;
         if (x > 0) {
-            HFilter16_C(y_dst, y_bps, limit + 4, ilevel, hev_thresh);
-            HFilter8_C(u_dst, v_dst, uv_bps, limit + 4, ilevel, hev_thresh);
+            HFilter16_C(y_dst, y_stride, limit + 4, ilevel, hev_thresh);
+            HFilter8_C(u_dst, v_dst, uv_stride, limit + 4, ilevel, hev_thresh);
         }
         if (finfo->f_inner) {
-            HFilter16i_C(y_dst, y_bps, limit, ilevel, hev_thresh);
-            HFilter8i_C(u_dst, v_dst, uv_bps, limit, ilevel, hev_thresh);
+            HFilter16i_C(y_dst, y_stride, limit, ilevel, hev_thresh);
+            HFilter8i_C(u_dst, v_dst, uv_stride, limit, ilevel, hev_thresh);
         }
         if (y > 0) {
-            VFilter16_C(y_dst, y_bps, limit + 4, ilevel, hev_thresh);
-            VFilter8_C(u_dst, v_dst, uv_bps, limit + 4, ilevel, hev_thresh);
+            VFilter16_C(y_dst, y_stride, limit + 4, ilevel, hev_thresh);
+            VFilter8_C(u_dst, v_dst, uv_stride, limit + 4, ilevel, hev_thresh);
         }
         if (finfo->f_inner) {
-            VFilter16i_C(y_dst, y_bps, limit, ilevel, hev_thresh);
-            VFilter8i_C(u_dst, v_dst, uv_bps, limit, ilevel, hev_thresh);
+            VFilter16i_C(y_dst, y_stride, limit, ilevel, hev_thresh);
+            VFilter8i_C(u_dst, v_dst, uv_stride, limit, ilevel, hev_thresh);
         }
     }
 }
 
 // Filter the decoded macroblock row (if needed)
-static void
-FilterRow(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
-{
+static void FilterRow(WEBP *w, int filter_type, int y, uint8_t *Y, uint8_t *U,
+                      uint8_t *V, int y_stride, int uv_stride,
+                      VP8FInfo *finfos) {
     int width = ((w->fi.width + 3) >> 2) << 2;
     for (int x = 0; x < (width + 15) >> 4; ++ x) {
         VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
-        DoFilter(w, filter_type, x, y, c, finfo);
+        DoFilter(w, filter_type, x, y, Y, U, V, y_stride, uv_stride, finfo);
     }
 }
 
-static int
-loopfilter(WEBP *w, int filter_type, int y, cache *c, VP8FInfo *finfos)
-{
+static int loopfilter(WEBP *w, int filter_type, int y, uint8_t *Y, uint8_t *U,
+                      uint8_t *V, int y_stride, int uv_stride,
+                      VP8FInfo *finfos) {
     int filter_now = (filter_type > 0);
     int height = w->fi.height;
     const int extra_y_rows = filter_type * 3 - 1;
     const int cache_id = 0;
-    const int ysize = extra_y_rows * c->y_stride;
-    const int uvsize = (extra_y_rows / 2) * c->uv_stride;
-    const int y_offset = cache_id * 16 * c->y_stride;
-    const int uv_offset = cache_id * 8 * c->uv_stride;
-    uint8_t* const ydst = c->y - ysize + y_offset;
-    uint8_t* const udst = c->u - uvsize + uv_offset;
-    uint8_t* const vdst = c->v - uvsize + uv_offset;
+    const int ysize = extra_y_rows * y_stride;
+    const int uvsize = (extra_y_rows / 2) * uv_stride;
+    const int y_offset = cache_id * 16 * y_stride;
+    const int uv_offset = cache_id * 8 * uv_stride;
+    uint8_t* const ydst = Y - ysize + y_offset;
+    uint8_t* const udst = U - uvsize + uv_offset;
+    uint8_t* const vdst = V - uvsize + uv_offset;
     const int is_first_row = (y == 0);
     const int is_last_row = (y >= ((height + 15) >> 4) - 1);
 
     if (filter_now) {
-        FilterRow(w, filter_type, y, c, finfos);
+        FilterRow(w, filter_type, y, Y, U, V, y_stride, uv_stride, finfos);
     }
 
     if (!is_last_row) {
-        memcpy(c->y - ysize, ydst + 16 * c->y_stride, ysize);
-        memcpy(c->u - uvsize, ydst + 8 * c->uv_stride, uvsize);
-        memcpy(c->v - uvsize, ydst + 8 * c->uv_stride, uvsize);
+        memcpy(Y - ysize, ydst + 16 * y_stride, ysize);
+        memcpy(U - uvsize, ydst + 8 * uv_stride, uvsize);
+        memcpy(V - uvsize, ydst + 8 * uv_stride, uvsize);
     }
 
     return 0;
@@ -1964,6 +1945,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 
     VDBG(webp, "rows %d, cols %d", mbrows, mbcols);
 
+    int16_t coeffs[384]; // 384 coeffs = (16+4+4) * 4*4
+
     // Section 19.3: Macroblock header & Data
     for (int y = 0; y < mbrows; y++) {
 
@@ -1976,17 +1959,12 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
         for (int x = 0; x < mbcols; x++) {
             block = blocks + y * mbcols + x;
             vp8_decode_mb_header(w, br, block, y, x);
-            vp8_decode_residual_data(w, block, bt, &left, top, NULL);
-        }
-    }
+            vp8_decode_residual_data(w, block, coeffs, bt, &left, top, NULL);
 
-    for (int y = 0; y < mbrows; y++) {
-        for (int x = 0; x < mbcols; x++) {
-            block = blocks + y * mbcols + x;
             uint8_t *yout = Y + y_stride * y * 16 + x * 16;
             uint8_t *uout = U + 8 * uv_stride * y + x * 8;
             uint8_t *vout = V + 8 * uv_stride * y + x * 8;
-            vp8_prerdict_mb(w, block, y, yout, uout, vout, y_stride, uv_stride);
+            vp8_prerdict_mb(w, block, coeffs, y, yout, uout, vout, y_stride, uv_stride);
         }
     }
 

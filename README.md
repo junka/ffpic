@@ -33,6 +33,7 @@ supported file formart is:
 |  JPG  |    y     |         jpeg lossy image         |
 |  ICO  |    y     |        icon bitmap image         |
 |  EXR  |    y     |          OpenEXR image           |
+| WEBP  |    y     |         WEBP lossy image         |
 
 [Format reference](http://www.martinreddy.net/gfx/2d-hi.html)
 

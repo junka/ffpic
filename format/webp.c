@@ -1929,7 +1929,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int mbcols = (width + 15) >> 4;
     int y_stride = mbcols * 16;       // 16 * 16 Y
     int uv_stride = y_stride >> 1;  // 8 * 8   U
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
+    int pitch = ((y_stride * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
 
     //reserve YUV data
     w->data = malloc(4 * height * (y_stride));
@@ -2163,6 +2163,7 @@ WEBP_load(const char *filename)
         if (chead == CHUNCK_HEADER("VP8X")) {
             fseek(f, -4, SEEK_CUR);
             fread(&w->vp8x, sizeof(struct webp_vp8x), 1, f);
+            VINFO(webp, "VP8X\n");
             if (w->vp8x.size != sizeof(struct webp_vp8x) - 8) {
                 pic_free(p);
                 fclose(f);
@@ -2173,6 +2174,7 @@ WEBP_load(const char *filename)
         } else if (chead == CHUNCK_HEADER("ALPH")) {
             fseek(f, -4, SEEK_CUR);
             fread(&w->alpha, sizeof(struct webp_alpha), 1, f);
+            VINFO(webp, "ALPH\n");
             if (w->alpha.size != sizeof(struct webp_alpha) - 8) {
                 pic_free(p);
                 fclose(f);
@@ -2214,7 +2216,7 @@ WEBP_load(const char *filename)
         p->height = ((w->fi.height + 3) >> 2) << 2;
     }
     p->depth = 32;
-    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
+    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     p->rmask = 0x00ff0000u;
     p->gmask = 0x0000ff00u;
     p->bmask = 0x000000ffu;

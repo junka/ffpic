@@ -505,12 +505,45 @@ PNG_free(struct pic* p)
     PNG *b = (PNG *)(p->pic);
     if (b->palette)
         free(b->palette);
-    if (b->itextual)
+    if (b->itextual) {
+        if (b->itextual->keyword) {
+            free(b->itextual->keyword);
+        }
+        if (b->itextual->text) {
+            free(b->itextual->text);
+        }
+        if (b->itextual->language_tag) {
+            free(b->itextual->language_tag);
+        }
+        if (b->itextual->translated_keyword) {
+            free(b->itextual->translated_keyword);
+        }
         free(b->itextual);
-    if (b->textual)
+    }
+    if (b->textual) {
+        if (b->textual->keyword) {
+            free(b->textual->keyword);
+        }
+        if (b->textual->text) {
+            free(b->textual->text);
+        }
         free(b->textual);
-    if (b->ctextual)
+    }
+    if (b->ctextual) {
+        if (b->ctextual->keyword) {
+            free(b->ctextual->keyword);
+        }
+        if (b->ctextual->compressed_text) {
+            free(b->ctextual->compressed_text);
+        }
         free(b->ctextual);
+    }
+    if (b->icc.name) {
+        free(b->icc.name);
+    }
+    if (b->icc.compression_profile) {
+        free(b->icc.compression_profile);
+    }
     if (b->freqs)
         free(b->freqs);
     if (b->data)

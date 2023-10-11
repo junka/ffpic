@@ -286,6 +286,12 @@ struct WEBP_decoder {
     
 };
 
+typedef struct vp8_filter{
+    uint8_t sub_limit;   // inter- macroblock limit in [3..189], or 0 if no filtering
+    uint8_t inter_limit;  // inter- subblock limit in [1..63], or 0 if no filtering
+    uint8_t hev_thresh; // high edge variance threshold in [0..2]
+} VP8Filter;
+
 typedef struct {
     struct webp_header header;
     struct webp_vp8x vp8x;
@@ -298,7 +304,8 @@ typedef struct {
     struct vp8_key_frame_extra fi;
     struct vp8_key_frame_header k;
     struct partition p[MAX_PARTI_NUM];
-    struct WEBP_decoder d[4]; // different segment has different parameters
+    struct WEBP_decoder d[NUM_MB_SEGMENTS]; // different segment has different parameters
+    struct vp8_filter filters[NUM_MB_SEGMENTS][2];
 
     uint8_t *data;
 } WEBP;

@@ -1231,46 +1231,29 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
     return 0;
 }
 
-typedef struct {  // filter specs
-  uint8_t f_limit;      // filter limit in [3..189], or 0 if no filtering
-  uint8_t f_ilevel;     // inner limit in [1..63]
-  uint8_t f_inner;      // do inner filtering?
-  uint8_t hev_thresh;   // high edge variance threshold in [0..2]
-} VP8FInfo;
-
-static VP8FInfo fstrengths[NUM_MB_SEGMENTS][2];
 
 static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
                                     int16_t *coeffs, bool_dec *bt,
-                                    struct context *left, struct context *top,
-                                    VP8FInfo *finfo) {
-  // int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
-  //        w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
-  //  0=none, 1=simple, 2=complex
+                                    struct context *left, struct context *top) {
 
-  // see section 19.3
-  if (!block->mb_skip_coeff) {
-        // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
-        memset(coeffs, 0, 384 * sizeof(int16_t));
-        vp8_decode_residual_block(w, block, coeffs, left, top, bt);
-  } else {
-        // 1 DC
-        if (block->intra_y_mode != B_PRED) {
-            left->ctx[0] = 0;
-            top[block->x].ctx[0] = 0;
-        }
-        //  4 luma and 4 chrome
-        for (int i = 1; i < 9; i++) {
-            left->ctx[i] = 0;
-            top[block->x].ctx[i] = 0;
-        }
-        block->dither = 0;
-  }
-
-    // if (filter_type) {
-    //     *finfo = fstrengths[block->segment_id][block->intra_y_mode==B_PRED];
-    //     finfo->f_inner |= !skip;
-    // }
+    // see section 19.3
+    if (!block->mb_skip_coeff) {
+            // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
+            memset(coeffs, 0, 384 * sizeof(int16_t));
+            vp8_decode_residual_block(w, block, coeffs, left, top, bt);
+    } else {
+            // 1 DC
+            if (block->intra_y_mode != B_PRED) {
+                left->ctx[0] = 0;
+                top[block->x].ctx[0] = 0;
+            }
+            //  4 luma and 4 chrome
+            for (int i = 1; i < 9; i++) {
+                left->ctx[i] = 0;
+                top[block->x].ctx[i] = 0;
+            }
+            block->dither = 0;
+    }
     return 0;
 }
 
@@ -1525,13 +1508,6 @@ static void vp8_prerdict_mb(WEBP *w, struct macro_block *block, int16_t *coeffs,
 //-------------------------------------------------------------------------
 // Filtering
 
-// kFilterExtraRows[] = How many extra lines are needed on the MB boundary
-// for caching, given a filtering level.
-// Simple filter:  up to 2 luma samples are read and 1 is written.
-// Complex filter: up to 4 luma samples are read and 3 are written. Same for
-//                 U/V, so it's 8 samples total (because of the 2x upsampling).
-static const uint8_t kFilterExtraRows[3] = { 0, 2, 8 };
-
 typedef void (*VP8SimpleFilterFunc)(uint8_t* p, int stride, int thresh);
 
 // 4 pixels in, 2 pixels out
@@ -1739,140 +1715,122 @@ static void HFilter8i_C(uint8_t* u, uint8_t* v, int stride,
     FilterLoop24_C(v + 4, 1, stride, 8, thresh, ithresh, hev_thresh);
 }
 
-static void
-DoFilter(WEBP *w, int filter_type, int x, int y, uint8_t *Y, uint8_t *U, uint8_t *V, int y_stride, int uv_stride, VP8FInfo *finfo)
+static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y, uint8_t *y_dst, uint8_t *u_dst,
+                      uint8_t *v_dst, int y_stride, int uv_stride)
 {
-    int cache_id = 0;
-    uint8_t* const y_dst = Y + cache_id * 16 * y_stride + x * 16;
-    const int ilevel = finfo->f_ilevel;
-    const int limit = finfo->f_limit;
 
+    VP8Filter *filter = &w->filters[block->segment_id][block->intra_y_mode == B_PRED];
+    // bool skip_sub_filter =
+        // ((block->intra_y_mode != B_PRED) && (block->mb_skip_coeff));
+    bool skip_sub_filter = (block->intra_y_mode != B_PRED);
+
+    const int sub_limit = filter->sub_limit;
+    const int inter_limit = filter->inter_limit;
+    const int mb_limit = sub_limit + 4;
+    VDBG(webp, "y %d, x %d, filter_type %d: %d, sub_limit %d", y, block->x, filter_type,
+         !skip_sub_filter, sub_limit);
+    if (!sub_limit) {
+        return 0;
+    }
     if (filter_type == 1) {
-        if (x > 0) {
-            SimpleHFilter16_C(y_dst, y_stride, limit + 4);
+
+        // step 1: If M is not on the leftmost column of macroblocks, filter
+        // across
+        //    the left (vertical) inter-macroblock edge of M
+        if (block->x > 0) {
+            SimpleHFilter16_C(y_dst, y_stride, mb_limit);
         }
-        if (finfo->f_inner) {
-            SimpleHFilter16i_C(y_dst, y_stride, limit);
+        // step 2: Filter across the vertical subblock edges within M.
+        if (!skip_sub_filter) {
+            SimpleHFilter16i_C(y_dst, y_stride, sub_limit);
+        }
+        // step 3: If M is not on the topmost row of macroblocks, filter
+        // across the
+        //    top (horizontal) inter-macroblock edge of M.
+        if (y > 0) {
+            SimpleVFilter16_C(y_dst, y_stride, mb_limit);
+        }
+        // step 4: Filter across the horizontal subblock edges within M.
+        if (!skip_sub_filter) {
+            SimpleVFilter16i_C(y_dst, y_stride, sub_limit);
+        }
+    } else {
+        // normal, also follow the 4 steps like above
+        const int hev_thresh = filter->hev_thresh;
+        if (block->x > 0) {
+            HFilter16_C(y_dst, y_stride, mb_limit, inter_limit, hev_thresh);
+            HFilter8_C(u_dst, v_dst, uv_stride, mb_limit, inter_limit,
+                        hev_thresh);
+        }
+        if (skip_sub_filter) {
+            HFilter16i_C(y_dst, y_stride, sub_limit, inter_limit,
+                            hev_thresh);
+            HFilter8i_C(u_dst, v_dst, uv_stride, sub_limit, inter_limit,
+                        hev_thresh);
         }
         if (y > 0) {
-            SimpleVFilter16_C(y_dst, y_stride, limit + 4);
+            VFilter16_C(y_dst, y_stride, mb_limit, inter_limit, hev_thresh);
+            VFilter8_C(u_dst, v_dst, uv_stride, mb_limit, inter_limit,
+                        hev_thresh);
         }
-        if (finfo->f_inner) {
-            SimpleVFilter16i_C(y_dst, y_stride, limit);
+        if (skip_sub_filter) {
+            VFilter16i_C(y_dst, y_stride, sub_limit, inter_limit,
+                            hev_thresh);
+            VFilter8i_C(u_dst, v_dst, uv_stride, sub_limit, inter_limit,
+                        hev_thresh);
         }
-    } else { //complex
-        uint8_t *u_dst = U + x * 8 + cache_id * uv_stride * 8;
-        uint8_t *v_dst = V + x * 8 + cache_id * uv_stride * 8;
-        const int hev_thresh = finfo->hev_thresh;
-        if (x > 0) {
-            HFilter16_C(y_dst, y_stride, limit + 4, ilevel, hev_thresh);
-            HFilter8_C(u_dst, v_dst, uv_stride, limit + 4, ilevel, hev_thresh);
-        }
-        if (finfo->f_inner) {
-            HFilter16i_C(y_dst, y_stride, limit, ilevel, hev_thresh);
-            HFilter8i_C(u_dst, v_dst, uv_stride, limit, ilevel, hev_thresh);
-        }
-        if (y > 0) {
-            VFilter16_C(y_dst, y_stride, limit + 4, ilevel, hev_thresh);
-            VFilter8_C(u_dst, v_dst, uv_stride, limit + 4, ilevel, hev_thresh);
-        }
-        if (finfo->f_inner) {
-            VFilter16i_C(y_dst, y_stride, limit, ilevel, hev_thresh);
-            VFilter8i_C(u_dst, v_dst, uv_stride, limit, ilevel, hev_thresh);
-        }
-    }
-}
-
-// Filter the decoded macroblock row (if needed)
-static void FilterRow(WEBP *w, int filter_type, int y, uint8_t *Y, uint8_t *U,
-                      uint8_t *V, int y_stride, int uv_stride,
-                      VP8FInfo *finfos) {
-    int width = ((w->fi.width + 3) >> 2) << 2;
-    for (int x = 0; x < (width + 15) >> 4; ++ x) {
-        VP8FInfo *finfo = finfos + y *((width + 15) >> 4) + x;
-        DoFilter(w, filter_type, x, y, Y, U, V, y_stride, uv_stride, finfo);
-    }
-}
-
-static int loopfilter(WEBP *w, int filter_type, int y, uint8_t *Y, uint8_t *U,
-                      uint8_t *V, int y_stride, int uv_stride,
-                      VP8FInfo *finfos) {
-    int filter_now = (filter_type > 0);
-    int height = w->fi.height;
-    const int extra_y_rows = filter_type * 3 - 1;
-    const int cache_id = 0;
-    const int ysize = extra_y_rows * y_stride;
-    const int uvsize = (extra_y_rows / 2) * uv_stride;
-    const int y_offset = cache_id * 16 * y_stride;
-    const int uv_offset = cache_id * 8 * uv_stride;
-    uint8_t* const ydst = Y - ysize + y_offset;
-    uint8_t* const udst = U - uvsize + uv_offset;
-    uint8_t* const vdst = V - uvsize + uv_offset;
-    const int is_first_row = (y == 0);
-    const int is_last_row = (y >= ((height + 15) >> 4) - 1);
-
-    if (filter_now) {
-        FilterRow(w, filter_type, y, Y, U, V, y_stride, uv_stride, finfos);
-    }
-
-    if (!is_last_row) {
-        memcpy(Y - ysize, ydst + 16 * y_stride, ysize);
-        memcpy(U - uvsize, ydst + 8 * uv_stride, uvsize);
-        memcpy(V - uvsize, ydst + 8 * uv_stride, uvsize);
     }
 
     return 0;
 }
 
-/* see 15.1 */
+/* see 15.4 control parameters */
 static void
-precompute_filter(WEBP *w)
+calculate_filter_control_parameter(WEBP *w, int segment_id, int is_4x4)
 {
-    int filter_type = (w->k.loop_filter_level == 0) ? 0 : w->k.filter_type ? 1 : 2;
-
+    int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE
+                      : w->k.filter_type            ? WEBP_FILTER_SIMPLE
+                                                    : WEBP_FILTER_NORMAL;
     // precompute the filtering strength for each segment and each i4x4/i16x16 mode
     if (filter_type) {
-        for (int s = 0; s < NUM_MB_SEGMENTS; s++) {
-            int base_level;
-            if (w->k.segmentation.segmentation_enabled) {
-                base_level = w->k.segmentation.lf[s].lf_update_value;
-                if (!w->k.segmentation.segment_feature_mode) {
-                    base_level += w->k.loop_filter_level;
-                }
+        int base_level = w->k.loop_filter_level;
+        if (w->k.segmentation.segmentation_enabled) {
+            if (!w->k.segmentation.segment_feature_mode) {
+                base_level += w->k.segmentation.lf[segment_id].lf_update_value;
             } else {
-                base_level = w->k.loop_filter_level;
+                base_level = w->k.segmentation.lf[segment_id].lf_update_value;
             }
-            for (int i4x4 = 0; i4x4 <=1; i4x4 ++) {
-                VP8FInfo* const info = &fstrengths[s][i4x4];
-                int level = base_level;
-                if (w->k.mb_lf_adjustments.loop_filter_adj_enable) {
-                    level += w->k.mb_lf_adjustments.mode_ref_lf_delta_update[0];
-                    if (i4x4) {
-                        level += w->k.mb_lf_adjustments.mb_mode_delta_update[0];
-                    }
-                }
-                level = clamp(level, 63);
-                if (level > 0) {
-                    int ilevel = level;
-                    if (w->k.sharpness_level > 0) {
-                        if (w->k.sharpness_level > 4) {
-                            ilevel >>= 2;
-                        } else {
-                            ilevel >>= 1;
-                        }
-                        if (ilevel > 9 - w->k.sharpness_level) {
-                            ilevel = 9 - w->k.sharpness_level;
-                        }
-                    }
-                    if (ilevel < 1) ilevel = 1;
-                    info->f_ilevel = ilevel;
-                    info->f_limit = 2 * level + ilevel;
-                    info->hev_thresh = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
-                } else {
-                    info->f_limit = 0;  // no filtering
-                }
-                info->f_inner = i4x4;
+        }
+        base_level = clamp(base_level, 63);
+        // for (int i4x4 = 0; i4x4 <= 1; i4x4 ++) {
+        VP8Filter *const filter = &w->filters[segment_id][is_4x4];
+        int level = base_level;
+        if (w->k.mb_lf_adjustments.loop_filter_adj_enable) {
+            level += w->k.mb_lf_adjustments.mode_ref_lf_delta_update[0];
+            if (is_4x4) {
+                level += w->k.mb_lf_adjustments.mb_mode_delta_update[0];
             }
+        }
+        level = clamp(level, 63);
+        if (level > 0) {
+            // for normal filter only
+            uint8_t ilevel = level;
+            if (w->k.sharpness_level > 0) {
+                ilevel >>= ((w->k.sharpness_level > 4) ? 2 : 1);
+                if (ilevel > 9 - w->k.sharpness_level) {
+                    ilevel = 9 - w->k.sharpness_level;
+                }
+            }
+            if (ilevel < 1) {
+                ilevel = 1;
+            }
+
+            filter->sub_limit = (level << 1) + ilevel;
+            filter->inter_limit = ilevel;
+            //we are processing key frame for webp
+            filter->hev_thresh = (level >= 40) ? 2 : (level >= 15) ? 1 : 0;
+        } else {
+            filter->sub_limit = 0; // no filtering
         }
     }
 }
@@ -1937,8 +1895,6 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     uint8_t *U = malloc(mbrows * 8 * uv_stride);
     uint8_t *V = malloc(mbrows * 8 * uv_stride);
 
-    // precompute_filter(w);
-
     struct macro_block *blocks = malloc(sizeof(struct macro_block)* (mbcols * mbrows));
     // one more struct for left of zero col
     struct context *top = calloc(mbcols, sizeof(struct context));
@@ -1959,7 +1915,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
         for (int x = 0; x < mbcols; x++) {
             block = blocks + y * mbcols + x;
             vp8_decode_mb_header(w, br, block, y, x);
-            vp8_decode_residual_data(w, block, coeffs, bt, &left, top, NULL);
+            vp8_decode_residual_data(w, block, coeffs, bt, &left, top);
 
             uint8_t *yout = Y + y_stride * y * 16 + x * 16;
             uint8_t *uout = U + 8 * uv_stride * y + x * 8;
@@ -1967,14 +1923,19 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
             vp8_prerdict_mb(w, block, coeffs, y, yout, uout, vout, y_stride, uv_stride);
         }
     }
-
-    int filter_type = (w->k.loop_filter_level == 0) ? 0 :
-            w->k.filter_type ? 1 : 2;
-    uint8_t *yuv_b = malloc(32 * 17 + 32 * 9);
-    int extra_rows = kFilterExtraRows[filter_type];
-    for (int y = 0; y < mbrows; y++) {
-        for (int x = 0; x < mbcols; x++) {
-            // loopfilter(w, x, y, block);
+    int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
+           w->k.filter_type ? WEBP_FILTER_SIMPLE : WEBP_FILTER_NORMAL;
+    VDBG(webp, "filter_type %d", filter_type);
+    //  0=none, 1=simple, 2=normal
+    if (filter_type > 0) {
+        for (int y = 0; y < mbrows; y++) {
+            for (int x = 0; x < mbcols; x++) {
+                block = blocks + y * mbcols + x;
+                uint8_t *yout = Y + y_stride * y * 16 + x * 16;
+                uint8_t *uout = U + 8 * uv_stride * y + x * 8;
+                uint8_t *vout = V + 8 * uv_stride * y + x * 8;
+                loopfilter(w, block, filter_type, y, yout, uout, vout, y_stride, uv_stride);
+            }
         }
     }
 
@@ -2022,6 +1983,9 @@ int WEBP_read_frame(WEBP *w, FILE *f)
         VDBG(webp, "part %d: len %d, 0x%x", i, w->p[i].len, parts[0]);
         // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_dec_init(parts, w->p[i].len);
+
+        calculate_filter_control_parameter(w, i, 0);
+        calculate_filter_control_parameter(w, i, 1);
     }
     // bits_vec_dump(first_bt->bits);
 

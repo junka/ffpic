@@ -1,11 +1,17 @@
+### For on-hands learning, with no third-party lib dependency
 
+We should learn the picture format following the order:
+```
+bmp -> png -> jpeg -> webp
+```
+if you would like to know gif/pnm/tiff/tga, this could be learned before jpeg.
 
 ### FFPic Layers
 
     -----------------------
     |   file format        |
     -----------------------
-    |   decode/encode      |
+    |   decode/            |
     -----------------------
     |   dislay buffer      |
     -----------------------

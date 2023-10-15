@@ -677,9 +677,9 @@ struct pps {
     // pps extension 4bits
     // uint8_t pps_extension_data_flag:1;
 
-
     uint32_t * CtbAddrTsToRs;
-    uint32_t * CtbAddrRsToTs;
+    uint32_t *CtbAddrRsToTs;
+    uint32_t *TileId;
     int ** MinTbAddrZs;
 };
 
@@ -1014,10 +1014,10 @@ struct palette_predictor_entries {
 struct slice_segment_header {
     uint8_t ChromaArrayType;//= (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc)
 
-    uint8_t no_output_of_prior_pics_flag:1;
+    uint8_t no_output_of_prior_pics_flag : 1;
+    uint8_t dependent_slice_segment_flag : 1;
 
     GUE(slice_pic_parameter_set_id);
-
     uint32_t slice_segment_address;
 
     GUE(slice_type);
@@ -1104,7 +1104,7 @@ struct slice_segment_header {
 
     GUE(num_entry_point_offsets);
     // GUE(offset_len_minus1);
-    uint32_t *entry_point_offset_minus1;
+    uint32_t *entry_point_offset;
     GUE(slice_segment_header_extension_length);
     uint8_t poc_reset_period_id:6;
     uint8_t full_poc_reset_flag:1;

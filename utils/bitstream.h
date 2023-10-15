@@ -59,6 +59,8 @@ int bits_vec_test_bit(struct bits_vec *v);
 
 int bits_vec_position(struct bits_vec *v);
 
+void bits_vec_reinit_cur(struct bits_vec *v);
+
 /* macro define for bitstream helper */
 #define READ_BIT(v) bits_vec_read_bit(v)
 #define READ_BITS(v, n) bits_vec_read_bits(v, n)

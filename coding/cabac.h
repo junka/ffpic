@@ -25,9 +25,12 @@ cabac_dec * cabac_dec_init(struct bits_vec*);
 
 int cabac_dec_bin(cabac_dec *br);
 
-cabac_dec *cabac_lookup(struct bits_vec *v);
+int cabac_dec_terminate(cabac_dec *dec);
 
-#define CABAC(v) cabac_dec_bin(cabac_lookup(v))
+void cabac_dec_free(cabac_dec *dec);
+// cabac_dec *cabac_lookup(struct bits_vec *v);
+
+#define CABAC(br) cabac_dec_bin(br)
 
 #ifdef __cplusplus
 }

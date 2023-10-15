@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #include "bitstream.h"
 
@@ -109,7 +110,6 @@ bits_vec_read_bit(struct bits_vec *v)
     return ret;
 }
 
-#if 1
 int 
 bits_vec_read_bits(struct bits_vec *v, int n)
 {
@@ -126,7 +126,6 @@ bits_vec_read_bits(struct bits_vec *v, int n)
     }
     return ret;
 }
-#endif
 
 void
 bits_vec_skip_bits(struct bits_vec *v, int n)
@@ -140,7 +139,7 @@ bits_vec_skip_bits(struct bits_vec *v, int n)
     v->offset += n%8;
     if (v->offset >= 8) {
         v->ptr ++;
-         v->offset -= 8;
+        v->offset -= 8;
     }
 }
 
@@ -190,4 +189,11 @@ bits_vec_dump(struct bits_vec *v)
 {
     printf("stream start %p, current %ld, len %ld, bits in use %d\n", 
         (void *)v->start, v->ptr - v->start, v->len, v->offset);
+}
+
+void bits_vec_reinit_cur(struct bits_vec *v)
+{
+    assert(v->offset == 0);
+    v->len -= (v->ptr - v->start);
+    v->start = v->ptr;
 }

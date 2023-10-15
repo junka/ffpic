@@ -112,29 +112,13 @@ static uint8_t RenormTable[32] = {
     1,  1,  1,  1
 };
 
-static int dec_num = 0;
-static cabac_dec **dec_list = NULL;
-
-cabac_dec *
-cabac_lookup(struct bits_vec *v)
-{
-    // cabac_dec *d;
-    for (int i = 0; i < dec_num; i ++) {
-        if (dec_list[i]->bits == v) {
-            return dec_list[i];
-        }
-    }
-    return NULL;
-}
-
 cabac_dec *
 cabac_dec_init(struct bits_vec *v)
 {
     cabac_dec *dec = malloc(sizeof(*dec));
     dec->bits = v;
     dec->count = -8;
-    dec->value = READ_BITS(v, 8) << 8;
-    dec->value |= READ_BITS(v, 8);
+    dec->value = 0;
     dec->range = 510;
     dec->bypass = 0;
 
@@ -142,12 +126,12 @@ cabac_dec_init(struct bits_vec *v)
         dec->LPSTable[i] = LPSTable[i];
     }
     dec->RenormTable = RenormTable;
-    if (!dec_list) {
-        dec_list = malloc(sizeof(*dec_list));
-    } else {
-        dec_list = realloc(dec_list, sizeof(*dec_list)*(dec_num+1));
-    }
-    dec_list[dec_num++] = dec;
+    // if (!dec_list) {
+    //     dec_list = malloc(sizeof(*dec_list));
+    // } else {
+    //     dec_list = realloc(dec_list, sizeof(*dec_list)*(dec_num+1));
+    // }
+    // dec_list[dec_num++] = dec;
     return dec;
 }
 
@@ -168,20 +152,22 @@ renormD(cabac_dec *dec, uint32_t scaledRange)
 void
 cabac_dec_free(cabac_dec *dec)
 {
-    int i = 0;
-    for (i = 0; i < dec_num; i ++) {
-        if (dec_list[i] == dec) {
-            break;
-        }
-    }
-    if (i < dec_num) {
-        for (; i < dec_num - 1; i ++) {
-            dec_list[i] = dec_list[i+1];
-        }
-        dec_list[dec_num - 1] = NULL;
-        dec_num --;
-        free(dec);
-    }
+    // int i = 0;
+    // for (i = 0; i < dec_num; i ++) {
+    //     if (dec_list[i] == dec) {
+    //         break;
+    //     }
+    // }
+    // if (i < dec_num) {
+    //     for (; i < dec_num - 1; i ++) {
+    //         dec_list[i] = dec_list[i+1];
+    //     }
+    //     dec_list[dec_num - 1] = NULL;
+    //     dec_num --;
+    //     free(dec);
+    // }
+    // bits_vec_free(dec->bits);
+    free(dec);
 }
 
 static int
@@ -203,7 +189,7 @@ cabac_dec_bypass(cabac_dec *dec)
     return binVal;
 }
 
-static int UNUSED
+int
 cabac_dec_terminate(cabac_dec *dec)
 {
     /*Figure 9-9 */
@@ -261,3 +247,7 @@ cabac_dec_bin(cabac_dec *dec)
     return cabac_dec_decision(dec);
 }
 
+void cabac_dec_reset(cabac_dec *dec)
+{
+    dec->range = 510;
+}

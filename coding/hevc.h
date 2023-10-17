@@ -977,17 +977,17 @@ struct sei {
 
 //sample adaptive offset
 struct sao {
-    uint32_t sao_merge_left_flag;
-    uint32_t sao_merge_up_flag;
-    uint32_t sao_type_idx_luma;
-    uint32_t sao_type_idx_chroma;
-    uint32_t sao_offset_abs[3][64][64][4];
-    uint32_t sao_offset_sign[3][64][64][4];
-    uint32_t sao_band_position[3][64][64];
-    uint32_t sao_eo_class_luma;
-    uint32_t sao_eo_class_chroma;
+    uint8_t sao_merge_left_flag;
+    uint8_t sao_merge_up_flag;
+    uint8_t sao_offset_abs[3][64][64][4];
+    uint8_t sao_offset_sign[3][64][64][4];
+    uint8_t sao_band_position[3][64][64];
+    uint8_t sao_eo_class_luma;
+    uint8_t sao_eo_class_chroma;
 
-    uint32_t SaoTypeIdx[3][64][64];
+    // uint32_t sao_type_idx_luma;
+    // uint32_t sao_type_idx_chroma;
+    uint8_t SaoTypeIdx[3][64][64];
 };
 
 

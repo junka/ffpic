@@ -2709,8 +2709,10 @@ static void parse_intra_mode_ext(cabac_dec *d,
     struct slice_segment_header *slice = hslice->slice;
 
     if (log2PbSize < 6) {
-        ext->no_dim_flag = CABAC(d);
+        ext->no_dim_flag = CABAC(d, CTX_TYPE_3D_NO_DIM_FLAG);
     }
+    //see I.6.6 derivation process for a wedgelet partition pattern table
+    //TODO
     //see I.7.4.7.1
     int DepthFlag = vps->DepthLayerFlag[h->nuh_layer_id];
     //see I-25
@@ -2718,15 +2720,15 @@ static void parse_intra_mode_ext(cabac_dec *d,
     //see I-26
     int IntraDcOnlyWedgeEnabledFlag = sps->sps_3d_ext[DepthFlag].intra_dc_only_wedge_enabled_flag;
     if (!ext->no_dim_flag && IntraDcOnlyWedgeEnabledFlag && IntraContourEnabledFlag) {
-        ext->depth_intra_mode_idx_flag = CABAC(d);
+        ext->depth_intra_mode_idx_flag =
+            CABAC(d, CTX_TYPE_3D_DEPTH_INTRA_MODE_IDX_FLAG);
     }
     if (!ext->no_dim_flag && !ext->depth_intra_mode_idx_flag) {
-        ext->wedge_full_tab_idx = CABAC(d);
+        ext->wedge_full_tab_idx = CABAC_BPFL(d, 1);
     }
 }
 
-static void parse_cu_extension(struct bits_vec *v,
-                               cabac_dec *d, struct hevc_slice *hslice,
+static void parse_cu_extension(cabac_dec *d, struct hevc_slice *hslice,
                                struct cu *cu, struct hevc_param_set *hps,
                                int x0, int y0, int log2CbSize,
                                int NumPicTotalCurr) {
@@ -2758,16 +2760,16 @@ static void parse_cu_extension(struct bits_vec *v,
 
    
     if (cu->skip_intra_flag[x0][y0]) {
-        ext->skip_intra_mode_idx = CABAC(d);
+        ext->skip_intra_mode_idx = CABAC(d, CTX_TYPE_3D_SKIP_INTRA_MODE_IDX);
     } else {
         if (!cu->cu_skip_flag[x0][y0]) {
             if (DbbpEnabledFlag && DispAvailFlag && log2CbSize > 3 &&
                 (cu->PartMode == PART_2NxN || cu->PartMode == PART_Nx2N)) {
-                ext->dbbp_flag = CABAC(d);
+                ext->dbbp_flag = CABAC(d, CTX_TYPE_3D_DBBP_FLAG);
             }
             if ((cu->CuPredMode[x0][y0] == MODE_INTRA ? IntraDcOnlyWedgeEnabledFlag :
                 InterDcOnlyEnabledFlag) && cu->PartMode == PART_2Nx2N) {
-                ext->dc_only_flag = CABAC(d);
+                ext->dc_only_flag = CABAC(d, CTX_TYPE_3D_DC_ONLY_FLAG);
             }
         }
          /* see (I-48)(I-49) */
@@ -2784,11 +2786,12 @@ static void parse_cu_extension(struct bits_vec *v,
             }
             if (cu->PartMode == PART_2Nx2N) {
                 if (IvResPredEnabledFlag && rps->RpRefPicAvailFlag ) {
-                    ext->iv_res_pred_weight_idx = CABAC(d);
+                    ext->iv_res_pred_weight_idx =
+                        CABAC(d, CTX_TYPE_3D_IV_RES_PRED_WEIGHT_IDX);
                 }
                 if (slice->slice_ic_enabled_flag && icCuEnableFlag &&
                     ext->iv_res_pred_weight_idx == 0) {
-                    ext->illu_comp_flag = CABAC(d);
+                    ext->illu_comp_flag = CABAC(d, CTX_TYPE_3D_ILLU_COMP_FLAG);
                 }
             }
         }
@@ -2809,14 +2812,16 @@ parse_depth_dcs(cabac_dec *d, struct cu *cu, int x0, int y0, int log2CbSize)
         for (int k = 0; k < nCbS; k = k + pbOffset) {
             if (DimFlag || DcOnlyFlag) {
                 if (cu->CuPredMode[x0][y0] == MODE_INTRA && DcOnlyFlag) {
-                     cu->ext[x0+k][y0+j].depth_dc_present_flag = CABAC(d);
+                    cu->ext[x0 + k][y0 + j].depth_dc_present_flag =
+                        CABAC(d, CTX_TYPE_3D_DEPTH_DC_PRESENT_FLAG);
                 }
                 int dcNumSeg = DimFlag ? 2: 1;
                 if ( cu->ext[x0+k][y0+j].depth_dc_present_flag) {
                     for (int i = 0; i < dcNumSeg; i++ ) {
-                         cu->ext[x0+k][y0+j].depth_dc_abs[i] = CABAC(d);
+                        cu->ext[x0 + k][y0 + j].depth_dc_abs[i] =
+                            CABAC(d, CTX_TYPE_3D_DEPTH_DC_ABS);
                         if ((cu->ext[x0+k][y0+j].depth_dc_abs[i] - dcNumSeg + 2) > 0) {
-                           cu->ext[x0+k][y0+j]. depth_dc_sign_flag[i] = CABAC(d);
+                           cu->ext[x0+k][y0+j]. depth_dc_sign_flag[i] = CABAC_BP(d);
                         }
                     }
                 }
@@ -2836,7 +2841,7 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
         bool leftCtbInSliceSeg = (CtbAddrInRs > SliceAddrRs);
         bool leftCtbInTile = (TileId[CtbAddrInTs] == TileId[CtbAddrRsToTs[CtbAddrInRs - 1]]);
         if (leftCtbInSliceSeg && leftCtbInTile) {
-            sao->sao_merge_left_flag = CABAC(d);
+            sao->sao_merge_left_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
         }
     }
     if (ry > 0 && !sao->sao_merge_left_flag) {
@@ -2844,28 +2849,35 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
         bool upCtbInTile = (TileId[CtbAddrInTs] ==
                 TileId[CtbAddrRsToTs[CtbAddrInRs - slice->PicWidthInCtbsY]]);
         if (upCtbInSliceSeg && upCtbInTile) {
-            sao->sao_merge_up_flag = CABAC(d);
+            sao->sao_merge_up_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
         }
     }
+    VDBG(hevc, "sao_merge_left_flag %d, sao_merge_up_flag %d",
+         sao->sao_merge_left_flag, sao->sao_merge_up_flag);
     if (!sao->sao_merge_up_flag && !sao->sao_merge_left_flag) {
         for (int cIdx = 0; cIdx < (slice->ChromaArrayType != 0 ? 3 : 1 ); cIdx++) {
             if ((slice->slice_sao_luma_flag && cIdx == 0) ||
                 (slice->slice_sao_chroma_flag && cIdx > 0)) {
                 if (cIdx == 0) {
-                    sao->sao_type_idx_luma = CABAC(d);
-                    sao->SaoTypeIdx[cIdx][rx][ry] = sao->sao_type_idx_luma;
+                    uint8_t sao_type_idx_luma = CABAC(d, CTX_TYPE_SAO_TYPE_INDEX);
+                    sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_luma;
                 } else if (cIdx == 1) {
-                    sao->sao_type_idx_chroma = CABAC(d);
-                    sao->SaoTypeIdx[cIdx][rx][ry] = sao->sao_type_idx_chroma;
+                    uint8_t sao_type_idx_chroma =
+                        CABAC(d, CTX_TYPE_SAO_TYPE_INDEX);
+                    sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_chroma;
+                } else {
+                    sao->SaoTypeIdx[cIdx][rx][ry] = 0;
                 }
+                VDBG(hevc, "cIdx %d, SaoTypeIdx %d", cIdx, sao->SaoTypeIdx[cIdx][rx][ry]);
                 if (sao->SaoTypeIdx[cIdx][rx][ry] != 0 ) {
                     for (int i = 0; i < 4; i++) {
-                        sao->sao_offset_abs[cIdx][rx][ry][i] = CABAC(d);
+                        sao->sao_offset_abs[cIdx][rx][ry][i] = CABAC_BP(d);
                     }
                     if (sao->SaoTypeIdx[cIdx][rx][ry] == 1) {
                         for (int i = 0; i < 4; i++ ) {
                             if (sao->sao_offset_abs[cIdx][rx][ry][i] != 0 ) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = CABAC(d);
+                                sao->sao_offset_sign[cIdx][rx][ry][i] =
+                                    CABAC_BP(d);
                             } else {
                                 if (sao->sao_merge_left_flag) {
                                     sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
@@ -2882,13 +2894,13 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
                                 }
                             }
                         }
-                        sao->sao_band_position[cIdx][rx][ry] = CABAC(d);
+                        sao->sao_band_position[cIdx][rx][ry] = CABAC_BPFL(d, 5);
                     } else {
                         if (cIdx == 0) {
-                            sao->sao_eo_class_luma = CABAC(d);
+                            sao->sao_eo_class_luma = CABAC_BPFL(d, 2);
                         }
                         if (cIdx == 1) {
-                            sao->sao_eo_class_chroma = CABAC(d);
+                            sao->sao_eo_class_chroma = CABAC_BPFL(d, 2);
                         }
                         for (int i = 0; i < 4; i++ ) {
                             if (sao->sao_merge_left_flag) {
@@ -2965,9 +2977,10 @@ static void parse_delta_qp(cabac_dec *d, struct slice_segment_header *slice,
                            struct pps *pps) {
     if (pps->cu_qp_delta_enabled_flag && !slice->IsCuQpDeltaCoded ) {
         slice->IsCuQpDeltaCoded = 1;
-        uint32_t cu_qp_delta_abs = CABAC(d);
+        uint32_t cu_qp_delta_abs = CABAC(d, CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS);
         if (cu_qp_delta_abs) {
-            uint8_t cu_qp_delta_sign_flag = CABAC(d);
+            uint8_t cu_qp_delta_sign_flag =
+                CABAC_BP(d);
             slice->CuQpDeltaVal = cu_qp_delta_abs * ( 1 - 2 * cu_qp_delta_sign_flag );
         }
     }
@@ -2977,9 +2990,12 @@ static void parse_delta_qp(cabac_dec *d, struct slice_segment_header *slice,
 static void
 parse_cross_comp_pred(cabac_dec *d, struct cross_comp_pred *cross, int x0, int y0, int c)
 {
-    cross->log2_res_scale_abs_plus1 = CABAC(d);
+    //FIXME
+    cross->log2_res_scale_abs_plus1 =
+        CABAC(d, CTX_TYPE_CROSS_COMP_LOG2_RES_SCALE_ABS);
     if (cross->log2_res_scale_abs_plus1 != 0) {
-        cross->res_scale_sign_flag = CABAC(d);
+        cross->res_scale_sign_flag =
+            CABAC(d, CTX_TYPE_CROSS_COMP_RES_SCALE_SIGN);
     }
 }
 
@@ -3042,10 +3058,12 @@ parse_chroma_qp_offset(cabac_dec *d, struct slice_segment_header *slice,
                     struct pps *pps, struct chroma_qp_offset *qpoff)
 {
     if (slice->cu_chroma_qp_offset_enabled_flag && !slice->IsCuChromaQpOffsetCoded) {
-        qpoff->cu_chroma_qp_offset_flag = CABAC(d);
+        qpoff->cu_chroma_qp_offset_flag =
+            CABAC(d, CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_FLAG);
         slice->IsCuChromaQpOffsetCoded = 1;
         if (qpoff->cu_chroma_qp_offset_flag && pps->pps_range_ext->chroma_qp_offset_list_len_minus1 > 0) {
-            qpoff->cu_chroma_qp_offset_idx = CABAC(d);
+            qpoff->cu_chroma_qp_offset_idx =
+                CABAC(d, CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_IDX);
             assert(qpoff->cu_chroma_qp_offset_idx <= pps->pps_range_ext->chroma_qp_offset_list_len_minus1);
         } else {
             qpoff->cu_chroma_qp_offset_idx = 0;
@@ -3175,7 +3193,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     for (int predictorEntryIdx = 0; predictorEntryIdx < PredictorPaletteSize &&
         !palettePredictionFinished && NumPredictedPaletteEntries < sps->sps_scc_ext->palette_max_size;
         predictorEntryIdx++) {
-        int palette_predictor_run = CABAC(d);
+        int palette_predictor_run = CABAC_BP(d);
         if (palette_predictor_run != 1) {
             if (palette_predictor_run > 1) {
                 predictorEntryIdx += palette_predictor_run - 1;
@@ -3187,7 +3205,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
         }
     }
     if (NumPredictedPaletteEntries < (int)sps->sps_scc_ext->palette_max_size) {
-        pc->num_signalled_palette_entries = CABAC(d);
+        pc->num_signalled_palette_entries = CABAC_BP(d);
     }
 
     int CurrentPaletteEntries[3][128];
@@ -3207,7 +3225,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
 
     for (int cIdx = 0; cIdx < numComps; cIdx++ ) {
         for(uint32_t i = 0; i < pc->num_signalled_palette_entries; i++ ) {
-            pc->new_palette_entries[cIdx][i] = CABAC(d);
+            pc->new_palette_entries[cIdx][i] = CABAC_BP(d);
             CurrentPaletteEntries[cIdx][NumPredictedPaletteEntries + i] = pc->new_palette_entries[cIdx][i];
         }
     }
@@ -3239,23 +3257,27 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
 
 
     if (CurrentPaletteSize != 0 ) {
-        pc->palette_escape_val_present_flag = CABAC(d);
+        pc->palette_escape_val_present_flag = CABAC_BP(d);
     }
     
     int MaxPaletteIndex = CurrentPaletteSize - 1 + pc->palette_escape_val_present_flag;
     
     if (MaxPaletteIndex > 0) {
-        pc->num_palette_indices_minus1 = CABAC(d);
+        pc->num_palette_indices_minus1 =
+            CABAC(d, CTX_TYPE_PALETTE_CODING_COPY_ABOVE_PALLETTE_INDICES);
         int adjust = 0;
         for (uint32_t i = 0; i <= pc->num_palette_indices_minus1; i++ ) {
             if (MaxPaletteIndex - adjust > 0 ) {
-                int palette_idx_idc = CABAC(d);
+                //see 9.3.3.13 binarization for palette_index_idx
+                int palette_idx_idc = CABAC_BPTB(d, MaxPaletteIndex);
                 pc->PaletteIndexIdc[i] = palette_idx_idc;
             }
             adjust = 1;
         }
-        pc->copy_above_indices_for_final_run_flag = CABAC(d);
-        pc->palette_transpose_flag = CABAC(d);
+        pc->copy_above_indices_for_final_run_flag =
+            CABAC(d, CTX_TYPE_PALETTE_CODING_COPY_ABOVE_INDICES_FOR_FINAL_RUN);
+        pc->palette_transpose_flag =
+            CABAC(d, CTX_TYPE_PALETTE_CODING_PALETTE_TRANSPOSE_FLAG);
     }
     if (pc->palette_escape_val_present_flag) {
         parse_delta_qp(d, slice, pps);
@@ -3295,7 +3317,8 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
         if (MaxPaletteIndex > 0) {
             if (PaletteScanPos >= nCbS && pc->CopyAboveIndicesFlag[xcPrev][ycPrev] == 0 ) {
                 if (remainingNumIndices > 0 && PaletteScanPos < nCbS * nCbS - 1 ) {
-                    uint8_t copy_above_palette_indices_flag = CABAC(d);
+                    uint8_t copy_above_palette_indices_flag = CABAC(
+                        d, CTX_TYPE_PALETTE_CODING_COPY_ABOVE_PALLETTE_INDICES);
                     pc->CopyAboveIndicesFlag[xC][yC] = copy_above_palette_indices_flag;
                 } else {
                     if ( PaletteScanPos == nCbS * nCbS - 1 && remainingNumIndices > 0 ) {
@@ -3318,10 +3341,11 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
                 int PaletteMaxRunMinus1 = nCbS * nCbS - PaletteScanPos -1 -remainingNumIndices - pc->copy_above_indices_for_final_run_flag;
                 RunToEnd = 0;
                 if (PaletteMaxRunMinus1 > 0) {
-                    pc->palette_run_prefix = CABAC(d);
+                    pc->palette_run_prefix =
+                        CABAC(d, CTX_TYPE_PALETTE_CODING_PALETTE_RUN_PREFIX);
                     if ((pc->palette_run_prefix > 1) && (PaletteMaxRunMinus1 !=
                         (1 << (pc->palette_run_prefix - 1)))) {
-                        pc->palette_run_suffix = CABAC(d);
+                        pc->palette_run_suffix = CABAC_BP(d);
                     }
                 }
             }
@@ -3352,7 +3376,8 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
                         !pc->palette_transpose_flag && slice->ChromaArrayType == 2 ) ||
                         (yC % 2 == 0 && pc->palette_transpose_flag &&
                         slice->ChromaArrayType == 2 ) || slice->ChromaArrayType == 3 ) {
-                        int palette_escape_val= CABAC(d);
+                        int palette_escape_val = CABAC_BPFL(
+                            d, ((cIdx == 0) ? (sps->bit_depth_luma_minus8 + 8) : (sps->bit_depth_chroma_minus8 +8)));
                         pc->PaletteEscapeVal[cIdx][xC][yC] = palette_escape_val;
                     }
                 }
@@ -3375,13 +3400,15 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
     int Log2MaxTransformSkipSize = pps->pps_range_ext->log2_max_transform_skip_block_size_minus2 + 2;
     if (pps->transform_skip_enabled_flag && !cu->cu_transquant_bypass_flag &&
         (log2TrafoSize <= Log2MaxTransformSkipSize)) {
-        rc[x0][y0].transform_skip_flag[cIdx] = CABAC(d);
+        rc[x0][y0].transform_skip_flag[cIdx] = CABAC_BP(d);
     }
     if (cu->CuPredMode[x0][y0] == MODE_INTER && sps->sps_range_ext->explicit_rdpcm_enabled_flag &&
         (rc[x0][y0].transform_skip_flag[cIdx] || cu->cu_transquant_bypass_flag)) {
-        rc[x0][y0].explicit_rdpcm_flag[cIdx] = CABAC(d);
+        rc[x0][y0].explicit_rdpcm_flag[cIdx] =
+            CABAC(d, CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM);
         if (rc[x0][y0].explicit_rdpcm_flag[cIdx]) {
-            rc[x0][y0].explicit_rdpcm_dir_flag[cIdx] = CABAC(d);
+            rc[x0][y0].explicit_rdpcm_dir_flag[cIdx] =
+                CABAC(d, CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM_DIR);
         }
     }
 
@@ -3389,17 +3416,21 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
     int LastSignificantCoeffX;
     int LastSignificantCoeffY;
 
-    rc[x0][y0].last_sig_coeff_x_prefix = CABAC(d);
-    rc[x0][y0].last_sig_coeff_y_prefix = CABAC(d);
+    rc[x0][y0].last_sig_coeff_x_prefix =
+        CABAC(d, CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX);
+    rc[x0][y0].last_sig_coeff_y_prefix =
+        CABAC(d, CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX);
     if (rc[x0][y0].last_sig_coeff_x_prefix > 3) {
-        rc[x0][y0].last_sig_coeff_x_suffix = CABAC(d);
+        rc[x0][y0].last_sig_coeff_x_suffix =
+            CABAC_BPFL(d, rc[x0][y0].last_sig_coeff_x_prefix);
         LastSignificantCoeffX = (1 << ((rc[x0][y0].last_sig_coeff_x_prefix >> 1) - 1)) * (2 + (rc[x0][y0].last_sig_coeff_x_prefix & 1))
              + rc[x0][y0].last_sig_coeff_x_suffix;
     } else {
         LastSignificantCoeffX = rc[x0][y0].last_sig_coeff_x_prefix;
     }
     if (rc[x0][y0].last_sig_coeff_y_prefix > 3) {
-        rc[x0][y0].last_sig_coeff_y_suffix = CABAC(d);
+        rc[x0][y0].last_sig_coeff_y_suffix =
+            CABAC_BPFL(d, rc[x0][y0].last_sig_coeff_y_prefix>>1);
         LastSignificantCoeffY = (1 << ((rc[x0][y0].last_sig_coeff_y_prefix >> 1) - 1)) * (2 + (rc[x0][y0].last_sig_coeff_y_prefix & 1))
              + rc[x0][y0].last_sig_coeff_y_suffix;
     } else {
@@ -3446,14 +3477,16 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         escapeDataPresent = 0;
         int inferSbDcSigCoeffFlag = 0;
         if ((i < lastSubBlock) && (i > 0)) {
-            rc[xS][yS].coded_sub_block_flag = CABAC(d);
+            rc[xS][yS].coded_sub_block_flag =
+                CABAC(d, CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG);
             inferSbDcSigCoeffFlag = 1;
         }
         for (int n = ( i == lastSubBlock ) ? lastScanPos - 1 : 15; n >= 0; n-- ) {
             xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n][0];
             yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n][1];
             if (rc[xS][yS].coded_sub_block_flag && (n > 0 || !inferSbDcSigCoeffFlag)) {
-                rc[xC][yC].sig_coeff_flag = CABAC(d);
+                rc[xC][yC].sig_coeff_flag =
+                    CABAC(d, CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG);
                 if (rc[xC][yC].sig_coeff_flag) {
                     inferSbDcSigCoeffFlag = 0;
                 }
@@ -3468,7 +3501,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
             yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n][1];
             if (rc[xC][yC].sig_coeff_flag) {
                 if (numGreater1Flag < 8) {
-                    rc[xC][yC].coeff_abs_level_greater1_flag[n] = CABAC(d);
+                    rc[xC][yC].coeff_abs_level_greater1_flag[n] = CABAC(d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1);
                     numGreater1Flag ++;
                     if (rc[xC][yC].coeff_abs_level_greater1_flag[n] && lastGreater1ScanPos == -1) {
                         lastGreater1ScanPos = n;
@@ -3495,16 +3528,27 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
             signHidden = lastSigScanPos - firstSigScanPos > 3;
         }
         if( lastGreater1ScanPos != -1 ) {
-            rc[x0][y0].coeff_abs_level_greater2_flag[lastGreater1ScanPos] = CABAC(d);
+            rc[x0][y0].coeff_abs_level_greater2_flag[lastGreater1ScanPos] = CABAC(d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2);
             if (rc[x0][y0].coeff_abs_level_greater2_flag[lastGreater1ScanPos]) {
                 escapeDataPresent = 1;
             }
         }
+        static int StatCoeff[4] = {0};
+            // see 9-20, 9-21, 9-22
+            int sbType = 0;
+        if (cu->cu_transquant_bypass_flag == 0 && rc[x0][y0].transform_skip_flag[cIdx] == 0) {
+            sbType = 2 * (cIdx == 0 ? 1: 0);
+        } else {
+            sbType = 2 *(cIdx ==0? 1: 0)+ 1;
+        }
+        int initRiceValue = StatCoeff[sbType]/4;
+
         for (int n = 15; n >= 0; n--) {
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n][0];
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n][1];
             if (rc[xC][yC].sig_coeff_flag && (!pps->sign_data_hiding_enabled_flag || !signHidden || (n != firstSigScanPos))) {
-                rc[xC][yC].coeff_sign_flag[n] = CABAC(d);
+                rc[xC][yC].coeff_sign_flag[n] =
+                    CABAC_BP(d);
             }
         }
         int numSigCoeff = 0;
@@ -3515,7 +3559,22 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
             if (rc[xC][yC].sig_coeff_flag) {
                 int baseLevel = 1 + rc[xC][yC].coeff_abs_level_greater1_flag[n] + rc[xC][yC].coeff_abs_level_greater2_flag[n];
                 if( baseLevel == (( numSigCoeff < 8 ) ? ( (n == lastGreater1ScanPos) ? 3 : 2 ) : 1 ) ) {
-                    rc[xC][yC].coeff_abs_level_remaining[n] = CABAC(d);
+                    //see 9.3.3.11 binarization process for coeff_abs_level_remaining
+                    int prefix = CABAC_BP(d);
+                    int code = 0;
+                    do {
+                        prefix ++;
+                        code = CABAC_BP(d);
+                    } while(code);
+                    if (prefix <=3) {
+                        //FIXME
+                        code = CABAC_BPFL(d, 11);
+                        rc[xC][yC].coeff_abs_level_remaining[n] = (prefix << 11) + code;
+                    } else {
+                        code = CABAC_BPFL(d, prefix-3 + 11);
+                        rc[xC][yC].coeff_abs_level_remaining[n] = (((1<<(prefix-3))+2) << 12) + code;
+                    }
+                    
                 }
                 cu->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] = (rc[xC][yC].coeff_abs_level_remaining[n] + baseLevel) * (1 - 2*rc[xC][yC].coeff_sign_flag[n]);
                 if (pps->sign_data_hiding_enabled_flag && signHidden) {
@@ -3525,6 +3584,16 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
                     }
                 }
                 numSigCoeff++;
+
+                // see 9-23
+                if (rc[xC][yC].coeff_abs_level_remaining[n] >=
+                    (3 << (StatCoeff[sbType] / 4))) {
+                    StatCoeff[sbType]++;
+                } else if (2 * rc[xC][yC].coeff_abs_level_remaining[n] <
+                               (1 << (StatCoeff[sbType] / 4)) &&
+                           StatCoeff[sbType] > 0) {
+                    StatCoeff[sbType]--;
+                }
             }
         }
     }
@@ -3562,7 +3631,8 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt, struct 
             cu->intra_chroma_pred_mode[xP + nCbS/2][yP] == 4 &&
             cu->intra_chroma_pred_mode[xP][yP + nCbS/2] == 4 &&
             cu->intra_chroma_pred_mode[xP + nCbS/2][yP + nCbS/2] == 4))) {
-            tu->tu_residual_act_flag[x0][y0] = CABAC(d);
+            //FIXME
+            tu->tu_residual_act_flag[x0][y0] = CABAC_BP(d);
         }
         parse_delta_qp(d, slice, pps);
         if (cbfChroma && !cu->cu_transquant_bypass_flag) {
@@ -3634,19 +3704,22 @@ parse_transform_tree(cabac_dec *d, struct cu *cu,
     if (log2TrafoSize <= slice->MaxTbLog2SizeY &&
         log2TrafoSize > slice->MinTbLog2SizeY &&
         trafoDepth < cu->MaxTrafoDepth && !(cu->IntraSplitFlag && (trafoDepth == 0))) {
-        tt->split_transform_flag[x0][y0][trafoDepth] = CABAC(d);
+        tt->split_transform_flag[x0][y0][trafoDepth] =
+            CABAC(d, CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG);
     }
     if ((log2TrafoSize > 2 && slice->ChromaArrayType != 0) || slice->ChromaArrayType == 3) {
         if (trafoDepth == 0 || tt->cbf_cb[xBase][yBase][trafoDepth - 1]) {
-            tt->cbf_cb[x0][y0][trafoDepth] = CABAC(d);
+            tt->cbf_cb[x0][y0][trafoDepth] = CABAC(d, CTX_TYPE_TU_CBF_CBCR);
             if(slice->ChromaArrayType == 2 && (!tt->split_transform_flag[x0][y0][trafoDepth] || log2TrafoSize == 3)) {
-                tt->cbf_cb[x0][y0 + ( 1 << (log2TrafoSize - 1))][trafoDepth] = CABAC(d);
+                tt->cbf_cb[x0][y0 + (1 << (log2TrafoSize - 1))][trafoDepth] =
+                    CABAC(d, CTX_TYPE_TU_CBF_CBCR);
             }
         }
         if (trafoDepth == 0 || tt->cbf_cr[xBase][yBase][trafoDepth - 1]) {
-            tt->cbf_cr[x0][y0][trafoDepth] = CABAC(d);
+            tt->cbf_cr[x0][y0][trafoDepth] = CABAC(d, CTX_TYPE_TU_CBF_CBCR);
             if (slice->ChromaArrayType == 2 && (!tt->split_transform_flag[x0][y0][trafoDepth] || log2TrafoSize == 3)) {
-                tt->cbf_cr[x0][y0 + (1 << (log2TrafoSize - 1))][trafoDepth] = CABAC(d);
+                tt->cbf_cr[x0][y0 + (1 << (log2TrafoSize - 1))][trafoDepth] =
+                    CABAC(d, CTX_TYPE_TU_CBF_CBCR);
             }
         }
     }
@@ -3663,7 +3736,7 @@ parse_transform_tree(cabac_dec *d, struct cu *cu,
             (slice->ChromaArrayType == 2 &&
             (tt->cbf_cb[x0][y0 + (1 << (log2TrafoSize - 1))][trafoDepth] ||
             tt->cbf_cr[x0][y0 + (1 << (log2TrafoSize - 1))][trafoDepth]))) {
-            tt->cbf_luma[x0][y0][trafoDepth] = CABAC(d);
+            tt->cbf_luma[x0][y0][trafoDepth] = CABAC(d, CTX_TYPE_TU_CBF_LUMA);
         }
         tt->tu = parse_transform_unit(d, cu, tt, slice, hps, x0, y0, xBase, yBase, log2TrafoSize, trafoDepth, blkIdx);
     }
@@ -3672,25 +3745,25 @@ parse_transform_tree(cabac_dec *d, struct cu *cu,
 
 static void parse_mvd_coding(cabac_dec *d, struct mvd_coding *mvd, int x0,
                              int y0, int refList) {
-    mvd->abs_mvd_greater0_flag[0] = CABAC(d);
-    mvd->abs_mvd_greater0_flag[1] = CABAC(d);
+    mvd->abs_mvd_greater0_flag[0] = CABAC(d, CTX_TYPE_MV_ABS_MVD_GREATER0);
+    mvd->abs_mvd_greater0_flag[1] = CABAC(d, CTX_TYPE_MV_ABS_MVD_GREATER0);
     if (mvd->abs_mvd_greater0_flag[0]) {
-        mvd->abs_mvd_greater1_flag[0] = CABAC(d);
+        mvd->abs_mvd_greater1_flag[0] = CABAC(d, CTX_TYPE_MV_ABS_MVD_GREATER1);
     }
     if (mvd->abs_mvd_greater0_flag[1]) {
-        mvd->abs_mvd_greater1_flag[1] = CABAC(d);
+        mvd->abs_mvd_greater1_flag[1] = CABAC(d, CTX_TYPE_MV_ABS_MVD_GREATER1);
     }
     if (mvd->abs_mvd_greater0_flag[0]) {
         if (mvd->abs_mvd_greater1_flag[0]) {
-            mvd->abs_mvd_minus2[0] = CABAC(d);
+            mvd->abs_mvd_minus2[0] = GOL_UE(d->bits);
         }
-        mvd->mvd_sign_flag[0] = CABAC(d);
+        mvd->mvd_sign_flag[0] = CABAC_BP(d);
     }
     if (mvd->abs_mvd_greater0_flag[1]) {
         if (mvd->abs_mvd_greater1_flag[1]) {
-            mvd->abs_mvd_minus2[1] = CABAC(d);
+            mvd->abs_mvd_minus2[1] = GOL_UE(d->bits);
         }
-        mvd->mvd_sign_flag[1] = CABAC(d);
+        mvd->mvd_sign_flag[1] = CABAC_BP(d);
     }
 }
 
@@ -3740,34 +3813,34 @@ static void parse_prediction_unit(cabac_dec *d,
     pu->mvd = calloc(1, sizeof(struct mvd_coding));
     if (cu->cu_skip_flag[x0][y0]) {
         if (MaxNumMergeCand > 1) {
-            pu->merge_idx = CABAC(d);
+            pu->merge_idx = CABAC(d, CTX_TYPE_PU_MERGE_IDX);
         } else {
             //when merge_idx is not present, it is inferred to be 0
             pu->merge_idx = 0;
         }
     } else {/*MODE_INTER*/
-        pu->merge_flag = CABAC(d);
+        pu->merge_flag = CABAC(d, CTX_TYPE_PU_MERGE_FLAG);
         if (pu->merge_flag) {
             if (MaxNumMergeCand > 1) {
-                pu->merge_idx = CABAC(d);
+                pu->merge_idx = CABAC(d, CTX_TYPE_PU_MERGE_IDX);
             }
         } else {
             if (slice->slice_type == SLICE_TYPE_B) {
-                pu->inter_pred_idc = CABAC(d);
+                pu->inter_pred_idc = CABAC(d, CTX_TYPE_PU_INTER_PRED_IDC);
             }
             if (pu->inter_pred_idc != PRED_L1) {
                 if (slice->num_ref_idx_l0_active_minus1 > 0) {
-                    pu->ref_idx_l0 = CABAC(d);
+                    pu->ref_idx_l0 = CABAC(d, CTX_TYPE_PU_REF_IDX);
                 }
                 if (pu->mvd == NULL) {
                     pu->mvd = calloc(1, sizeof(struct mvd_coding));
                 }
                 parse_mvd_coding(d, pu->mvd, x0, y0, 0);
-                pu->mvp_l0_flag = CABAC(d);
+                pu->mvp_l0_flag = CABAC(d, CTX_TYPE_PU_MVP_FLAG);
             }
             if (pu->inter_pred_idc != PRED_L0) {
                 if (slice->num_ref_idx_l1_active_minus1 > 0) {
-                    pu->ref_idx_l1 = CABAC(d);
+                    pu->ref_idx_l1 = CABAC(d, CTX_TYPE_PU_REF_IDX);
                 }
                 if (slice->mvd_l1_zero_flag && pu->inter_pred_idc == PRED_BI) {
                     pu->MvdL1[x0][y0][0] = 0;
@@ -3778,7 +3851,7 @@ static void parse_prediction_unit(cabac_dec *d,
                     }
                     parse_mvd_coding(d, pu->mvd, x0, y0, 1);
                 }
-                pu->mvp_l1_flag = CABAC(d);
+                pu->mvp_l1_flag = CABAC(d, CTX_TYPE_PU_MVP_FLAG);
             }
         }
     }
@@ -3838,7 +3911,7 @@ process_zscan_order_block_availablity(struct slice_segment_header *slice, struct
 * @return: the availability of the neighbouring prediction block covering the location (xNbY, yNbY)
 */
 static bool
-process_prefication_block_availablity(struct slice_segment_header *slice, struct hevc_param_set *hps, struct cu *cu, int xCb, int yCb,
+process_predication_block_availablity(struct slice_segment_header *slice, struct hevc_param_set *hps, struct cu *cu, int xCb, int yCb,
         int nCbS, int xPb, int yPb, int nPbW, int nPbH, int partIdx, int xNbY, int yNbY)
 {
     bool availableN;
@@ -3897,7 +3970,7 @@ process_luma_intra_prediction_mode(struct slice_segment_header *slice, struct cu
         /*step 2*/
         bool availableA = process_zscan_order_block_availablity(slice, hps, xPb, yPb, xNbA, yNbA);
         
-        // bool availableB = process_prefication_block_availablity(slice, hps, cu, xPb, yPb, nCbS, xPb, yPb, nPbW, nPbH, partIdx, xNbB, yNbB);
+        // bool availableB = process_predication_block_availablity(slice, hps, cu, xPb, yPb, nCbS, xPb, yPb, nPbW, nPbH, partIdx, xNbB, yNbB);
         if (availableA == false) {
             cu->candIntraPredModeA = INTRA_DC;
         } else if (cu->CuPredMode[xNbA][yNbA]!= MODE_INTRA || cu->pcm_flag[xNbA][yNbA] == 1) {
@@ -4037,6 +4110,33 @@ process_chroma_intra_prediction_mode(struct slice_segment_header *slice, struct 
     }
 }
 
+// see Table 9-49, for split_cu_flag and cu_skip_flag
+int get_ctxInc(struct slice_segment_header *slice, struct hevc_param_set *hps,
+               struct cu *cu, int x0, int y0, int split_or_skip) {
+    int availableL =
+        process_zscan_order_block_availablity(slice, hps, x0, y0, x0 - 1, y0);
+    int availableA =
+        process_zscan_order_block_availablity(slice, hps, x0, y0, x0, y0 - 1);
+    int condL = 0;
+    int condA = 0;
+    if (split_or_skip) {
+        if (availableL && cu->CtDepth[x0 - 1][y0] > cu->CtDepth[x0][y0]) {
+                condL = 1;
+        }
+        if (availableA && cu->CtDepth[x0][y0 - 1] > cu->CtDepth[x0][y0]) {
+                condA = 1;
+        }
+    } else {
+        if (availableL && cu->cu_skip_flag[x0 - 1][y0]) {
+                condL = 1;
+        }
+        if (availableA && cu->cu_skip_flag[x0][y0 - 1]) {
+                condA = 1;
+        }
+    }
+    return ((condL && availableL) + (condA && availableA));
+}
+
 //see I.7.3.8.5
 static struct cu *parse_coding_unit(cabac_dec *d,
                                     struct hevc_slice *hslice,
@@ -4060,24 +4160,28 @@ static struct cu *parse_coding_unit(cabac_dec *d,
     //see 7-10
     uint32_t MinCbLog2SizeY = sps->log2_min_luma_coding_block_size_minus3 + 3;
     if (pps->transquant_bypass_enabled_flag) {
-        cu->cu_transquant_bypass_flag = CABAC(d);
+        cu->cu_transquant_bypass_flag =
+            CABAC(d, CTX_TYPE_CU_TRANSQUANT_BYPASS_FLAG);
     }
+    assert(slice->slice_type == SLICE_TYPE_I);
     if (slice->slice_type != SLICE_TYPE_I) {
-        cu->cu_skip_flag[x0][y0] = CABAC(d);
+        cu->cu_skip_flag[x0][y0] = CABAC(d, CTX_TYPE_CU_SKIP_FLAG + get_ctxInc(slice, hps, cu, x0, y0, 0));
     }
     
-    //nCbS specify the size of current coding block
+    //nCbS specify the size of current coding block, number of samples
     int nCbS = (1 << log2CbSize);
+    VDBG(hevc, "nCbS %d", nCbS);
     if (cu->cu_skip_flag[x0][y0]) {
         parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS);
     } else if (SkipIntraEnabledFlag) {
-        cu->skip_intra_flag[x0][y0] = CABAC(d);
+        cu->skip_intra_flag[x0][y0] = CABAC(d, CTX_TYPE_3D_SKIP_INTRA_FLAG);
     }
 
+#if 0 // we already make sure it is TYPE_I
     if (!cu->cu_skip_flag[x0][y0] && !cu->skip_intra_flag[x0][y0]) {
         if (slice->slice_type != SLICE_TYPE_I) {
-            uint8_t pred_mode_flag = CABAC(d);
-            for (int x = x0; x < x0 + nCbS - 1; x ++) {
+            uint8_t pred_mode_flag = CABAC(d, CTX_TYPE_CU_PRED_MODE_FLAG);
+            for (int x = x0; x < x0 + nCbS - 1; x++) {
                 for (int y = y0; y < y0 + nCbS - 1; y ++) {
                     if (pred_mode_flag == 0) {
                         cu->CuPredMode[x][y] = MODE_INTER;
@@ -4088,6 +4192,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
             }
         }
     }
+#endif
     //if pred_mode_flag not present
     for (int x = x0; x < x0 + nCbS - 1; x ++) {
         for (int y = y0; y < y0 + nCbS - 1; y ++) {
@@ -4111,163 +4216,184 @@ static struct cu *parse_coding_unit(cabac_dec *d,
     //     predPartModeFlag = 0;
     // }
     if (!cu->cu_skip_flag[x0][y0] && !cu->skip_intra_flag[x0][y0]) {
-        // if (sps->sps_scc_ext->palette_mode_enabled_flag &&
-        //     cu->CuPredMode[x0][y0] == MODE_INTRA &&
-        //     log2CbSize <= slice->MaxTbLog2SizeY) {
-        //     cu->palette_mode_flag[x0][y0] = CABAC(d);
-        // } else {
-        //     cu->palette_mode_flag[x0][y0] = 0;
-        // }
-        // if (cu->palette_mode_flag[x0][y0]) {
-        //     struct palette_coding* pc = calloc(1, sizeof(*pc));
-        //     parse_palette_coding(v, pc, cu, slice, pps, sps, x0, y0, nCbS);
-        // } else {
-        if ((cu->CuPredMode[x0][y0] != MODE_INTRA ||
-            log2CbSize == MinCbLog2SizeY)) {
-            int part_mode = CABAC(d);
-            if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
-                assert(part_mode < 2);
-            } else {
-                if (log2CbSize > MinCbLog2SizeY && sps->amp_enabled_flag == 1) {
-                    assert((part_mode >= 0 && part_mode <=2) || (part_mode >= 4 && part_mode<= 7));
-                } else if ((log2CbSize > MinCbLog2SizeY && sps->amp_enabled_flag == 0) || log2CbSize == 3) {
-                    assert(part_mode >= 0 && part_mode <=2);
-                } else if (log2CbSize > 3 && log2CbSize == MinCbLog2SizeY) {
-                    assert(part_mode >= 0 && part_mode <=3);
+        if (sps->sps_scc_ext->palette_mode_enabled_flag &&
+            cu->CuPredMode[x0][y0] == MODE_INTRA &&
+            log2CbSize <= slice->MaxTbLog2SizeY) {
+            cu->palette_mode_flag[x0][y0] = CABAC(d, CTX_TYPE_CU_PALETTE_MODE_FLAG);
+        } else {
+            cu->palette_mode_flag[x0][y0] = 0;
+        }
+        if (cu->palette_mode_flag[x0][y0]) {
+            struct palette_coding* pc = calloc(1, sizeof(*pc));
+            parse_palette_coding(d, pc, cu, slice, pps, sps, x0, y0, nCbS);
+        } else {
+            if ((cu->CuPredMode[x0][y0] != MODE_INTRA ||
+                log2CbSize == MinCbLog2SizeY)) {
+                int part_mode = CABAC(d, CTX_TYPE_CU_PART_MODE);
+                if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
+                    assert(part_mode < 2);
+                } else {
+                    if (log2CbSize > MinCbLog2SizeY && sps->amp_enabled_flag == 1) {
+                        assert((part_mode >= 0 && part_mode <=2) || (part_mode >= 4 && part_mode<= 7));
+                    } else if ((log2CbSize > MinCbLog2SizeY && sps->amp_enabled_flag == 0) || log2CbSize == 3) {
+                        assert(part_mode >= 0 && part_mode <=2);
+                    } else if (log2CbSize > 3 && log2CbSize == MinCbLog2SizeY) {
+                        assert(part_mode >= 0 && part_mode <=3);
+                    }
                 }
-            }
-            //see table7-10
-            if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
-                cu->PartMode = (part_mode == 0) ? PART_2Nx2N : PART_NxN;
-                cu->IntraSplitFlag = (part_mode == 0) ? 0 : 1;
-            } else if (cu->CuPredMode[x0][y0] == MODE_INTER) {
-                cu->PartMode = part_mode;// already aligned the value be define
+                //see table7-10
+                if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
+                    cu->PartMode = (part_mode == 0) ? PART_2Nx2N : PART_NxN;
+                    cu->IntraSplitFlag = (part_mode == 0) ? 0 : 1;
+                } else if (cu->CuPredMode[x0][y0] == MODE_INTER) {
+                    cu->PartMode = part_mode;// already aligned the value be define
+                    cu->IntraSplitFlag = 0;
+                }
+            } else {
+                // if part_mode is not preset
+                cu->PartMode = PART_2Nx2N;
                 cu->IntraSplitFlag = 0;
             }
-        } else {
-            // if part_mode is not preset
-            cu->PartMode = PART_2Nx2N;
-            cu->IntraSplitFlag = 0;
-        }
 
-            
-        if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
-            if (sps->pcm_enabled_flag) {
-                int Log2MinIpcmCbSizeY = sps->pcm->log2_min_pcm_luma_coding_block_size_minus3 + 3;
-                int Log2MaxIpcmCbSizeY = sps->pcm->log2_diff_max_min_pcm_luma_coding_block_size + Log2MinIpcmCbSizeY;
-                if (cu->PartMode == PART_2Nx2N &&
-                    log2CbSize >= Log2MinIpcmCbSizeY &&
-                    log2CbSize <= Log2MaxIpcmCbSizeY) {
-                    cu->pcm_flag[x0][y0] = CABAC(d);
-                }
-            }
-            if (cu->pcm_flag[x0][y0]) {
-                cu->pcm = calloc(1, sizeof(struct pcm_sample));
-                while (!BYTE_ALIGNED(d->bits)) {
-                    //pcm_alignment_zero_bit
-                    SKIP_BITS(d->bits, 1);
-                }
-                parse_pcm_sample(d->bits, cu->pcm, slice, sps, x0, y0, log2CbSize);
-            } else {
-                int pbOffset = (cu->PartMode == PART_NxN) ? (nCbS / 2) : nCbS;
-                int log2PbSize = log2CbSize - ((cu->PartMode == PART_NxN) ? 1 : 0);
-                for (int j = 0; j < nCbS; j = j + pbOffset) {
-                    //see I.7.4.7.1
-                    int DepthFlag = vps->DepthLayerFlag[hslice->nalu->nuh_layer_id];
-                    //see I-25
-                    int IntraContourEnabledFlag = sps->sps_3d_ext[DepthFlag].intra_contour_enabled_flag && slice->in_comp_pred_flag;
-                    //see I-26
-                    int IntraDcOnlyWedgeEnabledFlag = sps->sps_3d_ext[DepthFlag].intra_dc_only_wedge_enabled_flag;
-                    
-                    for (int i = 0; i < nCbS; i = i + pbOffset) {
-                        if (IntraDcOnlyWedgeEnabledFlag || IntraContourEnabledFlag) {
-                            parse_intra_mode_ext(d, hslice, cu, hps, x0+i, y0+j, log2PbSize);
-                        }
-                        if (cu->intra_ext[x0+i][y0+j].no_dim_flag) {
-                            cu->prev_intra_luma_pred_flag[x0 + i][y0 + j] = CABAC(d);
-                        }
+                
+            if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
+                if (sps->pcm_enabled_flag) {
+                    int Log2MinIpcmCbSizeY = sps->pcm->log2_min_pcm_luma_coding_block_size_minus3 + 3;
+                    int Log2MaxIpcmCbSizeY = sps->pcm->log2_diff_max_min_pcm_luma_coding_block_size + Log2MinIpcmCbSizeY;
+                    if (cu->PartMode == PART_2Nx2N &&
+                        log2CbSize >= Log2MinIpcmCbSizeY &&
+                        log2CbSize <= Log2MaxIpcmCbSizeY) {
+                        cu->pcm_flag[x0][y0] =
+                            cabac_dec_terminate(d);
                     }
                 }
-                for (int j = 0; j < nCbS; j = j + pbOffset) {
-                    for (int i = 0; i < nCbS; i = i + pbOffset) {
-                        if (cu->prev_intra_luma_pred_flag[x0 + i][y0 + j]) {
-                            cu->mpm_idx[x0 + i][y0 + j] = CABAC(d);
-                            /* see I.8.4.2 */
-                            process_luma_intra_prediction_mode(slice, cu, hps, x0+i, y0+j);
+                if (cu->pcm_flag[x0][y0]) {
+                    cu->pcm = calloc(1, sizeof(struct pcm_sample));
+                    while (!BYTE_ALIGNED(d->bits)) {
+                        //pcm_alignment_zero_bit
+                        SKIP_BITS(d->bits, 1);
+                    }
+                    parse_pcm_sample(d->bits, cu->pcm, slice, sps, x0, y0, log2CbSize);
+                } else {
+                    int pbOffset = (cu->PartMode == PART_NxN) ? (nCbS / 2) : nCbS;
+                    int log2PbSize = log2CbSize - ((cu->PartMode == PART_NxN) ? 1 : 0);
+                    for (int j = 0; j < nCbS; j = j + pbOffset) {
+                        //see I.7.4.7.1
+                        int DepthFlag = vps->DepthLayerFlag[hslice->nalu->nuh_layer_id];
+                        //see I-25
+                        int IntraContourEnabledFlag = sps->sps_3d_ext[DepthFlag].intra_contour_enabled_flag && slice->in_comp_pred_flag;
+                        //see I-26
+                        int IntraDcOnlyWedgeEnabledFlag = sps->sps_3d_ext[DepthFlag].intra_dc_only_wedge_enabled_flag;
+                        
+                        for (int i = 0; i < nCbS; i = i + pbOffset) {
+                            if (IntraDcOnlyWedgeEnabledFlag || IntraContourEnabledFlag) {
+                                parse_intra_mode_ext(d, hslice, cu, hps, x0+i, y0+j, log2PbSize);
+                            }
+                            if (cu->intra_ext[x0+i][y0+j].no_dim_flag) {
+                                cu->prev_intra_luma_pred_flag[x0 + i][y0 + j] =
+                                    CABAC(d, CTX_TYPE_CU_PREV_INTRA_LUMA_PRED_FLAG);
+                            }
+                        }
+                    }
+                    for (int j = 0; j < nCbS; j = j + pbOffset) {
+                        for (int i = 0; i < nCbS; i = i + pbOffset) {
+                            if (cu->prev_intra_luma_pred_flag[x0 + i][y0 + j]) {
+                                cu->mpm_idx[x0 + i][y0 + j] = CABAC_BP(d);
+                                /* see I.8.4.2 */
+                                process_luma_intra_prediction_mode(slice, cu, hps, x0+i, y0+j);
+                            } else {
+                                cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] = CABAC_BPFL(d, 5);
+                            }
+                        }
+                    }
+                    if (ChromaArrayType == 3) {
+                        for (int j = 0; j < nCbS; j = j + pbOffset ) {
+                            for (int i = 0; i < nCbS; i = i + pbOffset) {
+                                int prefix = CABAC(
+                                    d, CTX_TYPE_CU_INTRA_CHROME_PRED_MODE);
+                                if (prefix == 0) {
+                                    cu->intra_chroma_pred_mode[x0 + i][y0 + j] = 4;
+                                } else {
+                                    cu->intra_chroma_pred_mode[x0 + i][y0 + j] = CABAC_BPFL(d, 2);
+                                }
+                            }
+                        }
+                    } else if(ChromaArrayType != 0) {
+                        //see 9.3.3.8, and table 9-46
+                        int prefix = CABAC(d, CTX_TYPE_CU_INTRA_CHROME_PRED_MODE);
+                        if (prefix == 0) {
+                            cu->intra_chroma_pred_mode[x0][y0] = 4;
                         } else {
-                            cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] = CABAC(d);
+                            cu->intra_chroma_pred_mode[x0][y0] = CABAC_BPFL(d, 2);
                         }
                     }
                 }
-                if (ChromaArrayType == 3) {
-                    for (int j = 0; j < nCbS; j = j + pbOffset ) {
-                        for (int i = 0; i < nCbS; i = i + pbOffset ) {
-                            cu->intra_chroma_pred_mode[x0 + i][y0 + j] = CABAC(d);
-                        }
-                    }
-                } else if(ChromaArrayType != 0) {
-                    cu->intra_chroma_pred_mode[x0][y0] = CABAC(d);
+            } else {
+                //inter, which is not possible a I frame
+                if( cu->PartMode == PART_2Nx2N )
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS);
+                else if( cu->PartMode == PART_2NxN ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS / 2 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 2 ), nCbS, nCbS / 2 );
+                } else if( cu->PartMode == PART_Nx2N ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 2, nCbS );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0, nCbS / 2, nCbS );
+                } else if( cu->PartMode == PART_2NxnU ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS / 4 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 4 ), nCbS, nCbS * 3 / 4 );
+                } else if( cu->PartMode == PART_2NxnD ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS * 3 / 4 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS * 3 / 4 ), nCbS, nCbS / 4 );
+                } else if( cu->PartMode == PART_nLx2N ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 4, nCbS );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 4 ), y0, nCbS * 3 / 4, nCbS );
+                } else if( cu->PartMode == PART_nRx2N ) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS * 3 / 4, nCbS );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS * 3 / 4 ), y0, nCbS / 4, nCbS );
+                } else if (cu->PartMode == PART_NxN) {
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 2, nCbS / 2 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0, nCbS / 2, nCbS / 2 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
+                    parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
+                } else {
+                    //unreachable code
+                    assert(0);
                 }
-            }
-        } else {
-            if( cu->PartMode == PART_2Nx2N )
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS);
-            else if( cu->PartMode == PART_2NxN ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS / 2 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 2 ), nCbS, nCbS / 2 );
-            } else if( cu->PartMode == PART_Nx2N ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 2, nCbS );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0, nCbS / 2, nCbS );
-            } else if( cu->PartMode == PART_2NxnU ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS / 4 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 4 ), nCbS, nCbS * 3 / 4 );
-            } else if( cu->PartMode == PART_2NxnD ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS * 3 / 4 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS * 3 / 4 ), nCbS, nCbS / 4 );
-            } else if( cu->PartMode == PART_nLx2N ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 4, nCbS );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 4 ), y0, nCbS * 3 / 4, nCbS );
-            } else if( cu->PartMode == PART_nRx2N ) {
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS * 3 / 4, nCbS );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS * 3 / 4 ), y0, nCbS / 4, nCbS );
-            } else { /* PART_NxN */
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS / 2, nCbS / 2 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0, nCbS / 2, nCbS / 2 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
-                parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
             }
         }
-        // }
     }
     // I.7.3.8.5 for 3D high efficiency video coding
-#if 0
-    parse_cu_extension(v, hslice, cu, hps, x0, y0, log2CbSize, slice->NumPicTotalCurr);
+    parse_cu_extension(d, hslice, cu, hps, x0, y0, log2CbSize, slice->NumPicTotalCurr);
     int DcOnlyFlag = cu->ext[x0][y0].dc_only_flag;
     if (DcOnlyFlag || (!cu->skip_intra_flag[x0][y0] && cu->CuPredMode[x0][y0] == MODE_INTRA))
-        parse_depth_dcs(v, cu, x0, y0, log2CbSize);
+        parse_depth_dcs(d, cu, x0, y0, log2CbSize);
 
     if (!cu->cu_skip_flag[x0][y0] && !cu->skip_intra_flag[x0][y0] &&
         !DcOnlyFlag &&!cu->pcm_flag[x0][y0]) {
-#endif
-    if (!cu->pcm_flag[x0][y0]) {
-        if (cu->CuPredMode[x0][y0] != MODE_INTRA &&
-            !(cu->PartMode == PART_2Nx2N && cu->pu[x0][y0].merge_flag)) {
-            cu->rqt_root_cbf = CABAC(d);
-        }
-        if (cu->rqt_root_cbf) {
-            cu->MaxTrafoDepth = (cu->CuPredMode[x0][y0] == MODE_INTRA ?
-                (sps->max_transform_hierarchy_depth_intra + cu->IntraSplitFlag) :
-                sps->max_transform_hierarchy_depth_inter);
-            cu->tt = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0, log2CbSize, 0, 0);
+        if (!cu->pcm_flag[x0][y0]) {
+            if (cu->CuPredMode[x0][y0] != MODE_INTRA &&
+                !(cu->PartMode == PART_2Nx2N && cu->pu[x0][y0].merge_flag)) {
+                cu->rqt_root_cbf = CABAC(d, CTX_TYPE_CU_RQT_ROOT_CBF);
+            } else {
+                // for inter blocks with 2NX2N, must be
+                cu->rqt_root_cbf = 1;
+            }
+            if (cu->rqt_root_cbf) {
+                cu->MaxTrafoDepth = (cu->CuPredMode[x0][y0] == MODE_INTRA ?
+                    (sps->max_transform_hierarchy_depth_intra + cu->IntraSplitFlag) :
+                    sps->max_transform_hierarchy_depth_inter);
+                cu->tt = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0, log2CbSize, 0, 0);
+            }
         }
     }
     return cu;
 }
 
-static struct quad_tree *coding_quadtree(cabac_dec *d,
-                                         struct hevc_slice *hslice,
-                                         struct hevc_param_set *hps, int x0,
-                                         int y0, int log2CbSize, int cqtDepth) {
+static struct quad_tree *
+coding_quadtree(cabac_dec *d, struct hevc_slice *hslice,
+                struct hevc_param_set *hps, int x0,
+                int y0, int log2CbSize, int cqtDepth)
+{
     struct quad_tree *qt = calloc(1, sizeof(*qt));
     struct slice_segment_header *slice = hslice->slice;
     struct vps *vps = hps->vps;
@@ -4277,7 +4403,8 @@ static struct quad_tree *coding_quadtree(cabac_dec *d,
     if (x0 + ( 1 << log2CbSize ) <= sps->pic_width_in_luma_samples &&
         y0 + ( 1 << log2CbSize ) <= sps->pic_height_in_luma_samples &&
         log2CbSize > slice->MinCbLog2SizeY) {
-        qt->split_cu_flag = CABAC(d);
+        qt->split_cu_flag =
+            CABAC(d, CTX_TYPE_SPLIT_CU_FLAG + get_ctxInc(slice, hps, qt->cu, x0, y0, 1));
     } else {
         //see 7.4.9.4
         //if split_cu_flag is not present
@@ -4527,6 +4654,7 @@ parse_slice_segment_layer(struct hevc_nalu_header *headr, struct bits_vec *v,
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
 
     bits_vec_dump(v);
+    //we have process the segment header done, reinit for segment_data
     bits_vec_reinit_cur(v);
     bits_vec_dump(v);
 

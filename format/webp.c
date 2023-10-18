@@ -1931,44 +1931,6 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     return 0;
 }
 
-#define AVG2(a, b) (((a) + (b))/ 2)
-
-// BGRA
-#define ALPHA(a) ((a) & 0xFF)
-#define RED(a) ((a>>8)&0xFF)
-#define GREEN(a) ((a>>16)&0xFF)
-#define BLUE(a) ((a>>24)&0xFF)
-
-static uint32_t predict_transform_select(uint32_t L, uint32_t T, uint32_t TL) {
-    // L = left pixel, T = top pixel, TL = top-left pixel.
-
-    // ARGB component estimates for prediction.
-    int pAlpha = ALPHA(L) + ALPHA(T) - ALPHA(TL);
-    int pRed = RED(L) + RED(T) - RED(TL);
-    int pGreen = GREEN(L) + GREEN(T) - GREEN(TL);
-    int pBlue = BLUE(L) + BLUE(T) - BLUE(TL);
-
-    // Manhattan distances to estimates for left and top pixels.
-    int pL = ABS(pAlpha - ALPHA(L)) + ABS(pRed - RED(L)) +
-             ABS(pGreen - GREEN(L)) + ABS(pBlue - BLUE(L));
-    int pT = ABS(pAlpha - ALPHA(T)) + ABS(pRed - RED(T)) +
-             ABS(pGreen - GREEN(T)) + ABS(pBlue - BLUE(T));
-
-    // Return either left or top, the one closer to the prediction.
-    if (pL < pT) {
-        return L;
-    } else {
-        return T;
-    }
-}
-void predictor_transform_output(uint32_t residual, uint32_t pred, uint8_t *alpha,
-                              uint8_t *red, uint8_t *green, uint8_t *blue) {
-    *alpha = ALPHA(residual) + ALPHA(pred);
-    *red = RED(residual) + RED(pred);
-    *green = GREEN(residual) + GREEN(pred);
-    *blue = BLUE(residual) + BLUE(pred);
-}
-
 static void webpl_predicator_transform(WEBP *w, struct bits_vec *v) {
     int size_bits = READ_BITS(v, 3) + 2;
     int block_width = (1 << size_bits);

@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <math.h>
 #include <errno.h>
 #include <arpa/inet.h>
 
@@ -10,6 +9,7 @@
 #include "utils.h"
 #include "huffman.h"
 #include "vlog.h"
+#include "idct.h"
 
 VLOG_REGISTER(jpg, DEBUG)
 
@@ -18,7 +18,7 @@ struct jpg_decoder {
     huffman_tree *dc;
     huffman_tree *ac;
     uint16_t *quant;
-    int buf[64];
+    int16_t buf[64];
     uint8_t last_rst_marker_seen;
 };
 
@@ -148,213 +148,12 @@ get_vlc(int code, int bitlen)
 }
 
 
-
-static inline uint8_t
-descale_and_clamp(int x, int shift)
-{
-    x += (1UL << (shift - 1));
-    if (x < 0)
-        x = (x >> shift) | ((~(0UL)) << (32 - (shift)));
-    else
-        x >>= shift;
-    x += 128;
-    return clamp(x, 255);
-}
-
-/* keep it slow, but high quality */
-void
-idct_float(struct jpg_decoder *d, int *output, int stride)
-{
-    const float m0 = 2.0 * cos(1.0 / 16.0 * 2.0 * M_PI);
-    const float m1 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
-    const float m3 = 2.0 * cos(2.0 / 16.0 * 2.0 * M_PI);
-    const float m5 = 2.0 * cos(3.0 / 16.0 * 2.0 * M_PI);
-    const float m2 = m0 - m5;
-    const float m4 = m0 + m5;
-    const float s0 = cos(0.0 / 16.0 * M_PI) / sqrt(8);
-    const float s1 = cos(1.0 / 16.0 * M_PI) / 2.0;
-    const float s2 = cos(2.0 / 16.0 * M_PI) / 2.0;
-    const float s3 = cos(3.0 / 16.0 * M_PI) / 2.0;
-    const float s4 = cos(4.0 / 16.0 * M_PI) / 2.0;
-    const float s5 = cos(5.0 / 16.0 * M_PI) / 2.0;
-    const float s6 = cos(6.0 / 16.0 * M_PI) / 2.0;
-    const float s7 = cos(7.0 / 16.0 * M_PI) / 2.0;
-    
-    int *inptr;
-    float *wsptr;
-    int *outptr;
-    int ctr;
-    float workspace[64]; /* buffers data between passes */
-
-    /* Pass 1: process columns from input, store into work array. */
-    inptr = d->buf;
-
-    wsptr = workspace;
-    for (ctr = 8; ctr > 0; ctr--) {
-        const float g0 = inptr[0 * 8] * s0;
-        const float g1 = inptr[4 * 8] * s4;
-        const float g2 = inptr[2 * 8] * s2;
-        const float g3 = inptr[6 * 8] * s6;
-        const float g4 = inptr[5 * 8] * s5;
-        const float g5 = inptr[1 * 8] * s1;
-        const float g6 = inptr[7 * 8] * s7;
-        const float g7 = inptr[3 * 8] * s3;
-
-        /* Even part */
-        const float f0 = g0;
-        const float f1 = g1;
-        const float f2 = g2;
-        const float f3 = g3;
-        const float f4 = g4 - g7;
-        const float f5 = g5 + g6;
-        const float f6 = g5 - g6;
-        const float f7 = g4 + g7;
-
-        const float e0 = f0;
-        const float e1 = f1;
-        const float e2 = f2 - f3;
-        const float e3 = f2 + f3;
-        const float e4 = f4;
-        const float e5 = f5 - f7;
-        const float e6 = f6;
-        const float e7 = f5 + f7;
-        const float e8 = f4 + f6;
-
-        const float d0 = e0;
-        const float d1 = e1;
-        const float d2 = e2 * m1;
-        const float d3 = e3;
-        const float d4 = e4 * m2;
-        const float d5 = e5 * m3;
-        const float d6 = e6 * m4;
-        const float d7 = e7;
-        const float d8 = e8 * m5;
-
-        const float c0 = d0 + d1;
-        const float c1 = d0 - d1;
-        const float c2 = d2 - d3;
-        const float c3 = d3;
-        const float c4 = d4 + d8;
-        const float c5 = d5 + d7;
-        const float c6 = d6 - d8;
-        const float c7 = d7;
-        const float c8 = c5 - c6;
-
-        const float b0 = c0 + c3;
-        const float b1 = c1 + c2;
-        const float b2 = c1 - c2;
-        const float b3 = c0 - c3;
-        const float b4 = c4 - c8;
-        const float b5 = c8;
-        const float b6 = c6 - c7;
-        const float b7 = c7;
-
-        wsptr[0 * 8] = b0 + b7;
-        wsptr[1 * 8] = b1 + b6;
-        wsptr[2 * 8] = b2 + b5;
-        wsptr[3 * 8] = b3 + b4;
-        wsptr[4 * 8] = b3 - b4;
-        wsptr[5 * 8] = b2 - b5;
-        wsptr[6 * 8] = b1 - b6;
-        wsptr[7 * 8] = b0 - b7;
-
-        inptr++;            /* advance pointers to next column */
-        wsptr++;
-    }
-    
-    /* Pass 2: process rows from work array, store into output array. */
-    /* Note that we must descale the results by a factor of 8 == 2**3. */
-
-    wsptr = workspace;
-    outptr = output;
-    for (ctr = 0; ctr < 8; ctr++) {
-        /* Rows of zeroes can be exploited in the same way as we did with columns.
-        * However, the column calculation has created many nonzero AC terms, so
-        * the simplification applies less often (typically 5% to 10% of the time).
-        * And testing floats for zero is relatively expensive, so we don't bother.
-        */
-
-        /* Even part */
-        const float g0 = wsptr[0] * s0;
-        const float g1 = wsptr[4] * s4;
-        const float g2 = wsptr[2] * s2;
-        const float g3 = wsptr[6] * s6;
-        const float g4 = wsptr[5] * s5;
-        const float g5 = wsptr[1] * s1;
-        const float g6 = wsptr[7] * s7;
-        const float g7 = wsptr[3] * s3;
-
-        const float f0 = g0;
-        const float f1 = g1;
-        const float f2 = g2;
-        const float f3 = g3;
-        const float f4 = g4 - g7;
-        const float f5 = g5 + g6;
-        const float f6 = g5 - g6;
-        const float f7 = g4 + g7;
-
-        const float e0 = f0;
-        const float e1 = f1;
-        const float e2 = f2 - f3;
-        const float e3 = f2 + f3;
-        const float e4 = f4;
-        const float e5 = f5 - f7;
-        const float e6 = f6;
-        const float e7 = f5 + f7;
-        const float e8 = f4 + f6;
-
-        const float d0 = e0;
-        const float d1 = e1;
-        const float d2 = e2 * m1;
-        const float d3 = e3;
-        const float d4 = e4 * m2;
-        const float d5 = e5 * m3;
-        const float d6 = e6 * m4;
-        const float d7 = e7;
-        const float d8 = e8 * m5;
-
-        const float c0 = d0 + d1;
-        const float c1 = d0 - d1;
-        const float c2 = d2 - d3;
-        const float c3 = d3;
-        const float c4 = d4 + d8;
-        const float c5 = d5 + d7;
-        const float c6 = d6 - d8;
-        const float c7 = d7;
-        const float c8 = c5 - c6;
-
-        const float b0 = c0 + c3;
-        const float b1 = c1 + c2;
-        const float b2 = c1 - c2;
-        const float b3 = c0 - c3;
-        const float b4 = c4 - c8;
-        const float b5 = c8;
-        const float b6 = c6 - c7;
-        const float b7 = c7;
-
-        /* Final output stage:
-         No scale down for quality
-         and range-limit */
-        outptr[0] = descale_and_clamp((int)(b0 + b7), 0);
-        outptr[7] = descale_and_clamp((int)(b0 - b7), 0);
-        outptr[1] = descale_and_clamp((int)(b1 + b6), 0);
-        outptr[6] = descale_and_clamp((int)(b1 - b6), 0);
-        outptr[2] = descale_and_clamp((int)(b2 + b5), 0);
-        outptr[5] = descale_and_clamp((int)(b2 - b5), 0);
-        outptr[4] = descale_and_clamp((int)(b3 + b4), 0);
-        outptr[3] = descale_and_clamp((int)(b3 - b4), 0);
-        
-        wsptr += 8;        /* advance pointer to next row */
-        outptr += stride;
-    }
-}
-
 //decode vec to decoder buf
 bool 
 decode_data_unit(struct jpg_decoder *d)
 {
     int dc, ac;
-    int *p = d->buf;
+    int16_t *p = d->buf;
     huffman_tree *dc_tree = d->dc;
     huffman_tree *ac_tree = d->ac;
 
@@ -441,9 +240,8 @@ destroy_decoder(struct jpg_decoder *d)
 #define ONE_HALF        (1UL << (SCALEBITS - 1))
 #define FIX(x)          ((int)((x) * (1UL<<SCALEBITS) + 0.5))
 
-static void
-YCbCr_to_BGRA32(JPG *j, int* Y, int* Cb, int* Cr, uint8_t* ptr)
-{
+static void YCbCr_to_BGRA32(JPG *j, int16_t *Y, int16_t *Cb, int16_t *Cr,
+                            uint8_t *ptr) {
 #if 0
     VDBG(jpg, "YCbCr :");
     for (int i = 0; i < 16; i ++) {
@@ -583,8 +381,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 #endif
     huffman_decode_start(data, len);
 
-    int Y[3][64*4], *Cr, *Cb;
-    int dummy[64] = {0};
+    int16_t Y[3][64*4], *Cr, *Cb;
+    int16_t dummy[64] = {0};
 
     for (int y = 0; y < height / ystride; y++) {
         //block start
@@ -596,7 +394,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                 for (int vi = 0; vi < v; vi ++) {
                     for (int hi = 0; hi < h; hi ++) {
                         decode_data_unit(d[i]);
-                        idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
+                        // idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
+                        idct_8x8(d[i]->buf, &Y[i][64 * vi * h + 8 * hi], h * 8);
                     }
                 }
             }

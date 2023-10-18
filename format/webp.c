@@ -13,6 +13,7 @@
 #include "utils.h"
 #include "vlog.h"
 #include "webp.h"
+#include "idct.h"
 
 VLOG_REGISTER(webp, DEBUG)
 
@@ -1107,35 +1108,6 @@ static void IWHT_fast(int16_t *input, int16_t *output) {
     }
 }
 
-// do idct for every 16 block unit
-static void IDCT(const int16_t *in, int16_t *out)
-{
-    static const int c1 = 20091;
-    static const int c2 = 35468;
-    int tmp[16];
-    int i;
-    for (i = 0; i < 4; ++i) {
-        const int a0 = in[0 + i] + in[8 + i];
-        const int a1 = in[0 + i] - in[8 + i];
-        const int a2 = ((in[4 + i] * c2) >> 16) - in[12 + i] - ((in[12 + i] * c1) >> 16);
-        const int a3 = in[4 + i] + ((in[4 + i] * c1) >> 16) + ((in[12 + i] * c2) >> 16);
-        tmp[0 + i] = a0 + a3;
-        tmp[12 + i] = a0 - a3;
-        tmp[4 + i] = a1 + a2;
-        tmp[8 + i] = a1 - a2;
-    }
-    for (i = 0; i < 4; ++i) {
-        const int a0 = tmp[0 + i * 4] + tmp[2 + i * 4];
-        const int a1 = tmp[0 + i * 4] - tmp[2 + i * 4];
-        const int a2 = (tmp[1 + i * 4] * c2 >> 16) - tmp[3 + i * 4] - (tmp[3 + i * 4] * c1 >> 16);
-        const int a3 = tmp[1 + i * 4] + (tmp[1 + i * 4] * c1 >> 16) + (tmp[3 + i * 4] * c2 >> 16);
-        out[4 * i + 0] = (a0 + a3 + 4) >> 3;
-        out[4 * i + 3] = (a0 - a3 + 4) >> 3;
-        out[4 * i + 1] = (a1 + a2 + 4) >> 3;
-        out[4 * i + 2] = (a1 - a2 + 4) >> 3;
-    }
-}
-
 struct context {
     int ctx[9];
 };
@@ -1203,7 +1175,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
             int ctx = top[block->x].ctx[x + 1] + l;
             const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
             if (nz > 1 || dst[0] != 0) {
-                IDCT(dst, dst);
+                idct_4x4(dst, dst);
             }
             dst += 16;
             l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
@@ -1219,7 +1191,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
                 int ctx = l + top[block->x].ctx[x + ch];
                 const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
                 if (nz > 1 || dst[0] != 0) {
-                    IDCT(dst, dst);
+                    idct_4x4(dst, dst);
                 }
                 dst += 16;
                 l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;

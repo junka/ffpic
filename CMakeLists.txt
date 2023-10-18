@@ -52,6 +52,7 @@ list(APPEND FFPIC_CODING
   "${FFPIC_ROOT}/utils/utils.c"
   "${FFPIC_ROOT}/utils/vlog.c"
   "${FFPIC_ROOT}/utils/byteorder.c"
+  "${FFPIC_ROOT}/utils/idct.c"
   "${FFPIC_ROOT}/coding/hevc.c")
 
 list(APPEND FFPIC_FORMART

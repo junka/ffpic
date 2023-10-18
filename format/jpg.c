@@ -10,6 +10,7 @@
 #include "huffman.h"
 #include "vlog.h"
 #include "idct.h"
+#include "colorspace.h"
 
 VLOG_REGISTER(jpg, DEBUG)
 
@@ -18,7 +19,7 @@ struct jpg_decoder {
     huffman_tree *dc;
     huffman_tree *ac;
     uint16_t *quant;
-    int16_t buf[64];
+    // int16_t buf[64];
     uint8_t last_rst_marker_seen;
 };
 
@@ -150,10 +151,10 @@ get_vlc(int code, int bitlen)
 
 //decode vec to decoder buf
 bool 
-decode_data_unit(struct jpg_decoder *d)
+decode_data_unit(struct jpg_decoder *d, int16_t buf[64])
 {
     int dc, ac;
-    int16_t *p = d->buf;
+    int16_t *p = buf;
     huffman_tree *dc_tree = d->dc;
     huffman_tree *ac_tree = d->ac;
 
@@ -194,6 +195,7 @@ decode_data_unit(struct jpg_decoder *d)
     }
 
     for (int i = 0; i < 64; i++) {
+        // VINFO(jpg, "%d: %d, quant %d, -> %d", i, p[i], d->quant[i], p[i]* d->quant[i]);
         p[i] *= d->quant[i];
     }
     return true;
@@ -235,76 +237,6 @@ destroy_decoder(struct jpg_decoder *d)
     free(d);
 }
 
-
-#define SCALEBITS       10
-#define ONE_HALF        (1UL << (SCALEBITS - 1))
-#define FIX(x)          ((int)((x) * (1UL<<SCALEBITS) + 0.5))
-
-static void YCbCr_to_BGRA32(JPG *j, int16_t *Y, int16_t *Cb, int16_t *Cr,
-                            uint8_t *ptr) {
-#if 0
-    VDBG(jpg, "YCbCr :");
-    for (int i = 0; i < 16; i ++) {
-        for (int j = 0; j < 16; j ++) {
-            VDBG(jpg, "%04x ", Y[i*16 + j]);
-        }
-        VDBG(jpg, "\n");
-    }
-#endif
-    uint8_t *p, *p2;
-    int offset_to_next_row;
-    int width = ((j->sof.width + 7) >> 3) << 3;
-    int pitch = width * 4;
-
-    int v = j->sof.colors[0].vertical;
-    int h = j->sof.colors[0].horizontal;
-    p = ptr;
-    if (v == 2)
-        p2 = ptr + pitch;
-    offset_to_next_row = pitch * v - 8 * h * 4;
-
-    for (int i = 0; i < 8; i++) {
-        for (int k = 0; k < 8; k++) {
-            int y, cb, cr;
-            int add_r, add_g, add_b;
-            int r, g , b;
-            
-            //all YCbCr have been added by 128 in idct
-            cb = *Cb++ - 128;
-            cr = *Cr++ - 128;
-            add_r =                      FIX(1.40200) * cr  + ONE_HALF;
-            add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr  + ONE_HALF;
-            add_b = FIX(1.77200) * cb + ONE_HALF;
-            for (int i = 0; i < h; i ++) {
-                y = (*Y++) << SCALEBITS;
-                b = (y + add_b) >> SCALEBITS;
-                g = (y + add_g) >> SCALEBITS;
-                r = (y + add_r) >> SCALEBITS;
-                *p++ = clamp(b, 255);
-                *p++ = clamp(g, 255);
-                *p++ = clamp(r, 255);
-                *p++ = 0xff;    //alpha
-            }
-            if (v == 2) {
-                for (int j = 0; j < h; j ++) {
-                    y = (Y[8 * h - 1*h + j]) << SCALEBITS;
-                    b = (y + add_b) >> SCALEBITS;
-                    g = (y + add_g) >> SCALEBITS;
-                    r = (y + add_r) >> SCALEBITS;
-                    *p2++ = clamp(b, 255);
-                    *p2++ = clamp(g, 255);
-                    *p2++ = clamp(r, 255);
-                    *p2++ = 0xff;
-                }
-            }
-        }
-        if (v == 2)
-            Y += 8 * h;
-        p += offset_to_next_row;
-        if (v == 2)
-            p2 += offset_to_next_row;
-    }
-}
 
 #if 0
 static int 
@@ -351,7 +283,6 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     // each component owns a decoder, could be CMYK
     struct jpg_decoder *d[4];
-    // int yn = j->sof.colors[0].horizontal * j->sof.colors[0].vertical;
 
     //components_num is 1 or 3
     for (int i = 0; i < j->sof.components_num; i ++) {
@@ -383,6 +314,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     int16_t Y[3][64*4], *Cr, *Cb;
     int16_t dummy[64] = {0};
+    int16_t buf[64];
 
     for (int y = 0; y < height / ystride; y++) {
         //block start
@@ -393,9 +325,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                 int h = j->sof.colors[i].horizontal;
                 for (int vi = 0; vi < v; vi ++) {
                     for (int hi = 0; hi < h; hi ++) {
-                        decode_data_unit(d[i]);
+                        decode_data_unit(d[i], buf);
                         // idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
-                        idct_8x8(d[i]->buf, &Y[i][64 * vi * h + 8 * hi], h * 8);
+                        idct_8x8(buf, &Y[i][64 * vi * h + 8 * hi], h * 8);
                     }
                 }
             }
@@ -408,7 +340,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                 Cr = Y[2];
             }
 
-            YCbCr_to_BGRA32(j, Y[0], Cb, Cr, ptr);
+            YCbCr_to_BGRA32(ptr, pitch, Y[0], Cb, Cr, j->sof.colors[0].vertical,
+                            j->sof.colors[0].horizontal);
 
             if (restarts > 0) {
                 restarts --;

@@ -249,7 +249,7 @@ static const int kIDCTMatrix[64] = {
 };
 
 static inline void 
-idct_1d_8(const int16_t *in, const int stride, int16_t out[8]) {
+idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     int tmp0, tmp1, tmp2, tmp3, tmp4;
 
     tmp1 = kIDCTMatrix[0] * in[0];
@@ -354,8 +354,8 @@ void idct_8x8(int16_t block[64], int16_t *out, int stride)
     const int kColScale = 11;
     const int kColRound = 1 << (kColScale - 1);
     for (int x = 0; x < 8; ++x) {
-        int16_t colbuf[8] = {0};
-        idct_1d_8(&block[x], 8, colbuf);
+        int colbuf[8] = {0};
+        idct_1d_8(block + x, 8, colbuf);
         for (int y = 0; y < 8; ++y) {
           colidcts[8 * y + x] = (colbuf[y] + kColRound) >> kColScale;
         }
@@ -363,10 +363,10 @@ void idct_8x8(int16_t block[64], int16_t *out, int stride)
     const int kRowScale = 18;
     const int kRowRound = 257 << (kRowScale - 1); // includes offset by 128
     for (int y = 0; y < 8; ++y) {
-        int16_t rowbuf[8] = {0};
+        int rowbuf[8] = {0};
         idct_1d_8(&colidcts[8 * y], 1, rowbuf);
         for (int x = 0; x < 8; ++x) {
-          out[y * stride + x] = clamp((rowbuf[x] + kRowRound) >> kRowScale, 255);
+            out[y * stride + x] = clamp(((rowbuf[x] + kRowRound) >> kRowScale), 255);
         }
     }
 }

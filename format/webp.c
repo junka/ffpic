@@ -14,6 +14,7 @@
 #include "vlog.h"
 #include "webp.h"
 #include "idct.h"
+#include "colorspace.h"
 
 VLOG_REGISTER(webp, DEBUG)
 
@@ -1804,47 +1805,6 @@ calculate_filter_control_parameter(WEBP *w, int segment_id, int is_4x4)
         } else {
             filter->sub_limit = 0; // no filtering
         }
-    }
-}
-
-static void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t* yout, uint8_t *uout, uint8_t *vout,
-                            int y_stride, int uv_stride, int mbrows, int mbcols)
-{
-    uint8_t *p = ptr, *p2 = ptr;
-    int height = mbrows * 16;
-    int width = mbcols * 16;
-    int right_space = pitch - width * 4;
-    uint8_t *Y, *U, *V;
-    int16_t yy, u, v;
-    uint8_t r, g, b;
-
-    VDBG(webp, "pitch %d, right space %d", pitch, right_space);
-    for (int y = 0; y < mbrows; y++) {
-        for (int x = 0; x < mbcols; x++) {
-            Y = yout + y_stride * y * 16 + x * 16;
-            U = uout + 8 * uv_stride * y + x * 8;
-            V = vout + 8 * uv_stride * y + x * 8;
-            p = p2;
-            for (int i = 0; i < 16; i++) {
-                if (i == 0) {
-                    p2 = p + 16 * 4;
-                }
-                for (int j = 0; j < 16; j++) {
-                    yy = Y[i * y_stride + j] - 16;
-                    u = U[(i / 2) * uv_stride + (j / 2)] - 128;
-                    v = V[(i / 2) * uv_stride + (j / 2)] - 128;
-                    r = clamp(yy + 1.4075 * v, 255);
-                    g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
-                    b = clamp(yy + 1.779 * u, 255);
-                    p[4 * j] = b;
-                    p[4 * j + 1] = g;
-                    p[4 * j + 2] = r;
-                    p[4 * j + 3] = 0xFF;
-                }
-                p += pitch;
-            }
-        }
-        p2 = p - pitch + 16 * 4 + right_space;
     }
 }
 

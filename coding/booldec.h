@@ -33,8 +33,10 @@ uint32_t bool_dec_signed_bits(bool_dec *br, int nums);
 int bool_dec_tree(struct bool_dec *br, const int8_t *t, const uint8_t *p,
                   int start);
 
+#if 0
 uint32_t bool_dec_bit_alt(bool_dec *br, int probability);
-
+#define BOOL_DECODE_ALT(br, p) bool_dec_bit_alt(br, p)
+#endif
 uint32_t bool_dec_bit_half(bool_dec *br, int v);
 
 #define BOOL_BIT(br)  bool_dec_bit(br, 0x80)
@@ -42,7 +44,6 @@ uint32_t bool_dec_bit_half(bool_dec *br, int v);
 #define BOOL_SBITS(br, n) bool_dec_signed_bits(br, n)
 
 #define BOOL_DECODE(br, p) bool_dec_bit(br, p)
-#define BOOL_DECODE_ALT(br, p) bool_dec_bit_alt(br, p)
 #define BOOL_SIGNED(br, v)  bool_dec_bit_half(br, v)
 
 #define BOOL_TREE(br, t, p) bool_dec_tree(br, t, p, 0)

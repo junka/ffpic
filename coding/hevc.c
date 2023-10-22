@@ -2724,7 +2724,7 @@ static void parse_intra_mode_ext(cabac_dec *d,
             CABAC(d, CTX_TYPE_3D_DEPTH_INTRA_MODE_IDX_FLAG);
     }
     if (!ext->no_dim_flag && !ext->depth_intra_mode_idx_flag) {
-        ext->wedge_full_tab_idx = CABAC_BPFL(d, 1);
+        ext->wedge_full_tab_idx = CABAC_FL(d, 1);
     }
 }
 
@@ -2831,17 +2831,19 @@ parse_depth_dcs(cabac_dec *d, struct cu *cu, int x0, int y0, int log2CbSize)
 }
 
 //see 7.3.8.3 sample adaptive offset
-static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
+static struct sao *parse_sao(cabac_dec *d,
+                             struct sps *sps, struct slice_segment_header *slice,
                              uint32_t rx, uint32_t ry, uint32_t *CtbAddrRsToTs,
                              uint32_t CtbAddrInTs, uint32_t CtbAddrInRs,
                              uint32_t SliceAddrRs, uint32_t *TileId) {
     struct sao * sao = calloc(1, sizeof(*sao));
-
+    VDBG(hevc, "parsing sao (%d, %d):", rx, ry);
     if (rx > 0 ) {
         bool leftCtbInSliceSeg = (CtbAddrInRs > SliceAddrRs);
         bool leftCtbInTile = (TileId[CtbAddrInTs] == TileId[CtbAddrRsToTs[CtbAddrInRs - 1]]);
         if (leftCtbInSliceSeg && leftCtbInTile) {
             sao->sao_merge_left_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
+            VDBG(hevc, "sao_merge_left_flag %d", sao->sao_merge_up_flag);
         }
     }
     if (ry > 0 && !sao->sao_merge_left_flag) {
@@ -2850,20 +2852,22 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
                 TileId[CtbAddrRsToTs[CtbAddrInRs - slice->PicWidthInCtbsY]]);
         if (upCtbInSliceSeg && upCtbInTile) {
             sao->sao_merge_up_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
+            VDBG(hevc, "sao_merge_up_flag %d", sao->sao_merge_up_flag);
         }
     }
-    VDBG(hevc, "sao_merge_left_flag %d, sao_merge_up_flag %d",
-         sao->sao_merge_left_flag, sao->sao_merge_up_flag);
     if (!sao->sao_merge_up_flag && !sao->sao_merge_left_flag) {
         for (int cIdx = 0; cIdx < (slice->ChromaArrayType != 0 ? 3 : 1 ); cIdx++) {
             if ((slice->slice_sao_luma_flag && cIdx == 0) ||
                 (slice->slice_sao_chroma_flag && cIdx > 0)) {
                 if (cIdx == 0) {
-                    uint8_t sao_type_idx_luma = CABAC(d, CTX_TYPE_SAO_TYPE_INDEX);
+                    uint8_t sao_type_idx_luma =
+                        CABAC_TR(d, CTX_TYPE_SAO_TYPE_INDEX, 2, 0);
+                    VDBG(hevc, "sao_type_idx_luma %d", sao_type_idx_luma);
                     sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_luma;
                 } else if (cIdx == 1) {
                     uint8_t sao_type_idx_chroma =
-                        CABAC(d, CTX_TYPE_SAO_TYPE_INDEX);
+                        CABAC_TR(d, CTX_TYPE_SAO_TYPE_INDEX, 2, 0);
+                    VDBG(hevc, "sao_type_idx_chroma %d", sao_type_idx_chroma);
                     sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_chroma;
                 } else {
                     sao->SaoTypeIdx[cIdx][rx][ry] = 0;
@@ -2871,7 +2875,14 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
                 VDBG(hevc, "cIdx %d, SaoTypeIdx %d", cIdx, sao->SaoTypeIdx[cIdx][rx][ry]);
                 if (sao->SaoTypeIdx[cIdx][rx][ry] != 0 ) {
                     for (int i = 0; i < 4; i++) {
-                        sao->sao_offset_abs[cIdx][rx][ry][i] = CABAC_BP(d);
+                        int bitdepth =
+                            ((i == 0) ? (sps->bit_depth_luma_minus8 + 8)
+                                         : (sps->bit_depth_chroma_minus8 + 8));
+                        int cMax = (1 << (MIN(bitdepth, 10) - 5)) - 1;
+                        sao->sao_offset_abs[cIdx][rx][ry][i] = CABAC_TR(d, -1, cMax, 0);
+                        VDBG(hevc, "cMax %d, sao_offset_abs[%d][%d][%d][%d] %d", cMax,
+                             cIdx, rx, ry, i,
+                             sao->sao_offset_abs[cIdx][rx][ry][i]);
                     }
                     if (sao->SaoTypeIdx[cIdx][rx][ry] == 1) {
                         for (int i = 0; i < 4; i++ ) {
@@ -2894,13 +2905,13 @@ static struct sao *parse_sao(cabac_dec *d, struct slice_segment_header *slice,
                                 }
                             }
                         }
-                        sao->sao_band_position[cIdx][rx][ry] = CABAC_BPFL(d, 5);
+                        sao->sao_band_position[cIdx][rx][ry] = CABAC_FL(d, 5);
                     } else {
                         if (cIdx == 0) {
-                            sao->sao_eo_class_luma = CABAC_BPFL(d, 2);
+                            sao->sao_eo_class_luma = CABAC_FL(d, 2);
                         }
                         if (cIdx == 1) {
-                            sao->sao_eo_class_chroma = CABAC_BPFL(d, 2);
+                            sao->sao_eo_class_chroma = CABAC_FL(d, 2);
                         }
                         for (int i = 0; i < 4; i++ ) {
                             if (sao->sao_merge_left_flag) {
@@ -3269,7 +3280,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
         for (uint32_t i = 0; i <= pc->num_palette_indices_minus1; i++ ) {
             if (MaxPaletteIndex - adjust > 0 ) {
                 //see 9.3.3.13 binarization for palette_index_idx
-                int palette_idx_idc = CABAC_BPTB(d, MaxPaletteIndex);
+                int palette_idx_idc = CABAC_TB(d, MaxPaletteIndex);
                 pc->PaletteIndexIdc[i] = palette_idx_idc;
             }
             adjust = 1;
@@ -3376,7 +3387,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
                         !pc->palette_transpose_flag && slice->ChromaArrayType == 2 ) ||
                         (yC % 2 == 0 && pc->palette_transpose_flag &&
                         slice->ChromaArrayType == 2 ) || slice->ChromaArrayType == 3 ) {
-                        int palette_escape_val = CABAC_BPFL(
+                        int palette_escape_val = CABAC_FL(
                             d, ((cIdx == 0) ? (sps->bit_depth_luma_minus8 + 8) : (sps->bit_depth_chroma_minus8 +8)));
                         pc->PaletteEscapeVal[cIdx][xC][yC] = palette_escape_val;
                     }
@@ -3422,7 +3433,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         CABAC(d, CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX);
     if (rc[x0][y0].last_sig_coeff_x_prefix > 3) {
         rc[x0][y0].last_sig_coeff_x_suffix =
-            CABAC_BPFL(d, rc[x0][y0].last_sig_coeff_x_prefix);
+            CABAC_FL(d, rc[x0][y0].last_sig_coeff_x_prefix);
         LastSignificantCoeffX = (1 << ((rc[x0][y0].last_sig_coeff_x_prefix >> 1) - 1)) * (2 + (rc[x0][y0].last_sig_coeff_x_prefix & 1))
              + rc[x0][y0].last_sig_coeff_x_suffix;
     } else {
@@ -3430,7 +3441,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
     }
     if (rc[x0][y0].last_sig_coeff_y_prefix > 3) {
         rc[x0][y0].last_sig_coeff_y_suffix =
-            CABAC_BPFL(d, rc[x0][y0].last_sig_coeff_y_prefix>>1);
+            CABAC_FL(d, rc[x0][y0].last_sig_coeff_y_prefix>>1);
         LastSignificantCoeffY = (1 << ((rc[x0][y0].last_sig_coeff_y_prefix >> 1) - 1)) * (2 + (rc[x0][y0].last_sig_coeff_y_prefix & 1))
              + rc[x0][y0].last_sig_coeff_y_suffix;
     } else {
@@ -3568,10 +3579,10 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
                     } while(code);
                     if (prefix <=3) {
                         //FIXME
-                        code = CABAC_BPFL(d, 11);
+                        code = CABAC_FL(d, 11);
                         rc[xC][yC].coeff_abs_level_remaining[n] = (prefix << 11) + code;
                     } else {
-                        code = CABAC_BPFL(d, prefix-3 + 11);
+                        code = CABAC_FL(d, prefix-3 + 11);
                         rc[xC][yC].coeff_abs_level_remaining[n] = (((1<<(prefix-3))+2) << 12) + code;
                     }
                     
@@ -4216,7 +4227,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
     //     predPartModeFlag = 0;
     // }
     if (!cu->cu_skip_flag[x0][y0] && !cu->skip_intra_flag[x0][y0]) {
-        if (sps->sps_scc_ext->palette_mode_enabled_flag &&
+        if (sps->sps_scc_ext && sps->sps_scc_ext->palette_mode_enabled_flag &&
             cu->CuPredMode[x0][y0] == MODE_INTRA &&
             log2CbSize <= slice->MaxTbLog2SizeY) {
             cu->palette_mode_flag[x0][y0] = CABAC(d, CTX_TYPE_CU_PALETTE_MODE_FLAG);
@@ -4302,7 +4313,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                                 /* see I.8.4.2 */
                                 process_luma_intra_prediction_mode(slice, cu, hps, x0+i, y0+j);
                             } else {
-                                cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] = CABAC_BPFL(d, 5);
+                                cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] = CABAC_FL(d, 5);
                             }
                         }
                     }
@@ -4314,7 +4325,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                                 if (prefix == 0) {
                                     cu->intra_chroma_pred_mode[x0 + i][y0 + j] = 4;
                                 } else {
-                                    cu->intra_chroma_pred_mode[x0 + i][y0 + j] = CABAC_BPFL(d, 2);
+                                    cu->intra_chroma_pred_mode[x0 + i][y0 + j] = CABAC_FL(d, 2);
                                 }
                             }
                         }
@@ -4324,7 +4335,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                         if (prefix == 0) {
                             cu->intra_chroma_pred_mode[x0][y0] = 4;
                         } else {
-                            cu->intra_chroma_pred_mode[x0][y0] = CABAC_BPFL(d, 2);
+                            cu->intra_chroma_pred_mode[x0][y0] = CABAC_FL(d, 2);
                         }
                     }
                 }
@@ -4457,7 +4468,7 @@ coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
 
     VDBG(hevc, "slice_sao_luma_flag %d, slice_sao_chroma_flag %d", slice->slice_sao_luma_flag, slice->slice_sao_chroma_flag);
     if (slice->slice_sao_luma_flag || slice->slice_sao_chroma_flag) {
-        ctu->sao = parse_sao(d, slice, xCtb >> slice->CtbLog2SizeY, yCtb >> slice->CtbLog2SizeY, pps->CtbAddrRsToTs,
+        ctu->sao = parse_sao(d, sps, slice, xCtb >> slice->CtbLog2SizeY, yCtb >> slice->CtbLog2SizeY, pps->CtbAddrRsToTs,
          CtbAddrInTs, CtbAddrInRs, SliceAddrRs, TileId);
     }
     ctu->cqt = coding_quadtree(d, hslice, hps, xCtb, yCtb, slice->CtbLog2SizeY, 0);
@@ -4587,7 +4598,8 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     pps->MinTbAddrZs = init_zscan_array(slice, sps, pps->CtbAddrRsToTs);
 
     int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
-    // [0][slice_qpy];
+
+    cabac_init_models(slice_qpy, 0);
 
     /* invoke at the beginning of the decoding process */
     hslice->rps =

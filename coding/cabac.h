@@ -12,12 +12,11 @@ extern "C"{
 #define RANGE_NUM (4)
 
 typedef struct cabac_dec {
-    uint64_t value;
+    uint32_t value;
     uint32_t range;     //[127, 254]
     int count;
+
     struct bits_vec *bits;
-    // uint8_t* LPSTable[64];
-    // int bypass;
 } cabac_dec;
 
 enum ctx_index_type {
@@ -101,26 +100,27 @@ enum ctx_index_type {
 
 cabac_dec * cabac_dec_init(struct bits_vec*);
 
-int cabac_dec_bin(cabac_dec *br, int bypass);
+int cabac_dec_bin(cabac_dec *br, int tid, int bypass);
 
 int cabac_dec_decision(cabac_dec *dec, int ctx_idx);
 int cabac_dec_terminate(cabac_dec *dec);
 int cabac_dec_bypass(cabac_dec *dec);
 int cabac_dec_bypass_n(cabac_dec *dec, int n);
 int cabac_dec_bypass_tb(cabac_dec *dec, int max);
+int cabac_dec_bypass_fl(cabac_dec *dec, int max);
 
-void cabac_dec_free(cabac_dec *dec);
+    void cabac_dec_free(cabac_dec *dec);
 
 void cabac_init_models(int qpy, int initType);//here initType should alway be 0
 
-#define CABAC(br, id) cabac_dec_decision(br, id)
+#define CABAC(br, tid) cabac_dec_decision(br, tid)
 #define CABAC_BP(br) cabac_dec_bypass(br)
-#define CABAC_BPFL(br, n) cabac_dec_bypass_n(br, n)
-#if 0
-int cabac_dec_bypass_tr(cabac_dec *dec, int rice, int max);
-#define CABAC_BPTR(br, rice, max) cabac_dec_bypass_tr(br, rice, max)
-#endif
-#define CABAC_BPTB(br, max) cabac_dec_bypass_tb(br, max)
+#define CABAC_FL(br, max) cabac_dec_bypass_fl(br, max)
+
+int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam);
+#define CABAC_TR(br, tid, cMax, cRiceParam) cabac_dec_tr(br, tid, cMax, cRiceParam)
+
+#define CABAC_TB(br, max) cabac_dec_bypass_tb(br, max)
 
 #ifdef __cplusplus
 }

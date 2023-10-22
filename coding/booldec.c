@@ -9,7 +9,7 @@
 #include "vlog.h"
 
 VLOG_REGISTER(booldec, DEBUG)
-
+#if 0
 const uint8_t
 vp8_norm[256] __attribute__((aligned(16))) =
 {
@@ -30,7 +30,7 @@ vp8_norm[256] __attribute__((aligned(16))) =
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
-
+#endif
 static void
 bool_load_bytes(bool_dec *br)
 {
@@ -62,7 +62,7 @@ bool_dec_free(bool_dec *bt)
         bits_vec_free(bt->bits);
     free(bt);
 }
-
+#if 0
 uint32_t
 bool_decode_alt(bool_dec *br, int prob)
 {
@@ -91,7 +91,7 @@ bool_decode_alt(bool_dec *br, int prob)
     br->range = range + 1;
     return bit;
 }
-
+#endif
 uint32_t
 bool_dec_bit(bool_dec *br, int prob)
 {

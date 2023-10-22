@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +66,11 @@ static uint8_t RenormTable[32] = {
 struct ctx_model {
     uint8_t mpsbit : 1;
     uint8_t state : 7; // state need 6 bits, put mps or lps at the least bit
+
+    // below is need for TR
+    uint8_t bypass; // 6 bits 1 for bypass, greater than 5
+                    //  should keep the same with 6th
+    uint8_t bypass_len;
 };
 
 static int initValue_sao_merge[3] = {153, 153, 153};
@@ -226,17 +232,20 @@ static int initValue_depth_dc_abs[3] = {154, 154, 154};
 //assume we only have slice_type == I, which initType = 0 (see 9-7)
 static struct ctx_model ctx_table[CTX_TYPE_MAX_NUM];
 
-static inline void preserve_model_mem(struct ctx_model **ctx, int n) {
-    *ctx = calloc(n, sizeof(struct ctx_model));
+
+static void init_bypass_flag(struct ctx_model *ctx, uint8_t flags, uint8_t len)
+{
+    ctx->bypass = flags;
+    ctx->bypass_len = len;
 }
 
 static void init_model_ctx(struct ctx_model *ctx, int qpy, int initValue) {
     // see 9-4
     int slopeIdx = initValue >> 4;
-    int offsetIdx = initValue >> 5;
+    int offsetIdx = initValue & 15;
     // see 9-5
     int m = slopeIdx*5 - 45;
-    int n = (offsetIdx<<3)-16;
+    int n = (offsetIdx<<3) - 16;
     //see 9-6
     int preCtxState = clip3(1, 126, ((m * clip3(0, 51, qpy))>>4)+n);
     ctx->mpsbit = (preCtxState <= 63) ? 0 : 1;
@@ -246,12 +255,14 @@ static void init_model_ctx(struct ctx_model *ctx, int qpy, int initValue) {
 
 void cabac_init_models(int qpy, int initType)
 {
+    //see table 9-48
     struct ctx_model *ctx = ctx_table;
-    preserve_model_mem(&ctx, CTX_TYPE_MAX_NUM);
     init_model_ctx(
               ctx+CTX_TYPE_SAO_MERGE, qpy, initValue_sao_merge[initType]);
-    init_model_ctx(ctx+CTX_TYPE_SAO_TYPE_INDEX, qpy,
+
+    init_model_ctx(ctx + CTX_TYPE_SAO_TYPE_INDEX, qpy,
                    initValue_sao_type_idx[initType]);
+    init_bypass_flag(ctx + CTX_TYPE_SAO_TYPE_INDEX, 2, 2);
     for (int i = 0; i < 3; i ++) {
         init_model_ctx(ctx+CTX_TYPE_SPLIT_CU_FLAG, qpy,
                        initValue_split_cu_flag[initType][i]);
@@ -263,10 +274,12 @@ void cabac_init_models(int qpy, int initType)
                    initValue_palette_mode_flag[initType]);
     init_model_ctx(ctx + CTX_TYPE_CU_PART_MODE, qpy,
                    initValue_part_mode[initType]);
+    init_bypass_flag(ctx + CTX_TYPE_CU_PART_MODE, 1 << 3, 4);
     init_model_ctx(ctx + CTX_TYPE_CU_PREV_INTRA_LUMA_PRED_FLAG, qpy,
                    initValue_prev_intra_luma_pred_flag[initType]);
     init_model_ctx(ctx + CTX_TYPE_CU_INTRA_CHROME_PRED_MODE, qpy,
                    initValue_intra_chrome_pred_mode[initType]);
+    init_bypass_flag(ctx + CTX_TYPE_CU_INTRA_CHROME_PRED_MODE, 3 << 1, 3);
     for (int i = 0; i < 3; i++) {
         init_model_ctx(ctx + CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG, qpy,
                        initValue_split_transform_flag[initType][i]);
@@ -329,6 +342,7 @@ void cabac_init_models(int qpy, int initType)
     for (int i = 0; i < 2; i++) {
         init_model_ctx(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS, qpy,
                        initValue_cu_qp_delta_abs[initType][i]);
+        init_bypass_flag(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS, 1 << 5, 6);
     }
     init_model_ctx(ctx + CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_FLAG,
                    qpy, initValue_cu_chroma_qp_offset_flag[initType]);
@@ -406,16 +420,10 @@ cabac_dec_init(struct bits_vec *v)
 {
     cabac_dec *dec = malloc(sizeof(*dec));
     dec->bits = v;
-    dec->count = -8;
-    dec->value = 0;
+    dec->count = 8;
+    dec->value = READ_BITS(v, 16);
     dec->range = 510;
 
-    // if (!dec_list) {
-    //     dec_list = malloc(sizeof(*dec_list));
-    // } else {
-    //     dec_list = realloc(dec_list, sizeof(*dec_list)*(dec_num+1));
-    // }
-    // dec_list[dec_num++] = dec;
     return dec;
 }
 
@@ -423,11 +431,13 @@ cabac_dec_init(struct bits_vec *v)
 static void
 renormD(cabac_dec *dec, uint32_t scaledRange)
 {
+    //scaledRange is dec->range << 7
     if (scaledRange < (256 << 7)) {
-        dec->range = scaledRange >> 6;
+        dec->range = dec->range << 1;
         dec->value <<= 1;
-        if (++dec->count == 0) {
-            dec->count = -8;
+        //refill value when all read out
+        if (--dec->count <= 0) {
+            dec->count += 8;
             dec->value += READ_BITS(dec->bits, 8);
         }
     }
@@ -454,27 +464,30 @@ cabac_dec_free(cabac_dec *dec)
     free(dec);
 }
 
+//see Figure 9-8
 int
 cabac_dec_bypass(cabac_dec *dec)
 {
     int binVal = 0;
     /*Figure 9-8 */
     dec->value <<= 1;
-    if (++dec->count >=0) {
-        dec->count = -8;
+    if (--dec->count <= 0) {
+        dec->count += 8;
         dec->value += READ_BITS(dec->bits, 8);
     }
+    // we have the last 7 bits for buffer TBD
     uint32_t scaledRange = dec->range << 7;
+    VDBG(cabac, "scaledRange %d, value %d", scaledRange, dec->value);
     if (dec->value >= scaledRange) {
         binVal = 1;
         dec->value -= scaledRange;
     }
-
+    VDBG(cabac, "bypass v %x r %x c %d: binVal %d", dec->value, dec->range,
+         dec->count, binVal);
     return binVal;
 }
 
-int
-cabac_dec_bypass_n(cabac_dec *dec, int n)
+int cabac_dec_bypass_n(cabac_dec *dec, int n)
 {
     int val = 0;
     while (n--) {
@@ -484,28 +497,30 @@ cabac_dec_bypass_n(cabac_dec *dec, int n)
     return val;
 }
 
-static int cabac_dec_bypass_tu(cabac_dec *dec, int max)
+//see 9.3.3.5 FL
+int cabac_dec_bypass_fl(cabac_dec *dec, int max)
 {
-    for (int i = 0; i < max; i++) {
-        if (cabac_dec_bypass(dec) == 0) {
-            return i;
-        }
-    }
-    return max;
+    int fl = log2ceil(max + 1);
+    return cabac_dec_bypass_n(dec, fl);
 }
 
+//see 9.3.3.6
 int cabac_dec_bypass_tb(cabac_dec *dec, int max)
 {
-    return cabac_dec_bypass_tu(dec, max);
+    //see 9-17
+    int n = max + 1;
+    int k = log2floor(n);
+    int u = (1 << (k+1)) - n;
+    int v = 0;
+    v = cabac_dec_bypass_n(dec, k);
+    if (v >= u) {
+        v = (v << 1) | cabac_dec_bypass(dec);
+        v -= u;
+    }
+    return v;
 }
 
-#if 0
-int cabac_dec_bypass_tr(cabac_dec *dec, int Rice, int Max) {
-    int prefix = cabac_dec_bypass_tu(dec, Max>>Rice);
-    int suffix = cabac_dec_bypass_n(dec, Rice);
-    return (prefix << Rice) | suffix;
-}
-#endif
+
 int
 cabac_dec_terminate(cabac_dec *dec)
 {
@@ -524,49 +539,122 @@ cabac_dec_terminate(cabac_dec *dec)
 
 //see 9.3.4.3
 int
-cabac_dec_decision(cabac_dec *dec, int ctx_idx)
+cabac_dec_decision(cabac_dec *dec, int ctx_tid)
 {
-    struct ctx_model *m = &ctx_table[ctx_idx];
+    struct ctx_model *m = &ctx_table[ctx_tid];
     int binVal;
     uint8_t state = m->state;
-    uint32_t rangelps = LPSTable[state][(dec->range >> 6) - 4];
+    uint32_t rangelps = LPSTable[state][(dec->range >> 6) & 3];
     dec->range -= rangelps;
     uint32_t scaledRange = dec->range << 7;
     if (dec->value < scaledRange) {
         //MPS (Most Probable Symbol)
         binVal = m->mpsbit;
         m->state = NextStateMPS[state];
-        renormD(dec, scaledRange);
     } else {
         //LPS (Least Probable Symbol)
         binVal = 1 - m->mpsbit;
         int numbits = RenormTable[rangelps>>3];
         m->state = NextStateLPS[state];
-        dec->value = (dec->value - scaledRange) << numbits;
+        dec->value = dec->value << numbits;
         dec->range = rangelps << numbits;
-        dec->count += numbits;
+        dec->count -= numbits;
         if (state == 0) {
             m->mpsbit = 1 - m->mpsbit;
         }
-
-        if (dec->count >= 0) {
-            dec->value += READ_BITS(dec->bits, 8) << dec->count;
-            dec->count -= 8;
-        }
     }
+    VDBG(cabac, "decision v %x r %x c %d: binVal %d", dec->value, dec->range,
+         dec->count, binVal);
+    renormD(dec, scaledRange);
 
     return binVal;
 }
 
-// int
-// cabac_dec_bin(cabac_dec *dec, int bypass)
-// {
-//     if (bypass) {
-//         return cabac_dec_bypass(dec);
-//     }
+int
+cabac_dec_bin(cabac_dec *dec, int tid, int bypass)
+{
+    if (bypass) {
+        return cabac_dec_bypass(dec);
+    }
 
-//     return cabac_dec_decision(dec);
-// }
+    return cabac_dec_decision(dec, tid);
+}
+
+
+static inline int
+ctx_bypass_flags(struct ctx_model *m, int bin_idx) {
+    if (bin_idx > 5) {
+        bin_idx = 5;
+    }
+    if (bin_idx >= m->bypass_len) {
+        return -1;
+    }
+    return !!(m->bypass & (1 << bin_idx));
+}
+
+//see 9.3.3.2
+//it is varibale length
+int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam) {
+    struct ctx_model *m;
+    struct ctx_model all_bypass = {
+        .bypass = 0xFF,
+        .bypass_len = 6,
+    };
+    if (tid == -1) {
+        m = &all_bypass;
+    } else {
+        m = &ctx_table[tid];
+    }
+    // see 9-11
+    int t = cMax >> cRiceParam;
+    int prefix = 0, suffix = 0, i = 0;
+    int off = 0;
+    VDBG(cabac, "tid %d, (%d,off %d)flag %d, state %d, range %x, value %x", tid,
+         m->bypass, off, ctx_bypass_flags(m, off), m->state, dec->range, dec->value);
+    while (ctx_bypass_flags(m, off) >= 0 &&
+           cabac_dec_bin(dec, tid, ctx_bypass_flags(m, off++)) == 1 &&
+           prefix < t) {
+        prefix++;
+    }
+    VDBG(cabac, "prefix %d, t %d", prefix, t);
+    if (prefix >= t) {
+        // the bin string length cMax >> cRiceParam with all bins equal to 1
+        return cMax;
+    } else {
+        // if prefix < cMax >> cRiceParam, the prefix bin string
+        // is a bit string of length prefix + 1, then bins for binIdx less than prefix are equal to 1
+        // the bin
+        assert(ctx_bypass_flags(m, off) == 1);
+        // when cMax > symbolVal and cRiceParam > 0, suffix is present
+        if (cRiceParam > 0) {
+            VDBG(cabac, "(%d,off %d)flag %d, state %d, range %x, value %x",
+                 m->bypass, off, ctx_bypass_flags(m, off), m->state, dec->range,
+                 dec->value);
+            suffix = cabac_dec_bypass_fl(dec, (1 << cRiceParam) - 1);
+        }
+        //see 9-11, reverse the equation
+        return  (prefix << cRiceParam) + suffix;
+    }
+}
+
+//see 9.3.3.4, 9-16
+int cabac_dec_egk(cabac_dec *dec, int kth, int max_pre_ext_len,
+                  int trunc_suffix_len) {
+    int pre_ext_len = 0;
+    int escape_length;
+    int val = 0;
+    while ((pre_ext_len < max_pre_ext_len) && cabac_dec_bypass(dec))
+        pre_ext_len++;
+    if (pre_ext_len == max_pre_ext_len)
+        escape_length = trunc_suffix_len;
+    else
+        escape_length = pre_ext_len + kth;
+    while (escape_length-- > 0) {
+        val = (val << 1) + cabac_dec_bypass(dec);
+    }
+    val += ((1 << pre_ext_len) - 1) << kth;
+    return val;
+}
 
 void cabac_dec_reset(cabac_dec *dec)
 {

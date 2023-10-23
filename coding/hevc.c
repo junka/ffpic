@@ -2710,6 +2710,9 @@ static void parse_intra_mode_ext(cabac_dec *d,
 
     if (log2PbSize < 6) {
         ext->no_dim_flag = CABAC(d, CTX_TYPE_3D_NO_DIM_FLAG);
+    } else {
+        //see I.7.4.9.5.1, when not present, should be 1
+        ext->no_dim_flag = 1;
     }
     //see I.6.6 derivation process for a wedgelet partition pattern table
     //TODO
@@ -4234,10 +4237,13 @@ static struct cu *parse_coding_unit(cabac_dec *d,
         if (sps->sps_scc_ext && sps->sps_scc_ext->palette_mode_enabled_flag &&
             cu->CuPredMode[x0][y0] == MODE_INTRA &&
             log2CbSize <= slice->MaxTbLog2SizeY) {
-            cu->palette_mode_flag[x0][y0] = CABAC(d, CTX_TYPE_CU_PALETTE_MODE_FLAG);
+            cu->palette_mode_flag[x0][y0] =
+                CABAC(d, CTX_TYPE_CU_PALETTE_MODE_FLAG);
+            VDBG(hevc, "palette_mode_flag %d", cu->palette_mode_flag[x0][y0]);
         } else {
             cu->palette_mode_flag[x0][y0] = 0;
         }
+        VDBG(hevc, "palette_mode_flag %d", cu->palette_mode_flag[x0][y0]);
         if (cu->palette_mode_flag[x0][y0]) {
             struct palette_coding* pc = calloc(1, sizeof(*pc));
             parse_palette_coding(d, pc, cu, slice, pps, sps, x0, y0, nCbS);
@@ -4269,8 +4275,9 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                 cu->PartMode = PART_2Nx2N;
                 cu->IntraSplitFlag = 0;
             }
-
-                
+            // for a picture, make sure it is MODE_INTRA
+            assert(cu->CuPredMode[x0][y0] == MODE_INTRA);
+            assert(cu->PartMode == PART_2Nx2N);
             if (cu->CuPredMode[x0][y0] == MODE_INTRA) {
                 if (sps->pcm_enabled_flag) {
                     int Log2MinIpcmCbSizeY = sps->pcm->log2_min_pcm_luma_coding_block_size_minus3 + 3;
@@ -4278,10 +4285,10 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                     if (cu->PartMode == PART_2Nx2N &&
                         log2CbSize >= Log2MinIpcmCbSizeY &&
                         log2CbSize <= Log2MaxIpcmCbSizeY) {
-                        cu->pcm_flag[x0][y0] =
-                            cabac_dec_terminate(d);
+                        cu->pcm_flag[x0][y0] = cabac_dec_terminate(d);
                     }
                 }
+                VDBG(hevc, "pcm_flag %d", cu->pcm_flag[x0][y0]);
                 if (cu->pcm_flag[x0][y0]) {
                     cu->pcm = calloc(1, sizeof(struct pcm_sample));
                     while (!BYTE_ALIGNED(d->bits)) {
@@ -4303,10 +4310,17 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                         for (int i = 0; i < nCbS; i = i + pbOffset) {
                             if (IntraDcOnlyWedgeEnabledFlag || IntraContourEnabledFlag) {
                                 parse_intra_mode_ext(d, hslice, cu, hps, x0+i, y0+j, log2PbSize);
+                            } else {
+                                //see I.7.4.9.5.1 when not present, no_dim_flag should be 1
+                                cu->intra_ext[x0 + i][y0 + j].no_dim_flag = 1;
                             }
                             if (cu->intra_ext[x0+i][y0+j].no_dim_flag) {
                                 cu->prev_intra_luma_pred_flag[x0 + i][y0 + j] =
-                                    CABAC(d, CTX_TYPE_CU_PREV_INTRA_LUMA_PRED_FLAG);
+                                    CABAC(d,
+                                        CTX_TYPE_CU_PREV_INTRA_LUMA_PRED_FLAG);
+                                VDBG(hevc, "prev_intra_luma_pred_flag %d",
+                                     cu->prev_intra_luma_pred_flag[x0 + i]
+                                                                  [y0 + j]);
                             }
                         }
                     }
@@ -4314,23 +4328,33 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                         for (int i = 0; i < nCbS; i = i + pbOffset) {
                             if (cu->prev_intra_luma_pred_flag[x0 + i][y0 + j]) {
                                 cu->mpm_idx[x0 + i][y0 + j] = CABAC_BP(d);
+                                VDBG(hevc, "mpm_idx %d",
+                                     cu->mpm_idx[x0 + i][y0 + j]);
+
                                 /* see I.8.4.2 */
                                 process_luma_intra_prediction_mode(slice, cu, hps, x0+i, y0+j);
                             } else {
-                                cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] = CABAC_FL(d, 5);
+                                cu->rem_intra_luma_pred_mode[x0 + i][y0 + j] =
+                                    CABAC_FL(d, 5);
+                                VDBG(hevc, "rem_intra_luma_pred_mode %d",
+                                     cu->rem_intra_luma_pred_mode[x0 + i]
+                                                                 [y0 + j]);
                             }
                         }
                     }
+                    //chroma 444
                     if (ChromaArrayType == 3) {
                         for (int j = 0; j < nCbS; j = j + pbOffset ) {
                             for (int i = 0; i < nCbS; i = i + pbOffset) {
-                                int prefix = CABAC(
-                                    d, CTX_TYPE_CU_INTRA_CHROME_PRED_MODE);
+                                int prefix = CABAC(d, CTX_TYPE_CU_INTRA_CHROME_PRED_MODE);
                                 if (prefix == 0) {
                                     cu->intra_chroma_pred_mode[x0 + i][y0 + j] = 4;
                                 } else {
                                     cu->intra_chroma_pred_mode[x0 + i][y0 + j] = CABAC_FL(d, 2);
                                 }
+                                VDBG(hevc,
+                                    "intra_chroma_pred_mode %d",
+                                    cu->intra_chroma_pred_mode[x0 + i][y0 + j]);
                             }
                         }
                     } else if(ChromaArrayType != 0) {
@@ -4341,6 +4365,8 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                         } else {
                             cu->intra_chroma_pred_mode[x0][y0] = CABAC_FL(d, 2);
                         }
+                        VDBG(hevc, "prefix %d, intra_chroma_pred_mode %d",prefix,
+                             cu->intra_chroma_pred_mode[x0][y0 ]);
                     }
                 }
             } else {

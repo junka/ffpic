@@ -538,6 +538,7 @@ cabac_dec_terminate(cabac_dec *dec)
         binVal = 0;
         renormD(dec);
     }
+    VDBG(cabac, "term bit %d, value %x, range %x", binVal, dec->value, dec->range);
     return binVal;
 }
 

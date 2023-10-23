@@ -2887,8 +2887,7 @@ static struct sao *parse_sao(cabac_dec *d,
                     if (sao->SaoTypeIdx[cIdx][rx][ry] == 1) {
                         for (int i = 0; i < 4; i++ ) {
                             if (sao->sao_offset_abs[cIdx][rx][ry][i] != 0 ) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] =
-                                    CABAC_BP(d);
+                                sao->sao_offset_sign[cIdx][rx][ry][i] = CABAC_BP(d);
                             } else {
                                 if (sao->sao_merge_left_flag) {
                                     sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
@@ -2904,15 +2903,19 @@ static struct sao *parse_sao(cabac_dec *d,
                                     sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
                                 }
                             }
+                            VDBG(hevc, "sao_offset_sign %d",
+                                 sao->sao_offset_sign[cIdx][rx][ry][i]);
                         }
                         sao->sao_band_position[cIdx][rx][ry] = CABAC_FL(d, 5);
                     } else {
                         if (cIdx == 0) {
                             sao->sao_eo_class_luma = CABAC_FL(d, 2);
-                        }
-                        if (cIdx == 1) {
+                        } else if (cIdx == 1) {
                             sao->sao_eo_class_chroma = CABAC_FL(d, 2);
                         }
+                        VDBG(hevc,
+                             "sao_eo_class_luma %d, sao_eo_class_chroma %d",
+                             sao->sao_eo_class_luma, sao->sao_eo_class_chroma);
                         for (int i = 0; i < 4; i++ ) {
                             if (sao->sao_merge_left_flag) {
                                 sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
@@ -4181,7 +4184,8 @@ static struct cu *parse_coding_unit(cabac_dec *d,
     
     //nCbS specify the size of current coding block, number of samples
     int nCbS = (1 << log2CbSize);
-    VDBG(hevc, "nCbS %d", nCbS);
+    VDBG(hevc, "nCbS %d, cu_skip_flag %d, SkipIntraEnabledFlag %d", nCbS,
+         cu->cu_skip_flag[x0][y0], SkipIntraEnabledFlag);
     if (cu->cu_skip_flag[x0][y0]) {
         parse_prediction_unit(d, slice, cu, headr, hps, x0, y0, nCbS, nCbS);
     } else if (SkipIntraEnabledFlag) {
@@ -4414,6 +4418,7 @@ coding_quadtree(cabac_dec *d, struct hevc_slice *hslice,
     if (x0 + ( 1 << log2CbSize ) <= sps->pic_width_in_luma_samples &&
         y0 + ( 1 << log2CbSize ) <= sps->pic_height_in_luma_samples &&
         log2CbSize > slice->MinCbLog2SizeY) {
+        VDBG(hevc, "ctxInc %d", get_ctxInc(slice, hps, qt->cu, x0, y0, 1));
         qt->split_cu_flag =
             CABAC(d, CTX_TYPE_SPLIT_CU_FLAG + get_ctxInc(slice, hps, qt->cu, x0, y0, 1));
     } else {
@@ -4430,6 +4435,7 @@ coding_quadtree(cabac_dec *d, struct hevc_slice *hslice,
         log2CbSize >= slice->Log2MinCuChromaQpOffsetSize) {
         slice->IsCuChromaQpOffsetCoded = 0;
     }
+    VDBG(hevc, "split_cu_flag %d", qt->split_cu_flag);
     if (qt->split_cu_flag) {
         int x1 = x0 + (1 << (log2CbSize - 1 ));
         int y1 = y0 + (1 << (log2CbSize - 1 ));

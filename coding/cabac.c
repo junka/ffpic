@@ -52,17 +52,6 @@ static uint8_t LPSTable[1 << STATE_BITS][RANGE_NUM] = {
     {2, 2, 2, 2},
 };
 
-static uint8_t RenormTable[32] = {
-    6,  5,  4,  4,
-    3,  3,  3,  3,
-    2,  2,  2,  2,
-    2,  2,  2,  2,
-    1,  1,  1,  1,
-    1,  1,  1,  1,
-    1,  1,  1,  1,
-    1,  1,  1,  1
-};
-
 struct ctx_model {
     uint8_t mpsbit : 1;
     uint8_t state : 7; // state need 6 bits, put mps or lps at the least bit
@@ -244,12 +233,13 @@ static void init_model_ctx(struct ctx_model *ctx, int qpy, int initValue) {
     int slopeIdx = initValue >> 4;
     int offsetIdx = initValue & 15;
     // see 9-5
-    int m = slopeIdx*5 - 45;
-    int n = (offsetIdx<<3) - 16;
+    int m = slopeIdx * 5 - 45;
+    int n = (offsetIdx << 3) - 16;
     //see 9-6
     int preCtxState = clip3(1, 126, ((m * clip3(0, 51, qpy))>>4)+n);
     ctx->mpsbit = (preCtxState <= 63) ? 0 : 1;
     ctx->state = ctx->mpsbit ? (preCtxState - 64) : (63 - preCtxState);
+    assert(ctx->state <= 62);
 }
 
 
@@ -264,8 +254,10 @@ void cabac_init_models(int qpy, int initType)
                    initValue_sao_type_idx[initType]);
     init_bypass_flag(ctx + CTX_TYPE_SAO_TYPE_INDEX, 2, 2);
     for (int i = 0; i < 3; i ++) {
-        init_model_ctx(ctx+CTX_TYPE_SPLIT_CU_FLAG, qpy,
+        init_model_ctx(ctx+CTX_TYPE_SPLIT_CU_FLAG + i, qpy,
                        initValue_split_cu_flag[initType][i]);
+        VDBG(cabac, "state %d, bit %d", ctx[CTX_TYPE_SPLIT_CU_FLAG+i].state,
+             ctx[CTX_TYPE_SPLIT_CU_FLAG+i].mpsbit);
     }
     init_model_ctx(ctx + CTX_TYPE_CU_TRANSQUANT_BYPASS_FLAG, qpy,
                    initValue_cu_transquant_bypass_flag[initType]);
@@ -281,55 +273,55 @@ void cabac_init_models(int qpy, int initType)
                    initValue_intra_chrome_pred_mode[initType]);
     init_bypass_flag(ctx + CTX_TYPE_CU_INTRA_CHROME_PRED_MODE, 3 << 1, 3);
     for (int i = 0; i < 3; i++) {
-        init_model_ctx(ctx + CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG, qpy,
+        init_model_ctx(ctx + CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG + i, qpy,
                        initValue_split_transform_flag[initType][i]);
     }
     for (int i = 0; i < 2; i++) {
-        init_model_ctx(ctx + CTX_TYPE_TU_CBF_LUMA, qpy,
+        init_model_ctx(ctx + CTX_TYPE_TU_CBF_LUMA + i, qpy,
                        initValue_cbf_luma[initType][i]);
     }
     for (int i = 0; i < 5; i++) {
-        init_model_ctx(ctx + CTX_TYPE_TU_CBF_CBCR, qpy,
+        init_model_ctx(ctx + CTX_TYPE_TU_CBF_CBCR + i, qpy,
                        initValue_cbf_cb_cr[initType][i]);
     }
     for (int i = 0; i < 8; i++) {
-        init_model_ctx(ctx + CTX_TYPE_CROSS_COMP_LOG2_RES_SCALE_ABS, qpy,
+        init_model_ctx(ctx + CTX_TYPE_CROSS_COMP_LOG2_RES_SCALE_ABS + i, qpy,
                        initValue_log2_res_scale_abs_plus1[initType][i]);
     }
     for (int i = 0; i < 2; i++) {
-        init_model_ctx(ctx + CTX_TYPE_CROSS_COMP_RES_SCALE_SIGN, qpy,
+        init_model_ctx(ctx + CTX_TYPE_CROSS_COMP_RES_SCALE_SIGN + i, qpy,
                        initValue_res_scale_sign_flag[initType][i]);
     }
     for (int i = 0; i < 3; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP, qpy,
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP + i, qpy,
                        initValue_transform_skip_flag[initType][i]);
     }
     for (int i = 0; i < 18; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX,
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX + i,
                        qpy, initValue_last_sig_coeff_x_prefix[initType][i]);
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX,
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX + i,
                        qpy, initValue_last_sig_coeff_y_prefix[initType][i]);
     }
     for (int i = 0; i < 4; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG, qpy,
-                       initValue_coded_sub_block_flag[initType][i]);
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG + i,
+                       qpy, initValue_coded_sub_block_flag[initType][i]);
     }
     for (int i = 0; i < 44; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG, qpy,
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + i, qpy,
                        initValue_sig_coeff_flag[initType][i]);
     }
     for (int i = 0; i < 24; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1,
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1 + i,
                        qpy,
                        initValue_coeff_abs_level_greater1_flag[initType][i]);
     }
     for (int i = 0; i < 6; i++) {
-        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2,
-                       qpy,
-                       initValue_coeff_abs_level_greater2_flags[initType][i]);
+        init_model_ctx(
+            ctx + CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2 + i, qpy,
+            initValue_coeff_abs_level_greater2_flags[initType][i]);
     }
     for (int i = 0; i < 8; i++) {
-        init_model_ctx(ctx + CTX_TYPE_PALETTE_CODING_PALETTE_RUN_PREFIX, qpy,
+        init_model_ctx(ctx + CTX_TYPE_PALETTE_CODING_PALETTE_RUN_PREFIX + i, qpy,
                        initValue_palette_run_prefix[initType][i]);
     }
     init_model_ctx(ctx + CTX_TYPE_PALETTE_CODING_COPY_ABOVE_PALLETTE_INDICES,
@@ -340,9 +332,10 @@ void cabac_init_models(int qpy, int initType)
     init_model_ctx(ctx + CTX_TYPE_PALETTE_CODING_PALETTE_TRANSPOSE_FLAG, qpy,
                    initValue_palette_transpose_flag[initType]);
     for (int i = 0; i < 2; i++) {
-        init_model_ctx(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS, qpy,
+        init_model_ctx(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS + i, qpy,
                        initValue_cu_qp_delta_abs[initType][i]);
-        init_bypass_flag(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS, 1 << 5, 6);
+        init_bypass_flag(ctx + CTX_TYPE_DELTA_QP_CU_QP_DELTA_ABS + i, 1 << 5,
+                         6);
     }
     init_model_ctx(ctx + CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_FLAG,
                    qpy, initValue_cu_chroma_qp_offset_flag[initType]);
@@ -351,8 +344,8 @@ void cabac_init_models(int qpy, int initType)
 
     if (initType > 0) {
         for (int i = 0; i < 3; i++) {
-            init_model_ctx(ctx + CTX_TYPE_CU_SKIP_FLAG, qpy,
-                            initValue_cu_skip_flag[initType-1][i]);
+          init_model_ctx(ctx + CTX_TYPE_CU_SKIP_FLAG + i, qpy,
+                         initValue_cu_skip_flag[initType - 1][i]);
         }
         init_model_ctx(ctx + CTX_TYPE_CU_PRED_MODE_FLAG, qpy,
                     initValue_pred_mode_flag[initType - 1]);
@@ -363,12 +356,12 @@ void cabac_init_models(int qpy, int initType)
         init_model_ctx(ctx + CTX_TYPE_PU_MERGE_IDX, qpy,
                     initValue_merge_index[initType - 1]);
         for (int i = 0; i < 5; i++) {
-            init_model_ctx(ctx + CTX_TYPE_PU_INTER_PRED_IDC, qpy,
+            init_model_ctx(ctx + CTX_TYPE_PU_INTER_PRED_IDC + i, qpy,
                         initValue_inter_pred_idc[initType - 1][i]);
         }
         for (int i = 0; i < 2; i++) {
-            init_model_ctx(ctx + CTX_TYPE_PU_REF_IDX, qpy,
-                        initValue_ref_idx[initType - 1][i]);
+            init_model_ctx(ctx + CTX_TYPE_PU_REF_IDX + i, qpy,
+                           initValue_ref_idx[initType - 1][i]);
         }
         init_model_ctx(ctx + CTX_TYPE_PU_MVP_FLAG, qpy,
                     initValue_mvp_flag[initType - 1]);
@@ -379,11 +372,11 @@ void cabac_init_models(int qpy, int initType)
         init_model_ctx(ctx + CTX_TYPE_MV_ABS_MVD_GREATER1,
                     qpy, initValue_abs_mvd_greater1_flag[initType - 1]);
         for (int i = 0; i < 3; i++) {
-            init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM, qpy,
-                           initValue_explicit_rdpcm_flag[initType - 1][i]);
-            init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM_DIR,
-                           qpy,
-                           initValue_explicit_rdpcm_dir_flag[initType - 1][i]);
+            init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM + i,
+                           qpy, initValue_explicit_rdpcm_flag[initType - 1][i]);
+            init_model_ctx(
+                ctx + CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM_DIR + i, qpy,
+                initValue_explicit_rdpcm_dir_flag[initType - 1][i]);
         }
     }
 
@@ -407,7 +400,7 @@ void cabac_init_models(int qpy, int initType)
                    initValue_depth_dc_abs[initType]);
     if (initType > 0) {
         for (int i = 0; i < 3; i++) {
-            init_model_ctx(ctx + CTX_TYPE_3D_IV_RES_PRED_WEIGHT_IDX, qpy,
+            init_model_ctx(ctx + CTX_TYPE_3D_IV_RES_PRED_WEIGHT_IDX + i, qpy,
                         initValue_iv_res_pred_weight_idx[initType - 1][i]);
         }
         init_model_ctx(ctx + CTX_TYPE_3D_ILLU_COMP_FLAG, qpy,
@@ -429,10 +422,21 @@ cabac_dec_init(struct bits_vec *v)
 
 //see Figure 9-7
 static void
-renormD(cabac_dec *dec, uint32_t scaledRange)
+renormD(cabac_dec *dec)
 {
+    // static uint8_t RenormTable[32] = {
+    //     6,  5,  4,  4,
+    //     3,  3,  3,  3,
+    //     2,  2,  2,  2,
+    //     2,  2,  2,  2,
+    //     1,  1,  1,  1,
+    //     1,  1,  1,  1,
+    //     1,  1,  1,  1,
+    //     1,  1,  1,  1
+    // };
+
     //scaledRange is dec->range << 7
-    if (scaledRange < (256 << 7)) {
+    while ((dec->range) < (256)) {
         dec->range = dec->range << 1;
         dec->value <<= 1;
         //refill value when all read out
@@ -532,21 +536,25 @@ cabac_dec_terminate(cabac_dec *dec)
         binVal = 1;
     } else {
         binVal = 0;
-        renormD(dec, scaledRange);
+        renormD(dec);
     }
     return binVal;
 }
 
-//see 9.3.4.3
+// see 9.3.4.3
 int
 cabac_dec_decision(cabac_dec *dec, int ctx_tid)
 {
-    struct ctx_model *m = &ctx_table[ctx_tid];
+    struct ctx_model *m = ctx_table+ctx_tid;
     int binVal;
     uint8_t state = m->state;
     uint32_t rangelps = LPSTable[state][(dec->range >> 6) & 3];
+    VDBG(cabac, "decision tid %d, state %d,%d ", ctx_tid, state,
+         (dec->range >> 6) - 4);
     dec->range -= rangelps;
     uint32_t scaledRange = dec->range << 7;
+    VDBG(cabac, "decision state %d,%d, rlps %d, v %x scr %x, count %d", state,
+         (dec->range >> 6) & 3, rangelps, dec->value, scaledRange, dec->count);
     if (dec->value < scaledRange) {
         //MPS (Most Probable Symbol)
         binVal = m->mpsbit;
@@ -554,18 +562,20 @@ cabac_dec_decision(cabac_dec *dec, int ctx_tid)
     } else {
         //LPS (Least Probable Symbol)
         binVal = 1 - m->mpsbit;
-        int numbits = RenormTable[rangelps>>3];
         m->state = NextStateLPS[state];
-        dec->value = dec->value << numbits;
-        dec->range = rangelps << numbits;
-        dec->count -= numbits;
+        // int numbits = RenormTable[rangelps>>3];
+        // dec->value = (dec->value - scaledRange) << numbits;
+        // dec->range = rangelps << numbits;
+        // dec->count -= numbits;
+        dec->value = dec->value - scaledRange;
+        dec->range = rangelps;
         if (state == 0) {
             m->mpsbit = 1 - m->mpsbit;
         }
     }
+    renormD(dec);
     VDBG(cabac, "decision v %x r %x c %d: binVal %d", dec->value, dec->range,
          dec->count, binVal);
-    renormD(dec, scaledRange);
 
     return binVal;
 }

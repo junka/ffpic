@@ -20,7 +20,8 @@ typedef struct cabac_dec {
 } cabac_dec;
 
 enum ctx_index_type {
-  CTX_TYPE_SAO_MERGE = 0,
+  CTX_TYPE_ALL_BYPASS = 0,
+  CTX_TYPE_SAO_MERGE = 1,
   CTX_TYPE_SAO_TYPE_INDEX,
 
   CTX_TYPE_SPLIT_CU_FLAG,
@@ -100,7 +101,9 @@ enum ctx_index_type {
 
 cabac_dec * cabac_dec_init(struct bits_vec*);
 
-int cabac_dec_bin(cabac_dec *br, int tid, int bypass);
+typedef int (*cabac_get_ctxInc) (int ctx_idx, int binIdx);
+
+int cabac_dec_bin(cabac_dec *br, int ctx_id, int bypass);
 
 int cabac_dec_decision(cabac_dec *dec, int ctx_idx);
 int cabac_dec_terminate(cabac_dec *dec);
@@ -108,8 +111,9 @@ int cabac_dec_bypass(cabac_dec *dec);
 int cabac_dec_bypass_n(cabac_dec *dec, int n);
 int cabac_dec_bypass_tb(cabac_dec *dec, int max);
 int cabac_dec_bypass_fl(cabac_dec *dec, int max);
-
-    void cabac_dec_free(cabac_dec *dec);
+int cabac_dec_egk(cabac_dec *dec, int kth, int max_pre_ext_len,
+                  int trunc_suffix_len);
+void cabac_dec_free(cabac_dec *dec);
 
 void cabac_init_models(int qpy, int initType);//here initType should alway be 0
 
@@ -117,8 +121,9 @@ void cabac_init_models(int qpy, int initType);//here initType should alway be 0
 #define CABAC_BP(br) cabac_dec_bypass(br)
 #define CABAC_FL(br, max) cabac_dec_bypass_fl(br, max)
 
-int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam);
-#define CABAC_TR(br, tid, cMax, cRiceParam) cabac_dec_tr(br, tid, cMax, cRiceParam)
+int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
+                 cabac_get_ctxInc ctxInc);
+#define CABAC_TR(br, tid, cMax, cRiceParam, cb) cabac_dec_tr(br, tid, cMax, cRiceParam, cb)
 
 #define CABAC_TB(br, max) cabac_dec_bypass_tb(br, max)
 

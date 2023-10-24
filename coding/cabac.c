@@ -247,12 +247,13 @@ void cabac_init_models(int qpy, int initType)
 {
     //see table 9-48
     struct ctx_model *ctx = ctx_table;
-    init_model_ctx(
-              ctx+CTX_TYPE_SAO_MERGE, qpy, initValue_sao_merge[initType]);
+    init_bypass_flag(ctx + CTX_TYPE_ALL_BYPASS, 0x3F, 6);
+    init_model_ctx(ctx + CTX_TYPE_SAO_MERGE, qpy,
+                       initValue_sao_merge[initType]);
 
     init_model_ctx(ctx + CTX_TYPE_SAO_TYPE_INDEX, qpy,
                    initValue_sao_type_idx[initType]);
-    init_bypass_flag(ctx + CTX_TYPE_SAO_TYPE_INDEX, 2, 2);
+    init_bypass_flag(ctx + CTX_TYPE_SAO_TYPE_INDEX, 1<<1, 2);
     for (int i = 0; i < 3; i ++) {
         init_model_ctx(ctx+CTX_TYPE_SPLIT_CU_FLAG + i, qpy,
                        initValue_split_cu_flag[initType][i]);
@@ -299,8 +300,10 @@ void cabac_init_models(int qpy, int initType)
     for (int i = 0; i < 18; i++) {
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX + i,
                        qpy, initValue_last_sig_coeff_x_prefix[initType][i]);
+        init_bypass_flag(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX + i, 0, 6);
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX + i,
                        qpy, initValue_last_sig_coeff_y_prefix[initType][i]);
+        init_bypass_flag(ctx + CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX + i, 0, 6);
     }
     for (int i = 0; i < 4; i++) {
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG + i,
@@ -593,7 +596,8 @@ cabac_dec_bin(cabac_dec *dec, int tid, int bypass)
 
 
 static inline int
-ctx_bypass_flags(struct ctx_model *m, int bin_idx) {
+ctx_bypass_flags(int ctx_idx, int bin_idx) {
+    struct ctx_model *m = &ctx_table[ctx_idx];
     if (bin_idx > 5) {
         bin_idx = 5;
     }
@@ -603,45 +607,56 @@ ctx_bypass_flags(struct ctx_model *m, int bin_idx) {
     return !!(m->bypass & (1 << bin_idx));
 }
 
-//see 9.3.3.2
-//it is varibale length
-int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam) {
+static int ctx_only_one(int ctx_idx, int binIdx) {
+    return ctx_idx;
+}
+
+// see 9.3.3.2
+// it is varibale length
+// most ctxIdc start with 0 and followed by na or bypass,
+// another common pattern is that ctxInc is the binIdx sequence 0, 1, 2
+// all other patterns should be handled differenctly, like 0, 1, 1, 1 (cu_qp_delta_abs), or 0,1,3(part_mode)
+int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
+                 cabac_get_ctxInc ctxInc_cb) {
     struct ctx_model *m;
-    struct ctx_model all_bypass = {
-        .bypass = 0xFF,
-        .bypass_len = 6,
-    };
-    if (tid == -1) {
-        m = &all_bypass;
-    } else {
-        m = &ctx_table[tid];
+    cabac_get_ctxInc cb = ctxInc_cb;
+    if (!cb) {
+        cb = ctx_only_one;
     }
     // see 9-11
     int t = cMax >> cRiceParam;
     int prefix = 0, suffix = 0, i = 0;
-    int off = 0;
-    VDBG(cabac, "tid %d, (%d,off %d)flag %d, state %d, range %x, value %x", tid,
-         m->bypass, off, ctx_bypass_flags(m, off), m->state, dec->range, dec->value);
-    while (ctx_bypass_flags(m, off) >= 0 &&
-           cabac_dec_bin(dec, tid, ctx_bypass_flags(m, off++)) == 1 &&
+    int binIdx = 0;
+    VDBG(cabac, "tid %d, (binIdx %d)flag %d, range %x, value %x", tid,
+         binIdx, ctx_bypass_flags(cb(tid, binIdx), binIdx),
+         dec->range, dec->value);
+    while (ctx_bypass_flags(cb(tid, binIdx), binIdx) >= 0 &&
+           cabac_dec_bin(dec, cb(tid, binIdx),
+                         ctx_bypass_flags(cb(tid, binIdx), binIdx)) == 1 &&
            prefix < t) {
+        binIdx++;
         prefix++;
     }
-    VDBG(cabac, "prefix %d, t %d", prefix, t);
+    VDBG(cabac, "prefix %d, t %d, binIdx %d(%d)", prefix, t, binIdx,
+         cb(tid, binIdx) - tid);
     if (prefix >= t) {
         // the bin string length cMax >> cRiceParam with all bins equal to 1
         return cMax;
     } else {
+        binIdx++;
         // if prefix < cMax >> cRiceParam, the prefix bin string
         // is a bit string of length prefix + 1, then bins for binIdx less than prefix are equal to 1
         // the bin
-        assert(ctx_bypass_flags(m, off) == 1);
+        // assert(ctx_bypass_flags(cb(tid, binIdx), binIdx) == 1);
         // when cMax > symbolVal and cRiceParam > 0, suffix is present
         if (cRiceParam > 0) {
-            VDBG(cabac, "(%d,off %d)flag %d, state %d, range %x, value %x",
-                 m->bypass, off, ctx_bypass_flags(m, off), m->state, dec->range,
-                 dec->value);
+            // VDBG(cabac, "(%d,binIdx %d)flag %d, state %d, range %x, value %x",
+            //      m->bypass, binIdx, ctx_bypass_flags(tid, binIdx), m->state, dec->range,
+            //      dec->value);
             suffix = cabac_dec_bypass_fl(dec, (1 << cRiceParam) - 1);
+
+            VDBG(cabac, "suffix %d, t %d, binIdx %d(%d)", suffix, t, binIdx,
+                 cb(tid, binIdx) - tid);
         }
         //see 9-11, reverse the equation
         return  (prefix << cRiceParam) + suffix;

@@ -667,7 +667,7 @@ struct pps {
     uint8_t pps_scc_extension_flag:1;
     uint8_t pps_extension_4bits:4;
     // pps range extension, see 7.3.2.3.2
-    struct pps_range_extension* pps_range_ext;
+    struct pps_range_extension pps_range_ext;
     // pps multilayer extension
     struct pps_multilayer_extension *pps_multilayer_ext;
     // pps 3d extension 
@@ -1112,7 +1112,7 @@ struct slice_segment_header {
 
     GUE(poc_msb_cycle_val);
 
-    struct residual_coding *rc[64];
+    struct residual_coding rc[64][64];
 
     //Coding Tree Block
     int SubWidthC, SubHeightC;

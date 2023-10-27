@@ -889,8 +889,8 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->sps_extension_4bits = READ_BITS(v, 4);
     }
     if (sps->sps_range_extension_flag) {
-        sps->sps_range_ext = calloc(1, sizeof(struct sps_range_extension));
-        parse_sps_range_ext(sps->sps_range_ext, v);
+        // sps->sps_range_ext = calloc(1, sizeof(struct sps_range_extension));
+        parse_sps_range_ext(&sps->sps_range_ext, v);
     }
     if (sps->sps_multilayer_extension_flag) {
         sps->sps_multilayer_ext.inter_view_mv_vert_constraint_flag = READ_BIT(v);
@@ -2197,6 +2197,84 @@ calc_sps_param_to_slice(struct sps *sps, struct slice_segment_header *slice)
 
 }
 
+/*see 6.5.3 (6-11)*/
+static scanpos *init_up_right_scan_order(int blkSize) {
+    int i = 0;
+    int x = 0, y = 0;
+    bool stopLoop = false;
+    scanpos *diagScan = malloc(sizeof(scanpos) * blkSize * blkSize);
+
+    while (!stopLoop) {
+        while (y >= 0) {
+            if (x < blkSize && y < blkSize) {
+                diagScan[i].x = x;
+                diagScan[i].y = y;
+                i++;
+            }
+            y--;
+            x++;
+        }
+        y = x;
+        x = 0;
+        if (i >= blkSize * blkSize) {
+            stopLoop = true;
+        }
+    }
+    return diagScan;
+}
+
+/*see 6.5.4 (6-12)*/
+static scanpos *init_horizontal_scan_order(int blkSize) {
+    int i = 0;
+    scanpos *horScan = malloc(sizeof(scanpos) * blkSize * blkSize);
+
+    for (int y = 0; y < blkSize; y++) {
+        for (int x = 0; x < blkSize; x++) {
+            horScan[i].x = x;
+            horScan[i].y = y;
+            i++;
+        }
+    }
+    return horScan;
+}
+
+/*see 6.5.5 (6-13)*/
+static scanpos *init_vertical_scan_order(int blkSize) {
+    int i = 0;
+    scanpos *verScan = malloc(sizeof(scanpos) * blkSize * blkSize);
+
+    for (int x = 0; x < blkSize; x++) {
+        for (int y = 0; y < blkSize; y++) {
+            verScan[i].x = x;
+            verScan[i].y = y;
+            i++;
+        }
+    }
+    return verScan;
+}
+
+/*see 6.5.6 (6-14)*/
+static scanpos *init_traverse_scan_order(int blkSize) {
+    int i = 0;
+    scanpos *travScan = malloc(sizeof(scanpos) * blkSize * blkSize);
+
+    for (int y = 0; y < blkSize; y++) {
+        if (y % 2 == 0) {
+            for (int x = 0; x < blkSize; x++) {
+                travScan[i].x = x;
+                travScan[i].y = y;
+                i++;
+            }
+        } else {
+            for (int x = blkSize - 1; x >= 0; x--) {
+                travScan[i].x = x;
+                travScan[i].y = y;
+                i++;
+            }
+        }
+    }
+    return travScan;
+}
 
 //see I.7.3.6.1
 static struct slice_segment_header *
@@ -2207,6 +2285,23 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     struct sps *sps = hps->sps;
     struct pps *pps = hps->pps;
     struct slice_segment_header *slice = calloc(1, sizeof(*slice));
+
+    for (int log2blocksize = 1; log2blocksize < 6; log2blocksize++) {
+        if (log2blocksize >= 0 && log2blocksize < 6) {
+            if (log2blocksize < 4) {
+                slice->ScanOrder[log2blocksize][0] =
+                    init_up_right_scan_order(1 << log2blocksize);
+                slice->ScanOrder[log2blocksize][1] =
+                    init_horizontal_scan_order(1 << log2blocksize);
+                slice->ScanOrder[log2blocksize][2] =
+                    init_vertical_scan_order(1 << log2blocksize);
+            }
+            if (log2blocksize >= 2) {
+                slice->ScanOrder[log2blocksize][3] =
+                    init_traverse_scan_order(1 << log2blocksize);
+            }
+        }
+    }
 
     // the first VCL NAL unit of the coded picture shall have first_slice_segment_in_pic_flag = 1 
     uint8_t first_slice_segment_in_pic_flag = READ_BIT(v);
@@ -3005,7 +3100,8 @@ int qp_delta_abs_ctxInc_from_binIdx(int ctx_idx, int binIdx) {
 
 static void parse_delta_qp(cabac_dec *d, struct slice_segment_header *slice,
                            struct pps *pps) {
-    VDBG(hevc, "cu_qp_delta_enabled_flag %d", pps->cu_qp_delta_enabled_flag);
+    VDBG(hevc, "cu_qp_delta_enabled_flag %d, IsCuQpDeltaCoded %d",
+         pps->cu_qp_delta_enabled_flag, slice->IsCuQpDeltaCoded);
     if (pps->cu_qp_delta_enabled_flag && !slice->IsCuQpDeltaCoded ) {
         slice->IsCuQpDeltaCoded = 1;
         // see 9.3.3.10
@@ -3016,12 +3112,13 @@ static void parse_delta_qp(cabac_dec *d, struct slice_segment_header *slice,
             cu_qp_delta_abs = cabac_dec_egk(d, 0, 32, 32) + 5;
         }
         VDBG(hevc, "cu_qp_delta_abs %d", cu_qp_delta_abs);
+        uint8_t cu_qp_delta_sign_flag = 0;
         if (cu_qp_delta_abs) {
-            uint8_t cu_qp_delta_sign_flag =
+            cu_qp_delta_sign_flag =
                 CABAC_BP(d);
-            slice->CuQpDeltaVal = cu_qp_delta_abs * ( 1 - 2 * cu_qp_delta_sign_flag );
             VDBG(hevc, "cu_qp_delta_sign_flag %d", cu_qp_delta_sign_flag);
         }
+        slice->CuQpDeltaVal = cu_qp_delta_abs * (1 - 2 * cu_qp_delta_sign_flag);
     }
 }
 
@@ -3096,6 +3193,11 @@ static void
 parse_chroma_qp_offset(cabac_dec *d, struct slice_segment_header *slice,
                     struct pps *pps, struct chroma_qp_offset *qpoff)
 {
+    VDBG(hevc,
+         "parse_chroma_qp_offset cu_chroma_qp_offset_enabled_flag %d, "
+         "IsCuChromaQpOffsetCoded %d",
+         slice->cu_chroma_qp_offset_enabled_flag,
+         slice->IsCuChromaQpOffsetCoded);
     if (slice->cu_chroma_qp_offset_enabled_flag && !slice->IsCuChromaQpOffsetCoded) {
         qpoff->cu_chroma_qp_offset_flag =
             CABAC(d, CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_FLAG);
@@ -3103,6 +3205,8 @@ parse_chroma_qp_offset(cabac_dec *d, struct slice_segment_header *slice,
         if (qpoff->cu_chroma_qp_offset_flag && pps->pps_range_ext.chroma_qp_offset_list_len_minus1 > 0) {
             qpoff->cu_chroma_qp_offset_idx =
                 CABAC(d, CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_IDX);
+            VDBG(hevc, "cu_chroma_qp_offset_idx %d",
+                 qpoff->cu_chroma_qp_offset_idx);
             assert(qpoff->cu_chroma_qp_offset_idx <= pps->pps_range_ext.chroma_qp_offset_list_len_minus1);
         } else {
             qpoff->cu_chroma_qp_offset_idx = 0;
@@ -3118,103 +3222,6 @@ parse_chroma_qp_offset(cabac_dec *d, struct slice_segment_header *slice,
         }
     }
 }
-
-
-/*see 6.5.3 (6-11)*/
-static int **
-init_up_right_scan_order(int blkSize)
-{
-    int i = 0;
-    int x = 0, y =0;
-    bool stopLoop = false;
-    int **diagScan = calloc(blkSize, sizeof(int *));
-    for (int j = 0; j <blkSize; j++) {
-        diagScan[j] = calloc(blkSize, sizeof(int));
-    }
-    while( !stopLoop ) {
-        while( y >= 0 ) {
-            if( x < blkSize && y < blkSize) {
-                diagScan[i][0] = x;
-                diagScan[i][1] = y;
-                i ++;
-            }
-            y--;
-            x++;
-        }
-        y = x;
-        x = 0;
-        if (i >= blkSize *blkSize) {
-            stopLoop = true;
-        }
-    }
-    return diagScan;
-}
-
-/*see 6.5.4 (6-12)*/
-static int **
-init_horizontal_scan_order(int blkSize)
-{
-    int i =0;
-    int **horScan = malloc(sizeof(int *) * blkSize);
-    for (int j = 0; j <blkSize; j++) {
-        horScan[j] = malloc(sizeof(int) * blkSize);
-    }
-    for (int y = 0; y < blkSize; y ++) {
-        for (int x = 0; x < blkSize; x ++) {
-            horScan[i][0] = x;
-            horScan[i][1] = y;
-            i ++;
-        }
-    }
-    return horScan;
-}
-
-/*see 6.5.5 (6-13)*/
-static int **
-init_vertical_scan_order(int blkSize)
-{
-    int i =0;
-    int **verScan = malloc(sizeof(int *) * blkSize);
-    for (int j = 0; j <blkSize; j++) {
-        verScan[j] = malloc(sizeof(int) * blkSize);
-    }
-    for (int x = 0; x < blkSize; x ++) {
-        for (int y = 0; y < blkSize; y ++) {
-            verScan[i][0] = x;
-            verScan[i][1] = y;
-            i ++;
-        }
-    }
-    return verScan;
-}
-
-/*see 6.5.6 (6-14)*/
-static int **
-init_traverse_scan_order(int blkSize)
-{
-    int i = 0;
-    int **travScan = malloc(sizeof(int *) * blkSize);
-    for (int j = 0; j <blkSize; j++) {
-        travScan[j] = malloc(sizeof(int) * blkSize);
-    }
-    for (int y = 0; y < blkSize; y++) {
-        if (y % 2 == 0) {
-            for (int x = 0; x < blkSize; x++ ) {
-                travScan[i][0] = x;
-                travScan[i][1] = y;
-                i ++;
-            }
-        } else {
-            for (int x = blkSize - 1; x >= 0; x--) {
-                travScan[i][0] = x;
-                travScan[i][1] = y;
-                i ++;
-            }
-        }
-    }
-    return travScan;
-}
-
 
 //see 8.4.4.2.7 Decoding process for palette mode, 
 //also see 7.3.8.13 Palette syntax
@@ -3332,23 +3339,12 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     int log2BlockSize = log2floor(nCbS);
     int xC, yC, xR, yR, xcPrev, ycPrev;
 
-
-    if (log2BlockSize >= 0 && log2BlockSize < 6) {
-        if (log2BlockSize < 4) {
-            slice->ScanOrder[log2BlockSize][0] = init_up_right_scan_order(1 << log2BlockSize);
-            slice->ScanOrder[log2BlockSize][1] = init_horizontal_scan_order(1 << log2BlockSize);
-            slice->ScanOrder[log2BlockSize][2] = init_vertical_scan_order(1 << log2BlockSize);
-        }
-        if (log2BlockSize > 1) {
-            slice->ScanOrder[log2BlockSize][3] = init_traverse_scan_order(1 << log2BlockSize);
-        }
-    }
     while (PaletteScanPos < nCbS * nCbS ) {
-        xC = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos][0];
-        yC = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos][1];
+        xC = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].x;
+        yC = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].y;
         if (PaletteScanPos > 0) {
-            xcPrev = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1][0];
-            ycPrev = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1][1];
+            xcPrev = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].x;
+            ycPrev = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].y;
         }
         int PaletteRunMinus1 = nCbS * nCbS - PaletteScanPos - 1;
         int RunToEnd = 1;
@@ -3391,8 +3387,8 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
         }
         runPos = 0;
         while (runPos <= PaletteRunMinus1) {
-            xR = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos][0];
-            yR = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos][1];
+            xR = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].x;
+            yR = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].y;
             if (pc->CopyAboveIndicesFlag[xC][yC] == 0 ) {
                 pc->CopyAboveIndicesFlag[xR][yR] = 0;
                 pc->PaletteIndexMap[xR][yR] = CurrPaletteIndex;
@@ -3407,8 +3403,8 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     if (pc->palette_escape_val_present_flag) {
         for (int cIdx = 0; cIdx < numComps; cIdx++) {
             for (int sPos = 0; sPos < nCbS * nCbS; sPos++) {
-                xC = x0 + slice->ScanOrder[log2BlockSize][3][sPos][0];
-                yC = y0 + slice->ScanOrder[log2BlockSize][3][sPos][1];
+                xC = x0 + slice->ScanOrder[log2BlockSize][3][sPos].x;
+                yC = y0 + slice->ScanOrder[log2BlockSize][3][sPos].y;
                 if (pc->PaletteIndexMap[xC][yC] == MaxPaletteIndex ) {
                     if (cIdx == 0 || (xC % 2 == 0 && yC % 2 == 0 &&
                         slice->ChromaArrayType == 1 ) || (xC % 2 == 0 &&
@@ -3441,23 +3437,28 @@ static int ctx_for_last_sig_coeff_prefix(int ctx_idx, int binIdx) {
 }
 
 /*see 7.3.8.11 */
-static void
-parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *slice,
-                      struct hevc_param_set *hps,
-                      int x0, int y0, int log2TrafoSize, int cIdx)
-{
+static void parse_residual_coding(cabac_dec *d, struct cu *cu,
+                                  struct slice_segment_header *slice,
+                                  struct hevc_param_set *hps, int x0, int y0,
+                                  int log2TrafoSize, int cIdx) {
     // struct vps *vps = hps->vps;
     struct pps *pps = hps->pps;
     struct sps *sps = hps->sps;
 
     //see 7-38
     int Log2MaxTransformSkipSize = pps->pps_range_ext.log2_max_transform_skip_block_size_minus2 + 2;
+    VDBG(hevc,
+         "parse_residual_coding Log2MaxTransformSkipSize %d, "
+         "transform_skip_enabled_flag %d, cu_transquant_bypass_flag %d, "
+         "log2TrafoSize %d",
+         Log2MaxTransformSkipSize, pps->transform_skip_enabled_flag,
+         cu->cu_transquant_bypass_flag, log2TrafoSize);
     if (pps->transform_skip_enabled_flag && !cu->cu_transquant_bypass_flag &&
         (log2TrafoSize <= Log2MaxTransformSkipSize)) {
         slice->rc[x0][y0].transform_skip_flag[cIdx] = CABAC_BP(d);
     }
     if (cu->CuPredMode[x0][y0] == MODE_INTER &&
-        sps->sps_range_ext->explicit_rdpcm_enabled_flag &&
+        sps->sps_range_ext.explicit_rdpcm_enabled_flag &&
         (slice->rc[x0][y0].transform_skip_flag[cIdx] ||
          cu->cu_transquant_bypass_flag)) {
         slice->rc[x0][y0].explicit_rdpcm_flag[cIdx] =
@@ -3495,6 +3496,8 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         slice->rc[x0][y0].last_sig_coeff_x_suffix = CABAC_FL(
             d,
             (1 << ((slice->rc[x0][y0].last_sig_coeff_x_prefix >> 1) - 1)) - 1);
+        VDBG(hevc, "last_sig_coeff_x_suffix %d",
+             slice->rc[x0][y0].last_sig_coeff_x_suffix);
         LastSignificantCoeffX =
             (1 << ((slice->rc[x0][y0].last_sig_coeff_x_prefix >> 1) - 1)) *
                 (2 + (slice->rc[x0][y0].last_sig_coeff_x_prefix & 1)) +
@@ -3506,6 +3509,8 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         slice->rc[x0][y0].last_sig_coeff_y_suffix = CABAC_FL(
             d,
             (1 << ((slice->rc[x0][y0].last_sig_coeff_y_prefix >> 1) - 1)) - 1);
+        VDBG(hevc, "last_sig_coeff_y_suffix %d",
+             slice->rc[x0][y0].last_sig_coeff_y_suffix);
         LastSignificantCoeffY =
             (1 << ((slice->rc[x0][y0].last_sig_coeff_y_prefix >> 1) - 1)) *
                 (2 + (slice->rc[x0][y0].last_sig_coeff_y_prefix & 1)) +
@@ -3513,20 +3518,28 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
     } else {
         LastSignificantCoeffY = slice->rc[x0][y0].last_sig_coeff_y_prefix;
     }
+    VDBG(hevc, "LastSignificantCoeffX %d, LastSignificantCoeffY %d",
+         LastSignificantCoeffX, LastSignificantCoeffY);
+
     int lastScanPos = 16;
     int lastSubBlock = (1 << (log2TrafoSize - 2)) * (1 << (log2TrafoSize - 2)) - 1;
+    VDBG(hevc, "lastSubBlock %d", lastSubBlock);
     int xS, xC, yS, yC;
-
+    //see 7.4.9.11
     int predModeIntra, scanIdx;
-    if (cIdx == 0) {
-        predModeIntra = cu->IntraPredModeY[x0][y0];
-    } else {
-        predModeIntra = cu->IntraPredModeC;
-    }
-    if (predModeIntra >= 6 && predModeIntra <= 14) {
-        scanIdx = 2;
-    } else if (predModeIntra >= 22 && predModeIntra <= 30) {
-        scanIdx = 1;
+    if (cu->CuPredMode[x0][y0] == MODE_INTRA &&
+        (log2TrafoSize == 2 || (log2TrafoSize == 3 && cIdx == 0) ||
+         (log2TrafoSize == 3 && CHROMA_444 == slice->ChromaArrayType))) {
+        predModeIntra =
+            (cIdx == 0) ? cu->IntraPredModeY[x0][y0] : cu->IntraPredModeC;
+
+        if (predModeIntra >= 6 && predModeIntra <= 14) {
+            scanIdx = 2;
+        } else if (predModeIntra >= 22 && predModeIntra <= 30) {
+            scanIdx = 1;
+        } else {
+            scanIdx = 0;
+        }
     } else {
         scanIdx = 0;
     }
@@ -3534,6 +3547,8 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
     if (scanIdx == 2) {
         swap(&LastSignificantCoeffX, &LastSignificantCoeffY);
     }
+    VDBG(hevc, "scanIdx %d, LastSignificantCoeffX %d, LastSignificantCoeffY %d",
+         scanIdx, LastSignificantCoeffX, LastSignificantCoeffY);
 
     int escapeDataPresent;
     do {
@@ -3542,31 +3557,105 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
             lastSubBlock --;
         }
         lastScanPos --;
-        xS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][lastSubBlock][0];
-        yS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][lastSubBlock][1];
-        xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][lastScanPos][0];
-        yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][lastScanPos][1];
+        xS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][lastSubBlock].x;
+        yS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][lastSubBlock].y;
+        xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][lastScanPos].x;
+        yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][lastScanPos].y;
     } while((xC != LastSignificantCoeffX ) || (yC != LastSignificantCoeffY));
+    // find the lastSubBlock and lastScanPos and accordingly xC, yC
+    VDBG(hevc, "xC %d, yC %d, lastSubBlock %d, lastScanPos %d", xC, yC,
+         lastSubBlock, lastScanPos);
 
     for (int i = lastSubBlock; i >= 0; i--) {
-        xS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i][0];
-        yS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i][1];
+        xS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i].x;
+        yS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i].y;
         escapeDataPresent = 0;
         int inferSbDcSigCoeffFlag = 0;
+
+        // read it twice, coded_sub_block_flag specify the sub-block (4X4) array at location (xS, yS)
+        // of 16 transform coefficient levels. 0 means all levels are 0
         if ((i < lastSubBlock) && (i > 0)) {
             slice->rc[xS][yS].coded_sub_block_flag =
                 CABAC(d, CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG);
             inferSbDcSigCoeffFlag = 1;
+            VDBG(hevc, "coded_sub_block_flag %d",
+                 slice->rc[xS][yS].coded_sub_block_flag);
+        } else if ((xS == 0 && yS ==0)|| xS == (LastSignificantCoeffX>>2) && yS == (LastSignificantCoeffY >>2)) {
+            // edge pos for i == 0 and lastSubBlock ?
+            slice->rc[xS][yS].coded_sub_block_flag = 1;
         }
-        for (int n = ( i == lastSubBlock ) ? lastScanPos - 1 : 15; n >= 0; n-- ) {
-            xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n][0];
-            yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n][1];
+        for (int n = ((i == lastSubBlock) ? lastScanPos - 1 : 15); n >= 0; n-- ) {
+            xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n].x;
+            yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n].y;
             if (slice->rc[xS][yS].coded_sub_block_flag &&
                 (n > 0 || !inferSbDcSigCoeffFlag)) {
+                //see 9.3.4.25
+                static const int ctxIdMap[15] = {0, 1, 4, 5, 2, 3, 4, 5,
+                                           6, 6, 8, 8, 7, 7, 8};
+                int sigCtx;
+                if (sps->sps_range_ext.transform_skip_context_enabled_flag &&
+                    (slice->rc[x0][y0].transform_skip_flag[cIdx] == 1 ||
+                     cu->cu_transquant_bypass_flag == 1)) {
+                    sigCtx = (cIdx == 0) ? 42 : 16;
+                } else if (log2TrafoSize == 2){
+                    sigCtx = ctxIdMap[(yC << 2) + xC];
+                } else if (xC + yC == 0) {
+                    sigCtx = 0;
+                } else {
+                    xS = xC >>2;
+                    yS = yC >>2;
+                    int prevCsbf = 0;
+                    if (xS < (1<<(log2TrafoSize-2))-1) {
+                        prevCsbf +=
+                            slice->rc[xS+1][yS].coded_sub_block_flag;
+                    }
+                    if (yS < (1 << (log2TrafoSize - 2)) - 1) {
+                        prevCsbf += slice->rc[xS][yS+1].coded_sub_block_flag;
+                    }
+                    int xP = xC &3;
+                    int yP = yC & 3;
+                    if (prevCsbf == 0) {
+                        sigCtx = (xP + yP == 0) ? 2: (xP+yP < 3)?1:0;
+                    } else if (prevCsbf == 1) {
+                        sigCtx = (yP == 0)? 2:(xP ==1)?1:0;
+                    } else if (prevCsbf == 2) {
+                        sigCtx = (xP == 0)? 2: (xP == 1) ?1 :0;
+                    } else {
+                        sigCtx =2;
+                    }
+                    if (cIdx == 0) {
+                        if (xS +yS > 0) {
+                            sigCtx += 3;
+                        }
+                        if (log2TrafoSize == 3) {
+                            sigCtx += (scanIdx == 0) ? 9: 15;
+                        } else {
+                            sigCtx += 21;
+                        }
+                    } else {
+                        if (log2TrafoSize == 3) {
+                            sigCtx += 9;
+                        } else {
+                            sigCtx += 12;
+                        }
+                    }
+                }
+                int sigInc = (cIdx == 0)? sigCtx: (27 + sigCtx);
                 slice->rc[xC][yC].sig_coeff_flag =
-                    CABAC(d, CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG);
+                    CABAC(d, CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + sigInc);
+                VDBG(hevc, "sig_coeff_flag %d",
+                     slice->rc[xC][yC].sig_coeff_flag);
                 if (slice->rc[xC][yC].sig_coeff_flag) {
                     inferSbDcSigCoeffFlag = 0;
+                }
+            } else {
+                // if sig_coeff_flag not present, inferred as
+                if ((xC == LastSignificantCoeffX &&
+                     yC == LastSignificantCoeffY) ||
+                    (((xC & 3) == 0) && ((yC & 3) == 0) &&
+                     inferSbDcSigCoeffFlag == 1 &&
+                     slice->rc[xS][yS].coded_sub_block_flag == 1)) {
+                    slice->rc[xC][yC].sig_coeff_flag = 1;
                 }
             }
         }
@@ -3575,12 +3664,44 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         int numGreater1Flag = 0;
         int lastGreater1ScanPos = -1;
         for (int n = 15; n >= 0; n--) {
-            xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n][0];
-            yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n][1];
+            xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n].x;
+            yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n].y;
             if (slice->rc[xC][yC].sig_coeff_flag) {
                 if (numGreater1Flag < 8) {
+                    //see 9.3.4.2.6
+                    int ctxSet, lastGreater1Ctx, lastGreater1Flag, greater1Ctx;
+                    if (scanIdx == 0 || cIdx > 0) {
+                        ctxSet = 0;
+                    } else {
+                        ctxSet = 2;
+                    }
+                    if (scanIdx == 0) {
+                        lastGreater1Ctx = 1;
+                    } else {
+                        lastGreater1Ctx = greater1Ctx;
+                        if (lastGreater1Ctx > 0) {
+                            lastGreater1Flag =
+                                slice->rc[xC][yC].coeff_abs_level_greater1_flag[0];
+                            if (lastGreater1Flag == 1) {
+                                lastGreater1Ctx = 0;
+                            } else {
+                                lastGreater1Ctx += 1;
+                            }
+                        }
+                    }
+                    if (lastGreater1Ctx == 0) {
+                        ctxSet += 1;
+                    }
+                    greater1Ctx = 1;
+                    int ctxInc = (ctxSet *4) + MIN(3, greater1Ctx);
+                    if (cIdx > 0) {
+                        ctxInc += 16;
+                    }
                     slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] = CABAC(
-                        d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1);
+                        d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1 +
+                               ctxInc);
+                    VDBG(hevc, "coeff_abs_level_greater1_flag %d",
+                         slice->rc[xC][yC].coeff_abs_level_greater1_flag[n]);
                     numGreater1Flag ++;
                     if (slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] &&
                         lastGreater1ScanPos == -1) {
@@ -3601,7 +3722,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         int signHidden = 0;
         if (cu->cu_transquant_bypass_flag ||
             (cu->CuPredMode[x0][y0] == MODE_INTRA &&
-             sps->sps_range_ext->implicit_rdpcm_enabled_flag &&
+             sps->sps_range_ext.implicit_rdpcm_enabled_flag &&
              slice->rc[x0][y0].transform_skip_flag[cIdx] &&
              (predModeIntra == 10 || predModeIntra == 26)) ||
             slice->rc[x0][y0].explicit_rdpcm_flag[cIdx]) {
@@ -3630,8 +3751,8 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         int initRiceValue = StatCoeff[sbType]/4;
 
         for (int n = 15; n >= 0; n--) {
-            xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n][0];
-            yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n][1];
+            xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
+            yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
             if (slice->rc[xC][yC].sig_coeff_flag &&
                 (!pps->sign_data_hiding_enabled_flag || !signHidden ||
                  (n != firstSigScanPos))) {
@@ -3641,8 +3762,8 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
         int numSigCoeff = 0;
         int sumAbsLevel = 0;
         for (int n = 15; n >= 0; n--) {
-            xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n][0];
-            yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n][1];
+            xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
+            yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
             if (slice->rc[xC][yC].sig_coeff_flag) {
                 int baseLevel =
                     1 + slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] +
@@ -3667,7 +3788,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
                     }
                     
                 }
-                cu->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
+                cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
                     (slice->rc[xC][yC].coeff_abs_level_remaining[n] +
                      baseLevel) *
                     (1 - 2 * slice->rc[xC][yC].coeff_sign_flag[n]);
@@ -3676,7 +3797,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
                         (slice->rc[xC][yC].coeff_abs_level_remaining[n] +
                          baseLevel);
                     if ((n == firstSigScanPos) && (( sumAbsLevel % 2 ) == 1)) {
-                        cu->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] = -cu->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC];
+                        cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] = -cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC];
                     }
                 }
                 numSigCoeff++;
@@ -3697,11 +3818,10 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct slice_segment_header *
 
 /* see 7.3.8.10 */
 static struct trans_unit *
-parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt, struct slice_segment_header *slice, 
-    struct hevc_param_set *hps,
-    int x0, int y0, int xBase, int yBase, int log2TrafoSize, int trafoDepth, int blkIdx)
-{
-    // struct vps *vps = hps->vps;
+parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
+                     struct slice_segment_header *slice,
+                     struct hevc_param_set *hps, int x0, int y0, int xBase,
+                     int yBase, int log2TrafoSize, int trafoDepth, int blkIdx) {
     struct pps *pps = hps->pps;
     // struct sps *sps = hps->sps;
     struct trans_unit *tu = calloc(1, sizeof(*tu));
@@ -3715,6 +3835,10 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt, struct 
         tt->cbf_cr[xC][yC][cbfDepthC] || (ChromaArrayType == 2 &&
         (tt->cbf_cb[xC][yC + ( 1 << log2TrafoSizeC)][cbfDepthC] ||
             tt->cbf_cr[xC][yC + ( 1 << log2TrafoSizeC)][cbfDepthC]));
+    VDBG(hevc,
+         "parse_transform_unit x0 %d, y0 %d, xBase %d, yBase %d, blkIdx %d, "
+         "cbf_luma %d, cbf_cb %d, cbf_cr %d",
+         x0, y0, xBase, yBase, blkIdx, cbfLuma, cbfChroma, cbfChroma);
     if( cbfLuma || cbfChroma ) {
         int xP = ( x0 >> slice->MinCbLog2SizeY ) << slice->MinCbLog2SizeY;
         int yP = ( y0 >> slice->MinCbLog2SizeY ) << slice->MinCbLog2SizeY;
@@ -3748,7 +3872,9 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt, struct 
             }
             for (int tIdx = 0; tIdx < (ChromaArrayType == 2 ? 2 : 1); tIdx++) {
                 if (tt->cbf_cb[x0][y0 + (tIdx << log2TrafoSizeC)][trafoDepth]) {
-                    parse_residual_coding(d, cu, slice, hps, x0, y0 + (tIdx << log2TrafoSizeC), log2TrafoSizeC, 1);
+                    parse_residual_coding(d, cu, slice, hps, x0,
+                                          y0 + (tIdx << log2TrafoSizeC),
+                                          log2TrafoSizeC, 1);
                 }
             }
             if (pps->pps_range_ext.cross_component_prediction_enabled_flag &&
@@ -3758,18 +3884,24 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt, struct 
             }
             for (int tIdx = 0; tIdx < ( ChromaArrayType == 2 ? 2 : 1 ); tIdx++ ) {
                 if (tt->cbf_cr[x0][y0 + (tIdx << log2TrafoSizeC)][trafoDepth]) {
-                    parse_residual_coding(d, cu, slice, hps, x0, y0 + (tIdx << log2TrafoSizeC), log2TrafoSizeC, 2);
+                    parse_residual_coding(d, cu, slice, hps, x0,
+                                          y0 + (tIdx << log2TrafoSizeC),
+                                          log2TrafoSizeC, 2);
                 }
             }
         } else if (blkIdx == 3) {
             for (int tIdx = 0; tIdx < ( ChromaArrayType == 2 ? 2 : 1 ); tIdx++ ) {
                 if (tt->cbf_cb[xBase][yBase + (tIdx << log2TrafoSizeC)][trafoDepth - 1]) {
-                    parse_residual_coding(d, cu, slice, hps, xBase, yBase + (tIdx << log2TrafoSizeC), log2TrafoSize, 1);
+                    parse_residual_coding(d, cu, slice, hps, xBase,
+                                          yBase + (tIdx << log2TrafoSizeC),
+                                          log2TrafoSize, 1);
                 }
             }
             for (int tIdx = 0; tIdx < (ChromaArrayType == 2 ? 2 : 1); tIdx++) {
                 if (tt-> cbf_cr[xBase][yBase + (tIdx << log2TrafoSizeC)][trafoDepth - 1]) {
-                    parse_residual_coding(d, cu, slice, hps, xBase, yBase + (tIdx << log2TrafoSizeC), log2TrafoSize, 2);
+                    parse_residual_coding(d, cu, slice, hps, xBase,
+                                          yBase + (tIdx << log2TrafoSizeC),
+                                          log2TrafoSize, 2);
                 }
             }
         }
@@ -3790,11 +3922,10 @@ init_value_for_cbf(int* cbf_cb)
 }
 
 /* see 7.3.8.8 */
-static struct trans_tree *
-parse_transform_tree(cabac_dec *d, struct cu *cu,
-                     struct slice_segment_header *slice,
-                     struct hevc_param_set *hps, int x0, int y0, int xBase,
-                     int yBase, int log2TrafoSize, int trafoDepth, int blkIdx) {
+static struct trans_tree *parse_transform_tree(
+    cabac_dec *d, struct cu *cu, struct slice_segment_header *slice,
+    struct hevc_param_set *hps, int x0, int y0, int xBase, int yBase,
+    int log2TrafoSize, int trafoDepth, int blkIdx, int log2CbSize) {
     // struct vps *vps = hps->vps;
     // struct pps *pps = hps->pps;
     // struct sps *sps = hps->sps;
@@ -3835,10 +3966,16 @@ parse_transform_tree(cabac_dec *d, struct cu *cu,
     if (tt->split_transform_flag[x0][y0][trafoDepth] ) {
         int x1 = x0 + ( 1 << ( log2TrafoSize - 1));
         int y1 = y0 + ( 1 << ( log2TrafoSize - 1));
-        tt->t = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0, log2TrafoSize - 1, trafoDepth + 1, 0);
-        tt->r = parse_transform_tree(d, cu, slice, hps, x1, y0, x0, y0, log2TrafoSize - 1, trafoDepth + 1, 1);
-        tt->d = parse_transform_tree(d, cu, slice, hps, x0, y1, x0, y0, log2TrafoSize - 1, trafoDepth + 1, 2);
-        tt->rd = parse_transform_tree(d, cu, slice, hps, x1, y1, x0, y0, log2TrafoSize - 1, trafoDepth + 1, 3);
+        tt->t = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0, log2TrafoSize - 1, trafoDepth + 1, 0, log2CbSize);
+        tt->r = parse_transform_tree(d, cu, slice, hps, x1, y0, x0, y0,
+                                     log2TrafoSize - 1, trafoDepth + 1, 1,
+                                     log2CbSize);
+        tt->d = parse_transform_tree(d, cu, slice, hps, x0, y1, x0, y0,
+                                     log2TrafoSize - 1, trafoDepth + 1, 2,
+                                     log2CbSize);
+        tt->rd = parse_transform_tree(d, cu, slice, hps, x1, y1, x0, y0,
+                                      log2TrafoSize - 1, trafoDepth + 1, 3,
+                                      log2CbSize);
     } else {
         if (cu->CuPredMode[x0][y0] == MODE_INTRA || trafoDepth != 0 ||
             tt->cbf_cb[x0][y0][trafoDepth] || tt->cbf_cr[x0][y0][trafoDepth] ||
@@ -3849,7 +3986,9 @@ parse_transform_tree(cabac_dec *d, struct cu *cu,
                 CABAC(d, CTX_TYPE_TU_CBF_LUMA + ((trafoDepth == 0) ? 1 : 0));
             VDBG(hevc, "cbf_luma %d", tt->cbf_luma[x0][y0][trafoDepth]);
         }
-        tt->tu = parse_transform_unit(d, cu, tt, slice, hps, x0, y0, xBase, yBase, log2TrafoSize, trafoDepth, blkIdx);
+        tt->tu =
+            parse_transform_unit(d, cu, tt, slice, hps, x0, y0, xBase, yBase,
+                                 log2TrafoSize, trafoDepth, blkIdx);
     }
     return tt;
 }
@@ -4500,6 +4639,7 @@ static struct cu *parse_coding_unit(cabac_dec *d,
             }
         }
     }
+    VDBG(hevc, "log2CbSize %d", log2CbSize);
     // I.7.3.8.5 for 3D high efficiency video coding
     // for now we should skip this function
     parse_cu_extension(d, hslice, cu, hps, x0, y0, log2CbSize, slice->NumPicTotalCurr);
@@ -4522,7 +4662,8 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                 cu->MaxTrafoDepth = (cu->CuPredMode[x0][y0] == MODE_INTRA ?
                     (sps->max_transform_hierarchy_depth_intra + cu->IntraSplitFlag) :
                     sps->max_transform_hierarchy_depth_inter);
-                cu->tt = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0, log2CbSize, 0, 0);
+                cu->tt = parse_transform_tree(d, cu, slice, hps, x0, y0, x0, y0,
+                                              log2CbSize, 0, 0, log2CbSize);
             }
         }
     }

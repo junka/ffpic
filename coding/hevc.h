@@ -932,7 +932,7 @@ struct sps {
     uint8_t sps_extension_4bits:4;
 
     // sps range extension, see 7.3.2.2.2
-    struct sps_range_extension *sps_range_ext;
+    struct sps_range_extension sps_range_ext;
     // sps multiplayer extension
     struct sps_multilayer_extension {
         uint8_t inter_view_mv_vert_constraint_flag:1;
@@ -1010,6 +1010,11 @@ struct palette_predictor_entries {
     int PredictorPaletteSize;
     int PredictorPaletteEntries[3][128]; /*  [nComp][PaletteMaxPredictorSize] */
 };
+
+typedef struct {
+    int x;
+    int y;
+} scanpos;
 
 struct slice_segment_header {
     uint8_t ChromaArrayType;//= (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc)
@@ -1151,8 +1156,11 @@ struct slice_segment_header {
     //palette_predictor_entries
     struct palette_predictor_entries ppe;
 
-
-    int ** ScanOrder[6][4];
+    // [log2BlockSize][scanIdx][sPos][sComp]
+    // log2BlockSize range 2-5, 
+    // scanIdx 0-2: 0 for up-right, 1 for horizontal, 2 for vertical, 3 for traverse
+    // sPos range 0 - blkSize * blkSize,
+    scanpos* ScanOrder[6][4];
 };
 
 
@@ -1287,7 +1295,7 @@ struct cu {
 
     struct trans_tree *tt;
 
-    struct trans_unit *tu;
+    // struct trans_unit *tu;
 };
 
 

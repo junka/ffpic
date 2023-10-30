@@ -697,11 +697,11 @@ struct residual_coding {
     int coded_sub_block_flag;
 
     int sig_coeff_flag;
-    int coeff_abs_level_greater1_flag[4];
-    int coeff_abs_level_greater2_flag[4];
-    int coeff_sign_flag[4];
+    int coeff_abs_level_greater1_flag[16];//could be 4*4 sub-block
+    int coeff_abs_level_greater2_flag[16];
+    int coeff_sign_flag[16];
 
-    int coeff_abs_level_remaining[4];
+    int coeff_abs_level_remaining[16];
 };
 
 #define EXTENDED_SAR 255
@@ -1216,6 +1216,7 @@ struct cross_comp_pred {
     uint32_t res_scale_sign_flag;
 };
 
+//see 7.4.9.10
 struct trans_unit {
     uint8_t tu_residual_act_flag[64][64];
     int TransCoeffLevel[64][64][3][64][64]; //3 for color index, 0 for Y, 1 for Cb, 2 for Cr
@@ -1233,7 +1234,7 @@ struct trans_tree {
     struct trans_tree *r;
     struct trans_tree *rd;
 
-    struct trans_unit *tu;
+    struct trans_unit tu;
 };
 
 

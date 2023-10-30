@@ -3436,8 +3436,140 @@ static int ctx_for_last_sig_coeff_prefix(int ctx_idx, int binIdx) {
     return ctx_idx + ctxInc;
 }
 
+static int ctx_for_sig_coeff_flag(struct cu *cu,
+                                  struct slice_segment_header *slice,
+                                  struct sps *sps, int log2TrafoSize, int cIdx,
+                                  int scanIdx, int x0, int y0, int xC, int yC) {
+    // see 9.3.4.2.5
+    int xS, yS;
+    static const int ctxIdMap[15] = {0, 1, 4, 5, 2, 3, 4, 5,
+                                     6, 6, 8, 8, 7, 7, 8};
+    int sigCtx;
+    if (sps->sps_range_ext.transform_skip_context_enabled_flag &&
+        (slice->rc[x0][y0].transform_skip_flag[cIdx] == 1 ||
+         cu->cu_transquant_bypass_flag == 1)) {
+        sigCtx = (cIdx == 0) ? 42 : 16;
+    } else if (log2TrafoSize == 2) {
+        sigCtx = ctxIdMap[(yC << 2) + xC];
+    } else if (xC + yC == 0) {
+        sigCtx = 0;
+    } else {
+        xS = xC >> 2;
+        yS = yC >> 2;
+        int prevCsbf = 0;
+        if (xS < (1 << (log2TrafoSize - 2)) - 1) {
+            prevCsbf += slice->rc[xS + 1][yS].coded_sub_block_flag;
+        }
+        if (yS < (1 << (log2TrafoSize - 2)) - 1) {
+            prevCsbf += slice->rc[xS][yS + 1].coded_sub_block_flag;
+        }
+        int xP = xC & 3;
+        int yP = yC & 3;
+        if (prevCsbf == 0) {
+            sigCtx = (xP + yP == 0) ? 2 : (xP + yP < 3) ? 1 : 0;
+        } else if (prevCsbf == 1) {
+            sigCtx = (yP == 0) ? 2 : (xP == 1) ? 1 : 0;
+        } else if (prevCsbf == 2) {
+            sigCtx = (xP == 0) ? 2 : (xP == 1) ? 1 : 0;
+        } else {
+            sigCtx = 2;
+        }
+        if (cIdx == 0) {
+            if (xS + yS > 0) {
+                sigCtx += 3;
+            }
+            if (log2TrafoSize == 3) {
+                sigCtx += (scanIdx == 0) ? 9 : 15;
+            } else {
+                sigCtx += 21;
+            }
+        } else {
+            if (log2TrafoSize == 3) {
+                sigCtx += 9;
+            } else {
+                sigCtx += 12;
+            }
+        }
+    }
+    int sigInc = (cIdx == 0) ? sigCtx : (27 + sigCtx);
+    return sigInc;
+}
+
+static int ctx_for_coeff_abs_level_greater1(int cIdx, int scanBlockIdx,
+                                            bool firstCtx, bool firstSubBlock,
+                                            int coeff_abs_level_greater1_flag) {
+    // see 9.3.4.2.6
+    int ctxSet, lastGreater1Ctx, lastGreater1Flag, greater1Ctx;
+    static int prev_ctxSet = 0, prev_greater1Ctx = 0;
+    if (firstCtx) {
+        // if invoked for the first time
+        if (scanBlockIdx == 0 || cIdx > 0) {
+            ctxSet = 0;
+        } else {
+            ctxSet = 2;
+        }
+        if (firstSubBlock) {
+            lastGreater1Ctx = 1;
+        } else {
+            lastGreater1Ctx = prev_greater1Ctx;
+            if (lastGreater1Ctx > 0) {
+                lastGreater1Flag = coeff_abs_level_greater1_flag;
+                if (lastGreater1Flag == 1) {
+                    lastGreater1Ctx = 0;
+                } else {
+                    lastGreater1Ctx += 1;
+                }
+            }
+        }
+        VDBG(hevc, "lastGreater1Ctx %d", lastGreater1Ctx);
+        if (lastGreater1Ctx == 0) {
+            ctxSet += 1;
+        }
+        greater1Ctx = 1;
+    }
+    else {
+        ctxSet = prev_ctxSet;
+        greater1Ctx = prev_greater1Ctx;
+        if (greater1Ctx > 0) {
+            lastGreater1Flag = coeff_abs_level_greater1_flag;
+            if (lastGreater1Flag == 1) {
+                greater1Ctx = 0;
+            } else {
+                greater1Ctx += 1;
+            }
+        }
+    }
+    int ctxInc = (ctxSet * 4) + MIN(3, greater1Ctx);
+    if (cIdx > 0) {
+        ctxInc += 16;
+    }
+    prev_ctxSet = ctxSet;
+    prev_greater1Ctx = greater1Ctx;
+    VDBG(hevc, "scanBlockIdx %d ctxSet %d, cIdx %d, ctxInc %d, greater1Ctx %d",
+         scanBlockIdx, ctxSet, cIdx, ctxInc, greater1Ctx);
+    return ctxInc;
+}
+
+//see 9.3.4.2.4
+static int
+ctx_for_coded_sub_block_flag(struct slice_segment_header *slice, int xS, int yS,
+                             int log2TrafoSize, int cIdx) {
+    int csbfCtx = 0;
+    if (xS < (1<<(log2TrafoSize-2))-1) {
+        csbfCtx += slice->rc[xS + 1][yS].coded_sub_block_flag;
+    }
+    if (yS < (1 << (log2TrafoSize - 2)) - 1) {
+        csbfCtx += slice->rc[xS][yS + 1].coded_sub_block_flag;
+    }
+    int ctxInc = MIN(csbfCtx, 1);
+    if (cIdx > 0) {
+        ctxInc += 2;
+    }
+    return ctxInc;
+}
+
 /*see 7.3.8.11 */
-static void parse_residual_coding(cabac_dec *d, struct cu *cu,
+static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit *tu,
                                   struct slice_segment_header *slice,
                                   struct hevc_param_set *hps, int x0, int y0,
                                   int log2TrafoSize, int cIdx) {
@@ -3505,6 +3637,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
     } else {
         LastSignificantCoeffX = slice->rc[x0][y0].last_sig_coeff_x_prefix;
     }
+
     if (slice->rc[x0][y0].last_sig_coeff_y_prefix > 3) {
         slice->rc[x0][y0].last_sig_coeff_y_suffix = CABAC_FL(
             d,
@@ -3521,9 +3654,6 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
     VDBG(hevc, "LastSignificantCoeffX %d, LastSignificantCoeffY %d",
          LastSignificantCoeffX, LastSignificantCoeffY);
 
-    int lastScanPos = 16;
-    int lastSubBlock = (1 << (log2TrafoSize - 2)) * (1 << (log2TrafoSize - 2)) - 1;
-    VDBG(hevc, "lastSubBlock %d", lastSubBlock);
     int xS, xC, yS, yC;
     //see 7.4.9.11
     int predModeIntra, scanIdx;
@@ -3550,7 +3680,11 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
     VDBG(hevc, "scanIdx %d, LastSignificantCoeffX %d, LastSignificantCoeffY %d",
          scanIdx, LastSignificantCoeffX, LastSignificantCoeffY);
 
-    int escapeDataPresent;
+    // int escapeDataPresent;
+    int lastScanPos = 16;
+    int lastSubBlock =
+        (1 << (log2TrafoSize - 2)) * (1 << (log2TrafoSize - 2)) - 1;
+    VDBG(hevc, "lastSubBlock %d", lastSubBlock);
     do {
         if (lastScanPos == 0) {
             lastScanPos = 16;
@@ -3566,96 +3700,72 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
     VDBG(hevc, "xC %d, yC %d, lastSubBlock %d, lastScanPos %d", xC, yC,
          lastSubBlock, lastScanPos);
 
+    bool firstCtxOfSubBlock = true, firstSubBlock = true;
+    int prev_coeff_abs_level_greater1_flag = 0;
+
     for (int i = lastSubBlock; i >= 0; i--) {
         xS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i].x;
         yS = slice->ScanOrder[log2TrafoSize - 2][scanIdx][i].y;
-        escapeDataPresent = 0;
+        int escapeDataPresent = 0;
         int inferSbDcSigCoeffFlag = 0;
 
         // read it twice, coded_sub_block_flag specify the sub-block (4X4) array at location (xS, yS)
-        // of 16 transform coefficient levels. 0 means all levels are 0
+        // of 16 transform coefficient levels. 0 means all levels are 0.
         if ((i < lastSubBlock) && (i > 0)) {
-            slice->rc[xS][yS].coded_sub_block_flag =
-                CABAC(d, CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG);
+            //see 9.3.4.2.4
+            int ctxInc = ctx_for_coded_sub_block_flag(slice, xS, yS, log2TrafoSize, cIdx);
+            slice->rc[xS][yS].coded_sub_block_flag = CABAC(
+                d, CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG + ctxInc);
             inferSbDcSigCoeffFlag = 1;
-            VDBG(hevc, "coded_sub_block_flag %d",
-                 slice->rc[xS][yS].coded_sub_block_flag);
+            VDBG(hevc, "(%d, %d)coded_sub_block_flag %d",
+                 xS, yS, slice->rc[xS][yS].coded_sub_block_flag);
         } else if ((xS == 0 && yS ==0)|| xS == (LastSignificantCoeffX>>2) && yS == (LastSignificantCoeffY >>2)) {
             // edge pos for i == 0 and lastSubBlock ?
             slice->rc[xS][yS].coded_sub_block_flag = 1;
         }
-        for (int n = ((i == lastSubBlock) ? lastScanPos - 1 : 15); n >= 0; n-- ) {
-            xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n].x;
-            yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n].y;
+
+        int lastCoeff;
+        int nz = 0;
+        // HIGHLIGHT
+        if (i == lastSubBlock) {
+            lastCoeff = lastScanPos - 1;
+            // did read it from spec, when sig_coeff_flag not present
+            // resides outside of for loop so should put it advance
+            slice->rc[LastSignificantCoeffX][LastSignificantCoeffY]
+                .sig_coeff_flag = 1;
+            nz = 1;
+        } else {
+            lastCoeff = 15;
+        }
+
+        // decode all coeff flag
+        for (int n = lastCoeff; n >= 0; n--) {
+            xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
+            yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
+            VDBG(hevc, "n %d, xC, yC(%d, %d), coded_sub_block_flag %d", n, xC, yC,
+                 slice->rc[xC][yC].coded_sub_block_flag);
             if (slice->rc[xS][yS].coded_sub_block_flag &&
                 (n > 0 || !inferSbDcSigCoeffFlag)) {
-                //see 9.3.4.25
-                static const int ctxIdMap[15] = {0, 1, 4, 5, 2, 3, 4, 5,
-                                           6, 6, 8, 8, 7, 7, 8};
-                int sigCtx;
-                if (sps->sps_range_ext.transform_skip_context_enabled_flag &&
-                    (slice->rc[x0][y0].transform_skip_flag[cIdx] == 1 ||
-                     cu->cu_transquant_bypass_flag == 1)) {
-                    sigCtx = (cIdx == 0) ? 42 : 16;
-                } else if (log2TrafoSize == 2){
-                    sigCtx = ctxIdMap[(yC << 2) + xC];
-                } else if (xC + yC == 0) {
-                    sigCtx = 0;
-                } else {
-                    xS = xC >>2;
-                    yS = yC >>2;
-                    int prevCsbf = 0;
-                    if (xS < (1<<(log2TrafoSize-2))-1) {
-                        prevCsbf +=
-                            slice->rc[xS+1][yS].coded_sub_block_flag;
-                    }
-                    if (yS < (1 << (log2TrafoSize - 2)) - 1) {
-                        prevCsbf += slice->rc[xS][yS+1].coded_sub_block_flag;
-                    }
-                    int xP = xC &3;
-                    int yP = yC & 3;
-                    if (prevCsbf == 0) {
-                        sigCtx = (xP + yP == 0) ? 2: (xP+yP < 3)?1:0;
-                    } else if (prevCsbf == 1) {
-                        sigCtx = (yP == 0)? 2:(xP ==1)?1:0;
-                    } else if (prevCsbf == 2) {
-                        sigCtx = (xP == 0)? 2: (xP == 1) ?1 :0;
-                    } else {
-                        sigCtx =2;
-                    }
-                    if (cIdx == 0) {
-                        if (xS +yS > 0) {
-                            sigCtx += 3;
-                        }
-                        if (log2TrafoSize == 3) {
-                            sigCtx += (scanIdx == 0) ? 9: 15;
-                        } else {
-                            sigCtx += 21;
-                        }
-                    } else {
-                        if (log2TrafoSize == 3) {
-                            sigCtx += 9;
-                        } else {
-                            sigCtx += 12;
-                        }
-                    }
-                }
-                int sigInc = (cIdx == 0)? sigCtx: (27 + sigCtx);
+                // see 9.3.4.2.5
+                int sigInc = ctx_for_sig_coeff_flag(cu, slice, sps, log2TrafoSize, cIdx,
+                                           scanIdx, x0, y0, xC, yC);
                 slice->rc[xC][yC].sig_coeff_flag =
                     CABAC(d, CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + sigInc);
-                VDBG(hevc, "sig_coeff_flag %d",
-                     slice->rc[xC][yC].sig_coeff_flag);
+                VDBG(hevc, "xC, yC(%d, %d), sig_coeff_flag %d",
+                     xC, yC, slice->rc[xC][yC].sig_coeff_flag);
                 if (slice->rc[xC][yC].sig_coeff_flag) {
                     inferSbDcSigCoeffFlag = 0;
+                    nz ++;
                 }
             } else {
                 // if sig_coeff_flag not present, inferred as
-                if ((xC == LastSignificantCoeffX &&
-                     yC == LastSignificantCoeffY) ||
-                    (((xC & 3) == 0) && ((yC & 3) == 0) &&
+                if ((((xC & 3) == 0) && ((yC & 3) == 0) &&
                      inferSbDcSigCoeffFlag == 1 &&
                      slice->rc[xS][yS].coded_sub_block_flag == 1)) {
                     slice->rc[xC][yC].sig_coeff_flag = 1;
+                    nz ++;
+                    VDBG(hevc, "sig_coeff_flag %d",
+                         slice->rc[xC][yC].sig_coeff_flag);
                 }
             }
         }
@@ -3663,51 +3773,34 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
         int lastSigScanPos = -1;
         int numGreater1Flag = 0;
         int lastGreater1ScanPos = -1;
+        firstCtxOfSubBlock = true;
+        // sig_coeff_flag specifies for coeff at (xC, yC) in current block whether
+        // the coeff is zero or not
         for (int n = 15; n >= 0; n--) {
             xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n].x;
             yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n].y;
+            VDBG(hevc, "n %d (%d, %d) sig_coeff_flag %d", n, xC, yC, slice->rc[xC][yC].sig_coeff_flag);
+            // different from spec, use nz value instead of sig_coeff_flag
             if (slice->rc[xC][yC].sig_coeff_flag) {
                 if (numGreater1Flag < 8) {
-                    //see 9.3.4.2.6
-                    int ctxSet, lastGreater1Ctx, lastGreater1Flag, greater1Ctx;
-                    if (scanIdx == 0 || cIdx > 0) {
-                        ctxSet = 0;
-                    } else {
-                        ctxSet = 2;
-                    }
-                    if (scanIdx == 0) {
-                        lastGreater1Ctx = 1;
-                    } else {
-                        lastGreater1Ctx = greater1Ctx;
-                        if (lastGreater1Ctx > 0) {
-                            lastGreater1Flag =
-                                slice->rc[xC][yC].coeff_abs_level_greater1_flag[0];
-                            if (lastGreater1Flag == 1) {
-                                lastGreater1Ctx = 0;
-                            } else {
-                                lastGreater1Ctx += 1;
-                            }
-                        }
-                    }
-                    if (lastGreater1Ctx == 0) {
-                        ctxSet += 1;
-                    }
-                    greater1Ctx = 1;
-                    int ctxInc = (ctxSet *4) + MIN(3, greater1Ctx);
-                    if (cIdx > 0) {
-                        ctxInc += 16;
-                    }
+                    int ctxInc = ctx_for_coeff_abs_level_greater1(
+                        cIdx, i, firstCtxOfSubBlock, firstSubBlock,
+                        prev_coeff_abs_level_greater1_flag);
                     slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] = CABAC(
                         d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1 +
                                ctxInc);
-                    VDBG(hevc, "coeff_abs_level_greater1_flag %d",
+                    firstSubBlock = false;
+                    firstCtxOfSubBlock = false;
+                    prev_coeff_abs_level_greater1_flag =
+                        slice->rc[xC][yC].coeff_abs_level_greater1_flag[n];
+                    VDBG(hevc, "ctxInc %d, coeff_abs_level_greater1_flag %d",
+                         ctxInc,
                          slice->rc[xC][yC].coeff_abs_level_greater1_flag[n]);
                     numGreater1Flag ++;
                     if (slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] &&
                         lastGreater1ScanPos == -1) {
                         lastGreater1ScanPos = n;
-                    } else if (slice->rc[xC][yC]
-                                   .coeff_abs_level_greater1_flag[n]) {
+                    } else if (slice->rc[xC][yC].coeff_abs_level_greater1_flag[n]) {
                         escapeDataPresent = 1;
                     }
                 } else {
@@ -3730,7 +3823,9 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
         } else {
             signHidden = lastSigScanPos - firstSigScanPos > 3;
         }
-        if( lastGreater1ScanPos != -1 ) {
+        VDBG(hevc, "signHidden %d", signHidden);
+
+        if (lastGreater1ScanPos != -1) {
             slice->rc[x0][y0]
                 .coeff_abs_level_greater2_flag[lastGreater1ScanPos] =
                 CABAC(d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2);
@@ -3738,25 +3833,35 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
                     .coeff_abs_level_greater2_flag[lastGreater1ScanPos]) {
                 escapeDataPresent = 1;
             }
+            VDBG(hevc,
+                 "lastGreater1ScanPos %d, coeff_abs_level_greater2_flag %d",
+                 lastGreater1ScanPos, slice->rc[x0][y0]
+                     .coeff_abs_level_greater2_flag[lastGreater1ScanPos]);
         }
         static int StatCoeff[4] = {0};
-            // see 9-20, 9-21, 9-22
-            int sbType = 0;
-            if (cu->cu_transquant_bypass_flag == 0 &&
-                slice->rc[x0][y0].transform_skip_flag[cIdx] == 0) {
+        // see 9-20, 9-21, 9-22
+        int sbType = 0;
+        if (cu->cu_transquant_bypass_flag == 0 &&
+            slice->rc[x0][y0].transform_skip_flag[cIdx] == 0) {
             sbType = 2 * (cIdx == 0 ? 1: 0);
-            } else {
+        } else {
             sbType = 2 *(cIdx ==0? 1: 0)+ 1;
-            }
-        int initRiceValue = StatCoeff[sbType]/4;
+        }
 
         for (int n = 15; n >= 0; n--) {
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
+            VDBG(hevc,
+                 "(%d, %d) sig_coeff_flag %d, sign_data_hiding_enabled_flag "
+                 "%d, firstSigScanPos %d",
+                 xC, yC, slice->rc[xC][yC].sig_coeff_flag,
+                 pps->sign_data_hiding_enabled_flag, firstSigScanPos);
             if (slice->rc[xC][yC].sig_coeff_flag &&
                 (!pps->sign_data_hiding_enabled_flag || !signHidden ||
                  (n != firstSigScanPos))) {
                 slice->rc[xC][yC].coeff_sign_flag[n] = CABAC_BP(d);
+                VDBG(hevc, "xC, yC (%d, %d) coeff_sign_flag[%d] %d",
+                     xC, yC, n, slice->rc[xC][yC].coeff_sign_flag[n]);
             }
         }
         int numSigCoeff = 0;
@@ -3768,7 +3873,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
                 int baseLevel =
                     1 + slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] +
                     slice->rc[xC][yC].coeff_abs_level_greater2_flag[n];
-                if( baseLevel == (( numSigCoeff < 8 ) ? ( (n == lastGreater1ScanPos) ? 3 : 2 ) : 1 ) ) {
+                if (baseLevel == (( numSigCoeff < 8) ? ( (n == lastGreater1ScanPos) ? 3 : 2) : 1)) {
                     //see 9.3.3.11 binarization process for coeff_abs_level_remaining
                     int prefix = CABAC_BP(d);
                     int code = 0;
@@ -3788,7 +3893,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
                     }
                     
                 }
-                cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
+                tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
                     (slice->rc[xC][yC].coeff_abs_level_remaining[n] +
                      baseLevel) *
                     (1 - 2 * slice->rc[xC][yC].coeff_sign_flag[n]);
@@ -3796,8 +3901,9 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu,
                     sumAbsLevel +=
                         (slice->rc[xC][yC].coeff_abs_level_remaining[n] +
                          baseLevel);
-                    if ((n == firstSigScanPos) && (( sumAbsLevel % 2 ) == 1)) {
-                        cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] = -cu->tt->tu->TransCoeffLevel[x0][y0][cIdx][xC][yC];
+                    if ((n == firstSigScanPos) && ((sumAbsLevel % 2) == 1)) {
+                        tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
+                            -tu->TransCoeffLevel[x0][y0][cIdx][xC][yC];
                     }
                 }
                 numSigCoeff++;
@@ -3824,7 +3930,7 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
                      int yBase, int log2TrafoSize, int trafoDepth, int blkIdx) {
     struct pps *pps = hps->pps;
     // struct sps *sps = hps->sps;
-    struct trans_unit *tu = calloc(1, sizeof(*tu));
+    struct trans_unit *tu = &tt->tu;
     uint8_t ChromaArrayType = slice->ChromaArrayType;
     int log2TrafoSizeC = MAX(2, log2TrafoSize - (ChromaArrayType == 3 ? 0 : 1));
     int cbfDepthC = trafoDepth - ((ChromaArrayType != 3 && log2TrafoSize == 2) ? 1 : 0);
@@ -3862,7 +3968,7 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
             parse_chroma_qp_offset(d, slice, pps, qpoff);
         }
         if (cbfLuma) {
-            parse_residual_coding(d, cu, slice, hps, x0, y0, log2TrafoSize, 0);
+            parse_residual_coding(d, cu, tu, slice, hps, x0, y0, log2TrafoSize, 0);
         }
         if (log2TrafoSize > 2 || ChromaArrayType == 3) {
             if (pps->pps_range_ext.cross_component_prediction_enabled_flag && cbfLuma &&
@@ -3872,7 +3978,7 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
             }
             for (int tIdx = 0; tIdx < (ChromaArrayType == 2 ? 2 : 1); tIdx++) {
                 if (tt->cbf_cb[x0][y0 + (tIdx << log2TrafoSizeC)][trafoDepth]) {
-                    parse_residual_coding(d, cu, slice, hps, x0,
+                    parse_residual_coding(d, cu, tu, slice, hps, x0,
                                           y0 + (tIdx << log2TrafoSizeC),
                                           log2TrafoSizeC, 1);
                 }
@@ -3884,7 +3990,7 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
             }
             for (int tIdx = 0; tIdx < ( ChromaArrayType == 2 ? 2 : 1 ); tIdx++ ) {
                 if (tt->cbf_cr[x0][y0 + (tIdx << log2TrafoSizeC)][trafoDepth]) {
-                    parse_residual_coding(d, cu, slice, hps, x0,
+                    parse_residual_coding(d, cu, tu, slice, hps, x0,
                                           y0 + (tIdx << log2TrafoSizeC),
                                           log2TrafoSizeC, 2);
                 }
@@ -3892,14 +3998,14 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         } else if (blkIdx == 3) {
             for (int tIdx = 0; tIdx < ( ChromaArrayType == 2 ? 2 : 1 ); tIdx++ ) {
                 if (tt->cbf_cb[xBase][yBase + (tIdx << log2TrafoSizeC)][trafoDepth - 1]) {
-                    parse_residual_coding(d, cu, slice, hps, xBase,
+                    parse_residual_coding(d, cu, tu, slice, hps, xBase,
                                           yBase + (tIdx << log2TrafoSizeC),
                                           log2TrafoSize, 1);
                 }
             }
             for (int tIdx = 0; tIdx < (ChromaArrayType == 2 ? 2 : 1); tIdx++) {
                 if (tt-> cbf_cr[xBase][yBase + (tIdx << log2TrafoSizeC)][trafoDepth - 1]) {
-                    parse_residual_coding(d, cu, slice, hps, xBase,
+                    parse_residual_coding(d, cu, tu, slice, hps, xBase,
                                           yBase + (tIdx << log2TrafoSizeC),
                                           log2TrafoSize, 2);
                 }
@@ -3986,8 +4092,7 @@ static struct trans_tree *parse_transform_tree(
                 CABAC(d, CTX_TYPE_TU_CBF_LUMA + ((trafoDepth == 0) ? 1 : 0));
             VDBG(hevc, "cbf_luma %d", tt->cbf_luma[x0][y0][trafoDepth]);
         }
-        tt->tu =
-            parse_transform_unit(d, cu, tt, slice, hps, x0, y0, xBase, yBase,
+        parse_transform_unit(d, cu, tt, slice, hps, x0, y0, xBase, yBase,
                                  log2TrafoSize, trafoDepth, blkIdx);
     }
     return tt;
@@ -4654,8 +4759,8 @@ static struct cu *parse_coding_unit(cabac_dec *d,
                 !(cu->PartMode == PART_2Nx2N && cu->pu[x0][y0].merge_flag)) {
                 cu->rqt_root_cbf = CABAC(d, CTX_TYPE_CU_RQT_ROOT_CBF);
             } else {
-                // for inter blocks with 2NX2N, must be
-                cu->rqt_root_cbf = 1;
+                // for inter blocks with 2NX2N, must be 1
+                cu->rqt_root_cbf = !DcOnlyFlag;
             }
             VDBG(hevc, "rqt_root_cbf %d", cu->rqt_root_cbf);
             if (cu->rqt_root_cbf) {

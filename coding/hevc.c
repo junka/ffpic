@@ -3503,7 +3503,7 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
 
 static int ctx_for_coeff_abs_level_greater1(int cIdx, int scanBlockIdx,
                                             bool firstCtx, bool firstSubBlock,
-                                            int coeff_abs_level_greater1_flag) {
+                                            int coeff_abs_level_greater1_flag, int *ctxinc2) {
     // see 9.3.4.2.6
     int ctxSet, lastGreater1Ctx, lastGreater1Flag, greater1Ctx;
     static int prev_ctxSet = 0, prev_greater1Ctx = 0;
@@ -3551,10 +3551,16 @@ static int ctx_for_coeff_abs_level_greater1(int cIdx, int scanBlockIdx,
     }
     prev_ctxSet = ctxSet;
     prev_greater1Ctx = greater1Ctx;
-    VDBG(hevc, "scanBlockIdx %d ctxSet %d, cIdx %d, ctxInc %d, greater1Ctx %d",
-         scanBlockIdx, ctxSet, cIdx, ctxInc, greater1Ctx);
+
+    // see 9.3.4.2.7
+    *ctxinc2 = (cIdx > 0) ? ctxSet + 4: ctxSet;
+
+    //  VDBG(hevc, "scanBlockIdx %d ctxSet %d, cIdx %d, ctxInc %d, greater1Ctx
+    //  %d",
+    //       scanBlockIdx, ctxSet, cIdx, ctxInc, greater1Ctx);
     return ctxInc;
 }
+
 
 //see 9.3.4.2.4
 static int
@@ -3782,6 +3788,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
         firstCtxOfSubBlock = true;
         // sig_coeff_flag specifies for coeff at (xC, yC) in current block whether
         // the coeff is zero or not
+        int ctxInc_greater2;
         for (int n = 15; n >= 0; n--) {
             xC = ( xS << 2 ) + slice->ScanOrder[2][scanIdx][n].x;
             yC = ( yS << 2 ) + slice->ScanOrder[2][scanIdx][n].y;
@@ -3791,7 +3798,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                 if (numGreater1Flag < 8) {
                     int ctxInc = ctx_for_coeff_abs_level_greater1(
                         cIdx, i, firstCtxOfSubBlock, firstSubBlock,
-                        prev_coeff_abs_level_greater1_flag);
+                        prev_coeff_abs_level_greater1_flag, &ctxInc_greater2);
                     slice->rc[xC][yC].coeff_abs_level_greater1_flag[n] = CABAC(
                         d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1 +
                                ctxInc);
@@ -3834,7 +3841,8 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
         if (lastGreater1ScanPos != -1) {
             slice->rc[x0][y0]
                 .coeff_abs_level_greater2_flag[lastGreater1ScanPos] =
-                CABAC(d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2);
+                CABAC(d, CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER2 +
+                             ctxInc_greater2);
             if (slice->rc[x0][y0]
                     .coeff_abs_level_greater2_flag[lastGreater1ScanPos]) {
                 escapeDataPresent = 1;

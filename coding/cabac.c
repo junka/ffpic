@@ -144,26 +144,29 @@ static int initValue_coded_sub_block_flag[3][4] = {
     {121, 140, 61, 154},
     {121, 140, 61, 154}
 };
-static int initValue_sig_coeff_flag[3][44] = {
+static int initValue_sig_coeff_flag[3][42] = {
     {
         111, 111, 125, 110, 110, 94,  124, 108, 124, 107, 125, 141, 179, 153,
         125, 107, 125, 141, 179, 153, 125, 107, 125, 141, 179, 153, 125, 140,
         139, 182, 182, 152, 136, 152, 136, 153, 136, 139, 111, 136, 139, 111,
-        141, 111
     },
     {
         155, 154, 139, 153, 139, 123, 123, 63,  153, 166, 183, 140, 136, 153,
         154, 166, 183, 140, 136, 153, 154, 166, 183, 140, 136, 153, 154, 170,
         153, 123, 123, 107, 121, 107, 121, 167, 151, 183, 140, 151, 183, 140,
-        140, 140
+        
     },
     {
         170, 154, 139, 153, 139, 123, 123, 63,  124, 166, 183, 140, 136, 153,
         154, 166, 183, 140, 136, 153, 154, 166, 183, 140, 136, 153, 154, 170,
         153, 138, 138, 122, 121, 122, 121, 167, 151, 183, 140, 151, 183, 140,
-        140, 140
+        
     },
 };
+static int initValue_sig_coeff_flag1[3][2] = {
+    {141, 111}, {140, 140}, {140, 140}
+};
+
 static int initValue_coeff_abs_level_greater1_flag[3][24] = {
     {
         140, 92,  137, 138, 140, 152, 138, 139, 153, 74,  149, 92,
@@ -309,9 +312,14 @@ void cabac_init_models(int qpy, int initType)
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_CODED_SUB_BLOCK_FLAG + i,
                        qpy, initValue_coded_sub_block_flag[initType][i]);
     }
-    for (int i = 0; i < 44; i++) {
+    for (int i = 0; i < 42; i++) {
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + i, qpy,
                        initValue_sig_coeff_flag[initType][i]);
+    }
+    // notice that 43, 44 is 126, 127
+    for (int i = 0; i < 2; i ++) {
+        init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + i + 42, qpy,
+                       initValue_sig_coeff_flag1[initType][i]);
     }
     for (int i = 0; i < 24; i++) {
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_COEFF_ABS_LEVEL_GREATER1 + i,
@@ -578,8 +586,8 @@ cabac_dec_decision(cabac_dec *dec, int ctx_tid)
         }
     }
     renormD(dec);
-    VDBG(cabac, "decision v %x r %x c %d: binVal %d", dec->value, dec->range,
-         dec->count, binVal);
+    VDBG(cabac, "decision v %x r %x state %d: binVal %d", dec->value, dec->range,
+         m->state, binVal);
 
     return binVal;
 }

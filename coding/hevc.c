@@ -3441,7 +3441,7 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
                                   struct sps *sps, int log2TrafoSize, int cIdx,
                                   int scanIdx, int x0, int y0, int xC, int yC) {
     // see 9.3.4.2.5
-    int xS, yS;
+
     static const int ctxIdMap[15] = {0, 1, 4, 5, 2, 3, 4, 5,
                                      6, 6, 8, 8, 7, 7, 8};
     int sigCtx;
@@ -3454,6 +3454,7 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
     } else if (xC + yC == 0) {
         sigCtx = 0;
     } else {
+        int xS, yS;
         xS = xC >> 2;
         yS = yC >> 2;
         int prevCsbf = 0;
@@ -3461,7 +3462,7 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
             prevCsbf += slice->rc[xS + 1][yS].coded_sub_block_flag;
         }
         if (yS < (1 << (log2TrafoSize - 2)) - 1) {
-            prevCsbf += slice->rc[xS][yS + 1].coded_sub_block_flag;
+            prevCsbf += (slice->rc[xS][yS + 1].coded_sub_block_flag << 1);
         }
         int xP = xC & 3;
         int yP = yC & 3;
@@ -3491,7 +3492,12 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
             }
         }
     }
+    // VDBG(hevc, "cIdx %d, sigCtx %d", cIdx, sigCtx);
     int sigInc = (cIdx == 0) ? sigCtx : (27 + sigCtx);
+    if (sigInc > 125) {
+        //for 126, 127
+        sigInc = sigInc - 126 + 42;
+    }
     return sigInc;
 }
 
@@ -3743,7 +3749,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
             VDBG(hevc, "n %d, xC, yC(%d, %d), coded_sub_block_flag %d", n, xC, yC,
-                 slice->rc[xC][yC].coded_sub_block_flag);
+                 slice->rc[xS][yS].coded_sub_block_flag);
             if (slice->rc[xS][yS].coded_sub_block_flag &&
                 (n > 0 || !inferSbDcSigCoeffFlag)) {
                 // see 9.3.4.2.5
@@ -3751,7 +3757,7 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                                            scanIdx, x0, y0, xC, yC);
                 slice->rc[xC][yC].sig_coeff_flag =
                     CABAC(d, CTX_TYPE_RESIDUAL_CODING_SIG_COEFF_FLAG + sigInc);
-                VDBG(hevc, "xC, yC(%d, %d), sig_coeff_flag %d",
+                VDBG(hevc, "sigInc %d, xC, yC(%d, %d), sig_coeff_flag %d", sigInc,
                      xC, yC, slice->rc[xC][yC].sig_coeff_flag);
                 if (slice->rc[xC][yC].sig_coeff_flag) {
                     inferSbDcSigCoeffFlag = 0;
@@ -3764,9 +3770,9 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                      slice->rc[xS][yS].coded_sub_block_flag == 1)) {
                     slice->rc[xC][yC].sig_coeff_flag = 1;
                     nz ++;
-                    VDBG(hevc, "sig_coeff_flag %d",
-                         slice->rc[xC][yC].sig_coeff_flag);
                 }
+                VDBG(hevc, "sig_coeff_flag %d",
+                     slice->rc[xC][yC].sig_coeff_flag);
             }
         }
         int firstSigScanPos = 16;

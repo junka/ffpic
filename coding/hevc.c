@@ -3880,6 +3880,12 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
         }
         int numSigCoeff = 0;
         int sumAbsLevel = 0;
+        int cRiceParam = 0;
+        if (sps->sps_range_ext.persistent_rice_adaptation_enabled_flag) {
+            cRiceParam = StatCoeff[sbType] / 4;
+        }
+        bool firstAbsLevelRemaining = true;
+
         for (int n = 15; n >= 0; n--) {
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
@@ -3889,23 +3895,48 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                     slice->rc[xC][yC].coeff_abs_level_greater2_flag[n];
                 if (baseLevel == (( numSigCoeff < 8) ? ( (n == lastGreater1ScanPos) ? 3 : 2) : 1)) {
                     //see 9.3.3.11 binarization process for coeff_abs_level_remaining
-                    int prefix = CABAC_BP(d);
+                    int prefix = -1;
                     int code = 0;
                     do {
                         prefix ++;
                         code = CABAC_BP(d);
                     } while(code);
-                    if (prefix <=3) {
-                        //FIXME
-                        code = CABAC_FL(d, 11);
+                    VDBG(hevc, "prefix %d, cRice %d", prefix, cRiceParam);
+                    if (prefix <= 3) {
+                        if (cRiceParam > 0) {
+                            code = CABAC_FL(d, cRiceParam);
+                        }
                         slice->rc[xC][yC].coeff_abs_level_remaining[n] =
-                            (prefix << 11) + code;
+                            (prefix << cRiceParam) + code;
                     } else {
-                        code = CABAC_FL(d, prefix-3 + 11);
+                        if (prefix - 3 + cRiceParam) {
+                            code = CABAC_FL(d, prefix - 3 + cRiceParam);
+                        }
                         slice->rc[xC][yC].coeff_abs_level_remaining[n] =
-                            (((1 << (prefix - 3)) + 2) << 12) + code;
+                            (((1 << (prefix - 3)) + 2) << cRiceParam) + code;
                     }
-                    
+
+                    if (sps->sps_range_ext.persistent_rice_adaptation_enabled_flag) {
+                        if (baseLevel + slice->rc[xC][yC].coeff_abs_level_remaining[n] > 3 *(1<< cRiceParam)) {
+                            cRiceParam ++;
+                        }
+                    } else {
+                        if (baseLevel + slice->rc[xC][yC].coeff_abs_level_remaining[n] > 3 *(1<< cRiceParam)) {
+                            cRiceParam ++;
+                            if (cRiceParam > 4) {
+                                cRiceParam = 4;
+                            }
+                        }
+                    }
+                    // see 9-23
+                    if (slice->rc[xC][yC].coeff_abs_level_remaining[n] >= (3 << (StatCoeff[sbType] / 4))) {
+                        StatCoeff[sbType]++;
+                    } else if (2 * slice->rc[xC][yC].coeff_abs_level_remaining[n] < (1 << (StatCoeff[sbType] / 4)) && StatCoeff[sbType] > 0) {
+                        StatCoeff[sbType]--;
+                    }
+                    firstAbsLevelRemaining = false;
+                    VDBG(hevc, "coeff_abs_level_remaining %d",
+                         slice->rc[xC][yC].coeff_abs_level_remaining[n]);
                 }
                 tu->TransCoeffLevel[x0][y0][cIdx][xC][yC] =
                     (slice->rc[xC][yC].coeff_abs_level_remaining[n] +
@@ -3922,15 +3953,6 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                 }
                 numSigCoeff++;
 
-                // see 9-23
-                if (slice->rc[xC][yC].coeff_abs_level_remaining[n] >=
-                    (3 << (StatCoeff[sbType] / 4))) {
-                    StatCoeff[sbType]++;
-                } else if (2 * slice->rc[xC][yC].coeff_abs_level_remaining[n] <
-                               (1 << (StatCoeff[sbType] / 4)) &&
-                           StatCoeff[sbType] > 0) {
-                    StatCoeff[sbType]--;
-                }
             }
         }
     }

@@ -694,7 +694,7 @@ struct residual_coding {
     int last_sig_coeff_x_suffix;
     int last_sig_coeff_y_suffix;
 
-    int coded_sub_block_flag;
+    // int coded_sub_block_flag;
 
     int sig_coeff_flag;
     int coeff_abs_level_greater1_flag[16];//could be 4*4 sub-block

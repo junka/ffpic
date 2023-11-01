@@ -3904,13 +3904,13 @@ static void parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_unit
                     VDBG(hevc, "prefix %d, cRice %d", prefix, cRiceParam);
                     if (prefix <= 3) {
                         if (cRiceParam > 0) {
-                            code = CABAC_FL(d, cRiceParam);
+                            code = CABAC_FL(d, (1 << cRiceParam) - 1);
                         }
                         slice->rc[xC][yC].coeff_abs_level_remaining[n] =
                             (prefix << cRiceParam) + code;
                     } else {
-                        if (prefix - 3 + cRiceParam) {
-                            code = CABAC_FL(d, prefix - 3 + cRiceParam);
+                        if (prefix - 3 + cRiceParam > 0) {
+                            code = CABAC_FL(d, (1 <<(prefix - 3 + cRiceParam)) -1);
                         }
                         slice->rc[xC][yC].coeff_abs_level_remaining[n] =
                             (((1 << (prefix - 3)) + 2) << cRiceParam) + code;

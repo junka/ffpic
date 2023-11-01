@@ -3469,7 +3469,7 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
         if (prevCsbf == 0) {
             sigCtx = (xP + yP == 0) ? 2 : (xP + yP < 3) ? 1 : 0;
         } else if (prevCsbf == 1) {
-            sigCtx = (yP == 0) ? 2 : (xP == 1) ? 1 : 0;
+            sigCtx = (yP == 0) ? 2 : (yP == 1) ? 1 : 0;
         } else if (prevCsbf == 2) {
             sigCtx = (xP == 0) ? 2 : (xP == 1) ? 1 : 0;
         } else {
@@ -3492,8 +3492,8 @@ static int ctx_for_sig_coeff_flag(struct cu *cu,
             }
         }
     }
-    // VDBG(hevc, "cIdx %d, sigCtx %d", cIdx, sigCtx);
-    int sigInc = (cIdx == 0) ? sigCtx : (27 + sigCtx);
+    VDBG(hevc, "cIdx %d, sigCtx %d", cIdx, sigCtx);
+    int sigInc = ((cIdx == 0) ? sigCtx : (27 + sigCtx));
     if (sigInc > 125) {
         //for 126, 127
         sigInc = sigInc - 126 + 42;

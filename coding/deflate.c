@@ -7,6 +7,7 @@
 #include "bitstream.h"
 #include "deflate.h"
 #include "vlog.h"
+#include "byteorder.h"
 
 VLOG_REGISTER(deflate, INFO)
 
@@ -478,7 +479,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
         VERR(deflate, "not deflate, cm %d", h.compress_method);
     }
     memcpy(&check, &h, 2);
-    if( ntohl(check) % 31) {
+    if( SWAP(check) % 31) {
         VERR(deflate, "fcheck zlib error, fcheck %x", h.FCHECK);
     }
     if (h.compression_info > 7) {

@@ -5,6 +5,8 @@
 extern "C"{
 #endif
 
+#include <stdint.h>
+
 #define MAX_BIT_LEN (16)
 #define FAST_HF_BITS (8)
 #define FAST_HF_SIZE (1<<FAST_HF_BITS)

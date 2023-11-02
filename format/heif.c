@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include "vlog.h"
 #include "utils.h"
@@ -186,10 +187,10 @@ decode_items(HEIF *h, FILE *f, uint8_t *pixels)
         if (h->items[i].type == TYPE2UINT("mime")) {
             // exif mime, skip it
             // hexdump(stdout, "exif:", "", h->items[i].data, h->items[i].length);
-            VDBG(heif, "exif %llu", h->items[i].length);
+            VDBG(heif, "exif %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
-            VINFO(heif, "decoding id 0x%p len %llu",  h->items[i].data, h->items[i].length);
+            VINFO(heif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
             decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
         }
     }
@@ -247,7 +248,7 @@ HEIF_load(const char *filename)
     VINFO(heif, "primary id %d", h->meta.pitm.item_id);
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
         if (h->meta.iloc.items[i].item_id == primary_id) {
-            VINFO(heif, "primary loc at %llu", h->meta.iloc.items[i].base_offset);
+            VINFO(heif, "primary loc at %" PRIu64, h->meta.iloc.items[i].base_offset);
             break;
         }
     }
@@ -350,16 +351,20 @@ HEIF_info(FILE *f, struct pic* p)
         if (h->meta.iloc.version == 1) {
             fprintf(f, "construct_method=%d,", h->meta.iloc.items[i].construct_method);
         }
-        fprintf(f, "item_id=%d,data_ref_id=%d,base_offset=%lld,extent_count=%d\n", 
-            h->meta.iloc.items[i].item_id, h->meta.iloc.items[i].data_ref_id,
-            h->meta.iloc.items[i].base_offset, h->meta.iloc.items[i].extent_count);
+        fprintf(f,
+                "item_id=%d,data_ref_id=%d,base_offset=%"PRIu64",extent_count=%d\n",
+                h->meta.iloc.items[i].item_id,
+                h->meta.iloc.items[i].data_ref_id,
+                h->meta.iloc.items[i].base_offset,
+                h->meta.iloc.items[i].extent_count);
         for (int j = 0; j < h->meta.iloc.items[i].extent_count; j ++) {
             fprintf(f, "\t\t\t");
             if (h->meta.iloc.version == 1) {
-                fprintf(f, "extent_id=%lld,", h->meta.iloc.items[i].extents[j].extent_index);
+                fprintf(f, "extent_id=%"PRIu64",", h->meta.iloc.items[i].extents[j].extent_index);
             }
-            fprintf(f, "extent_offset=%lld,extent_length=%lld\n", h->meta.iloc.items[i].extents[j].extent_offset,
-                h->meta.iloc.items[i].extents[j].extent_length);
+            fprintf(f, "extent_offset=%" PRIu64 ",extent_length=%" PRIu64 "\n",
+                    h->meta.iloc.items[i].extents[j].extent_offset,
+                    h->meta.iloc.items[i].extents[j].extent_length);
         }
     }
     fprintf(f, "\n");
@@ -400,8 +405,11 @@ HEIF_info(FILE *f, struct pic* p)
                 hvcc->general_profile_compatibility_flags);
             fprintf(f, "\t\t\t\tmin_spatial_segmentation_idc %d, general_level_idc %d\n",
                 min_spatial_segmentation_idc, hvcc->general_level_idc);
-            fprintf(f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%llx\n", (uint64_t)hvcc->general_constraint_indicator_flags_h << 16 | hvcc->general_constraint_indicator_flags_l);
-            
+            fprintf(
+                f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%" PRIx64 "\n",
+                (uint64_t)hvcc->general_constraint_indicator_flags_h << 16 |
+                    hvcc->general_constraint_indicator_flags_l);
+
             fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
                 hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);
             fprintf(f, "\t\t\t\tavgframerate %d, constantframerate %d\n\t\t\t\tnumtemporalLayers %d, temporalIdNested %d, lengthSizeMinusOne %d\n",

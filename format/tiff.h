@@ -7,6 +7,7 @@ extern "C" {
 
 #include <assert.h>
 #include <stdint.h>
+#include "byteorder.h"
 
 #pragma pack(push, 1)
 
@@ -171,8 +172,8 @@ struct tiff_file_header {
 #define TID_ICCPROFILE 34675
 
 #define BYTEORDER(x) if (t->ifh.byteorder == 0x4D4D) \
-    {   assert(sizeof(x)==2||sizeof(x)==4); if (sizeof(x)==2){ x = ntohs(x); } \
-        else if (sizeof(x)==4){ x = ntohl(x);} \
+    {   assert(sizeof(x)==2||sizeof(x)==4); \
+        SWAP(x);\
     }
 
 typedef struct {

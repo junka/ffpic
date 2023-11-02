@@ -13,7 +13,11 @@ net_order_32(uint32_t a)
 uint64_t
 host_order_64(uint64_t a)
 {
+#if __APPLE__
     return ntohll(a);
+#else
+    return be64toh(a);
+#endif
 }
 
 uint32_t

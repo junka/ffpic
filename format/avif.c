@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <inttypes.h>
 
 #include "bitstream.h"
 #include "vlog.h"
@@ -682,16 +683,21 @@ AVIF_info(FILE *f, struct pic* p)
         if (h->meta.iloc.version == 1) {
             fprintf(f, "construct_method=%d,", h->meta.iloc.items[i].construct_method);
         }
-        fprintf(f, "item_id=%d,data_ref_id=%d,base_offset=%lld,extent_count=%d\n", 
-            h->meta.iloc.items[i].item_id, h->meta.iloc.items[i].data_ref_id,
-            h->meta.iloc.items[i].base_offset, h->meta.iloc.items[i].extent_count);
+        fprintf(f,"item_id=%d,data_ref_id=%d,base_offset=%" PRIu64
+                ",extent_count=%d\n",
+                h->meta.iloc.items[i].item_id,
+                h->meta.iloc.items[i].data_ref_id,
+                h->meta.iloc.items[i].base_offset,
+                h->meta.iloc.items[i].extent_count);
         for (int j = 0; j < h->meta.iloc.items[i].extent_count; j ++) {
             fprintf(f, "\t\t\t");
             if (h->meta.iloc.version == 1) {
-                fprintf(f, "extent_id=%lld,", h->meta.iloc.items[i].extents[j].extent_index);
+                fprintf(f, "extent_id=%" PRIu64 ",",
+                        h->meta.iloc.items[i].extents[j].extent_index);
             }
-            fprintf(f, "extent_offset=%lld,extent_length=%lld\n", h->meta.iloc.items[i].extents[j].extent_offset,
-                h->meta.iloc.items[i].extents[j].extent_length);
+            fprintf(f, "extent_offset=%" PRIu64 ",extent_length=%" PRIu64 "\n",
+                    h->meta.iloc.items[i].extents[j].extent_offset,
+                    h->meta.iloc.items[i].extents[j].extent_length);
         }
     }
     fprintf(f, "\n");

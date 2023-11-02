@@ -27,7 +27,7 @@ TIFF_probe(const char *filename)
     }
     fclose(f);
     if (h.byteorder == 0x4D4D) {
-        h.version = ntohs(h.version);
+        h.version = SWAP(h.version);
     }
     if (h.version == 42) {
         if (h.byteorder == 0x4D4D || h.byteorder == 0x4949)

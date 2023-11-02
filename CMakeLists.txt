@@ -9,7 +9,7 @@ if("${FFPIC_ROOT}" STREQUAL "${FFPIC_CONFIG_DIR}")
     FATAL_ERROR "Building from within the source tree is not supported.\n"
     "Hint: Run these commands\n"
     "$ rm -rf CMakeCache.txt CMakeFiles\n"
-    "$ mkdir -p ../ffpic_build\n" "$ cd ../ffpic_build\n"
+    "$ mkdir -p ffpic_build\n" "$ cd ffpic_build\n"
     "And re-run CMake from the ffpic_build directory.")
 endif()
 
@@ -77,17 +77,20 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/predict.c")
 
 find_package(SDL2)
+find_library(MATH_LIBRARY m)
 
 add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 # target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" $<TARGET_OBJECTS:ffpic>)
+add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c")
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
 
 add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING})
 
-target_link_libraries(sdlshow ffpic)
+target_link_libraries(sdlshow ffpic m)
+target_link_libraries(picinfo m)
+target_link_libraries(transbmp m)
 target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 target_include_directories(transbmp PRIVATE ${FFPIC_DIRS})

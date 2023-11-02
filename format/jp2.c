@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <inttypes.h>
 
 #include "bitstream.h"
 #include "file.h"
@@ -688,7 +689,8 @@ JP2_info(FILE *f, struct pic* p)
     for (int i = 0; i < j->uinf_num; i ++) {
         fprintf(f, "\tulst num_uuid %d:\n", j->uuid_info[i].ulst.num_uuid);
         for (int k = 0; k < j->uuid_info[i].ulst.num_uuid; k++) {
-            fprintf(f, "\t\t%016llx%016llx\n", j->uuid_info[i].ulst.id[k].v[0],
+            fprintf(f, "\t\t%016" PRIx64 "%016" PRIx64 "\n",
+                    j->uuid_info[i].ulst.id[k].v[0],
                     j->uuid_info[i].ulst.id[k].v[1]);
         }
         fprintf(f, "\turl %s\n", j->uuid_info[i].url.location);

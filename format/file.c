@@ -16,6 +16,7 @@
 #include "psd.h"
 #include "svg.h"
 #include "avif.h"
+#include "bpg.h"
 
 TAILQ_HEAD(file_ops_list, file_ops);
 
@@ -69,6 +70,7 @@ file_ops_init(void)
     JPG_init();
     HEIF_init();
     WEBP_init();
+    BPG_init();
     TGA_init();
     ICO_init();
     JP2_init();

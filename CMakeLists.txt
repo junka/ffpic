@@ -74,6 +74,7 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/jp2.c"
   "${FFPIC_ROOT}/format/heif.c"
   "${FFPIC_ROOT}/format/avif.c"
+  "${FFPIC_ROOT}/format/bpg.c"
   "${FFPIC_ROOT}/format/predict.c")
 
 find_package(SDL2)

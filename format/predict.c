@@ -639,3 +639,132 @@ void pred_chrome(int16_t *coff, int imode, uint8_t *uout, uint8_t *vout, int str
     }
 #endif
 }
+
+//--------------------------------------------
+// below is hevc pred
+
+// see 8.4.4.2.4
+void hevc_intra_planar(uint16_t *dst, uint16_t *left, uint16_t *top,
+                       int nTbS, int stride) // both take top-left included
+{
+    for (int y = 0; y < nTbS; y ++) {
+        for (int x = 0; x < nTbS; x++) {
+            DST(y, x) = ((nTbS - 1 - x) * left[y] + (x+1) * top[nTbS] + (nTbS -1 - y) * top[x] + (y+1) * left[nTbS] + nTbS) >> (log2floor(nTbS)+1);
+        }
+    }
+}
+
+//see 8.4.4.2.5
+void hevc_intra_DC(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
+                   int stride, int cIdx,
+                   int intra_boundary_filtering_disabled_flag) {
+    uint32_t dc = 0;
+    int i;
+    for (i = 0; i < nTbS; i++) {
+        dc += left[i] + top[i];
+    }
+    dc = DC_ROUND(dc, (log2floor(nTbS) + 1));
+
+    if (cIdx == 0 && nTbS < 32 && intra_boundary_filtering_disabled_flag == 0) {
+        DST(0, 0) = (left[0] + 2 *dc + top[0] + 2) >> 2;
+        for (int x = 1; x < nTbS; x++) {
+            DST(0, x) = (top[x] + 3* dc + 2) >> 2;
+        }
+        for (int y = 1; y < nTbS; y++) {
+            DST(y, 0) = (left[y] + 3 *dc + 2) >> 2;
+        }
+        for (int y = 1; y < nTbS; y++) {
+            memset(dst + y * stride + 1, dc, nTbS-1);
+        }
+    } else {
+        for (int y = 0; y < nTbS; y++) {
+            memset(dst + y * stride, dc, nTbS);
+        }
+    }
+}
+
+//see 8.4.4.2.6
+void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
+                        int stride, int cIdx, int predModeIntra,
+                        int disableIntraBoundaryFilter, int bitdepth)
+{
+    assert(predModeIntra < 35 && predModeIntra > 1);
+    const int intraPredAngle[] = {32,  26,  21,  17,  13,  9,   5,   2,   0,
+                                  -2,  -5,  -9,  -13, -17, -21, -26, -32, -26,
+                                  -21, -17, -13, -9,  -5,  -2,  0,   2,   5,
+                                  9,   13,  17,  21,  26,  32};
+    const int invAngle[] = {-4096, -1638, -910, -630,  -482,
+                                         -390,  -315,  -256, -315,  -390,
+                                         -482,  -630,  -910, -1638, -4096};
+
+    int ref[16];
+
+    if (predModeIntra >= 18) {
+        for (int x = 0; x <= nTbS; x++) {
+            ref[x] = top[x-1];
+        }
+        int angle = intraPredAngle[predModeIntra - 2];
+        if (angle < 0) {
+            if (((nTbS * angle) >> 5) < -1) {
+                for (int x = -1; x >= ((angle *nTbS) >> 5); x--) {
+                    ref[x] = left[-1 + ((x * invAngle[predModeIntra-11] + 128) >> 8)];
+                }
+            }
+        } else {
+            for (int x = nTbS+1; x <= 2*nTbS; x++) {
+                ref[x] = top[x - 1];
+            }
+        }
+
+        for (int y = 0; y < nTbS; y ++) {
+            for (int x = 0; x < nTbS; x++) {
+                int iIdx = (y + 1) * angle >> 5;
+                int iFact = ((y+1) * angle) & 31;
+                if (iFact != 0) {
+                    DST(y, x) = ((32-iFact)*ref[x+iIdx+1] + iFact*ref[x+iIdx+2] + 16)>>5;
+                } else {
+                    DST(y, x) = ref[x+iIdx + 1];
+                }
+
+                if (predModeIntra == 26 && cIdx == 0 && nTbS < 32 &&
+                    disableIntraBoundaryFilter == 0) {
+                    DST(y, x) = clip3(0, (1 << (bitdepth))-1, top[x] + ((left[y]-top[-1])>>1));
+                }
+            }
+        }
+    } else {
+        for (int x = 0; x <= nTbS; x++) {
+            ref[x] = left[x-1];
+        }
+        int angle = intraPredAngle[predModeIntra - 2];
+        if (angle < 0) {
+            if ((nTbS * angle >> 5) < -1) {
+                for (int x = -1; x >= ((angle * nTbS) >> 5); x--) {
+                    ref[x] = top[-1 + ((x *angle + 128)>> 8)];
+                }
+            }
+        } else {
+            for (int x = nTbS+1; x <= 2*nTbS; x++) {
+                ref[x] = left[x-1];
+            }
+        }
+
+        for (int y = 0; y < nTbS; y++) {
+            for (int x = 0; x < nTbS; x++) {
+                int iIdx = (x + 1) * angle >> 5;
+                int iFact = ((x + 1) * angle) & 31;
+                if (iFact != 0) {
+                    DST(y, x) = ((32 - iFact) *ref[y + iIdx +1] + iFact * ref[y + iIdx + 2] + 16)>>5;
+                } else {
+                    DST(y, x) = ref[y + iIdx + 1];
+                }
+
+                if (predModeIntra == 10 && cIdx == 0 && nTbS < 32 &&
+                    disableIntraBoundaryFilter == 0) {
+                    DST(y, x) = clip3(0, (1 << (bitdepth)) - 1,
+                                      left[y] + ((top[x] - top[-1]) >> 1));
+                }
+            }
+        }
+    }
+}

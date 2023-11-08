@@ -41,6 +41,20 @@ pred_luma(int16_t *coff, int ymode, uint8_t imodes[16], uint8_t *dst,
 void pred_chrome(int16_t *coff, int imode, uint8_t *uout, uint8_t *vout,
                  int stride, int x, int y);
 
+
+void hevc_intra_planar(uint16_t *dst, uint16_t *left, uint16_t *top,
+                       int nTbS, int stride);
+
+void hevc_intra_DC(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
+                   int stride, int cIdx,
+                   int intra_boundary_filtering_disabled_flag);
+
+void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
+                        int stride, int cIdx, int predModeIntra,
+                        int disableIntraBoundaryFilter, int bitdepth);
+
+
+
 #ifdef __cplusplus
 }
 #endif

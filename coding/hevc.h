@@ -898,7 +898,7 @@ struct sps {
     GUE(max_transform_hierarchy_depth_inter);
     GUE(max_transform_hierarchy_depth_intra);
     
-    // uint8_t scaling_list_enabled_flag:1;
+    uint8_t scaling_list_enabled_flag:1;
     uint8_t sps_scaling_list_ref_layer_id:6;
     // uint8_t sps_scaling_list_data_present_flag:1;
     
@@ -1117,7 +1117,7 @@ struct slice_segment_header {
 
     GUE(poc_msb_cycle_val);
 
-    struct residual_coding rc[64][64];
+    // struct residual_coding rc[64][64];
 
     //Coding Tree Block
     int SubWidthC, SubHeightC;
@@ -1161,6 +1161,8 @@ struct slice_segment_header {
     // scanIdx 0-2: 0 for up-right, 1 for horizontal, 2 for vertical, 3 for traverse
     // sPos range 0 - blkSize * blkSize,
     scanpos* ScanOrder[6][4];
+
+    uint8_t ScalingFactor[4][6][64][64];
 };
 
 
@@ -1216,25 +1218,17 @@ struct cross_comp_pred {
     uint32_t res_scale_sign_flag;
 };
 
-//see 7.4.9.10
-struct trans_unit {
-    uint8_t tu_residual_act_flag[64][64];
-    int TransCoeffLevel[64][64][3][64][64]; //3 for color index, 0 for Y, 1 for Cb, 2 for Cr
-    struct cross_comp_pred ccp;
-};
-
 struct trans_tree {
-    uint8_t split_transform_flag[64][64][3];
-    uint32_t cbf_cb[64][64][3];
-    uint32_t cbf_cr[64][64][3];
-    uint32_t cbf_luma[64][64][3];
+    uint8_t split_transform_flag[3][64][64];
+    uint32_t cbf_cb[3][64][64];
+    uint32_t cbf_cr[3][64][64];
+    uint32_t cbf_luma[3][64][64];
 
-    struct trans_tree *t;
-    struct trans_tree *d;
-    struct trans_tree *r;
-    struct trans_tree *rd;
+    // see 7.4.9.10
+    uint8_t tu_residual_act_flag[64][64];
+    int16_t TransCoeffLevel[3][64][64]; // 3 for color index, 0 for Y, 1 for Cb,
+                                        // 2 for Cr
 
-    struct trans_unit tu;
 };
 
 
@@ -1244,6 +1238,28 @@ struct intra_mode_ext {
     uint8_t wedge_full_tab_idx;
 };
 
+#define PALETTE_MAX_SIZE (2048)
+struct palette_coding {
+    // uint32_t palette_predictor_run;
+    uint8_t PalettePredictorEntryReuseFlags[PALETTE_MAX_SIZE];
+    uint32_t num_signalled_palette_entries;
+    uint32_t new_palette_entries[3][PALETTE_MAX_SIZE]; // tobe
+    uint8_t palette_escape_val_present_flag;
+    uint32_t num_palette_indices_minus1;
+
+    uint8_t copy_above_indices_for_final_run_flag;
+    uint8_t palette_transpose_flag;
+
+    uint8_t copy_above_palette_indices_flag;
+
+    // uint32_t palette_idx_idc;
+    uint32_t PaletteIndexIdc[PALETTE_MAX_SIZE];
+    int MaxPaletteIndex;
+    // uint32_t PaletteEscapeVal[3][64][64];
+
+    // uint8_t CopyAboveIndicesFlag[64][64];
+    // uint32_t PaletteIndexMap[64][64];
+};
 
 struct cu_extension {
     uint8_t skip_intra_mode_idx;
@@ -1269,6 +1285,7 @@ struct cu {
     int MaxTrafoDepth;
     uint8_t IntraSplitFlag;
     uint8_t palette_mode_flag[64][64];
+    struct palette_coding *pc[64][64];
     // part_mode;
     uint8_t pcm_flag[64][64];
     struct pcm_sample *pcm;
@@ -1294,8 +1311,12 @@ struct cu {
 
     struct predication_unit pu[8][8];
 
-    struct trans_tree *tt;
+    struct trans_tree tt;
 
+    int32_t CuQpOffsetCb;
+    int32_t CuQpOffsetCr;
+    int PaletteEscapeVal[3][64][64];
+    uint32_t PaletteIndexMap[64][64];
     // struct trans_unit *tu;
 };
 
@@ -1305,8 +1326,6 @@ struct chroma_qp_offset {
     uint8_t cu_chroma_qp_offset_idx;
 
     // uint8_t IsCuChromaQpOffsetCoded;
-    int32_t CuQpOffsetCb;
-    int32_t CuQpOffsetCr;
 };
 
 

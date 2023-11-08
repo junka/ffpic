@@ -115,10 +115,10 @@ static int initValue_res_scale_sign_flag[3][2] = {
     {154, 154},
     {154, 154}
 };
-static int initValue_transform_skip_flag[3][3] = {
-    {139, 139, 139}, 
-    {139, 139, 139},
-    {139, 139, 139}
+static int initValue_transform_skip_flag[3][2] = {
+    {139, 139},
+    {139, 139},
+    {139, 139}
 };
 static int initValue_explicit_rdpcm_flag[2][3] = {
     {139, 139, 139},
@@ -296,7 +296,7 @@ void cabac_init_models(int qpy, int initType)
         init_model_ctx(ctx + CTX_TYPE_CROSS_COMP_RES_SCALE_SIGN + i, qpy,
                        initValue_res_scale_sign_flag[initType][i]);
     }
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         init_model_ctx(ctx + CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP + i, qpy,
                        initValue_transform_skip_flag[initType][i]);
     }

@@ -1278,7 +1278,7 @@ struct cu_extension {
 struct cu {
     int blkIdx;
     uint8_t cu_transquant_bypass_flag;
-    uint8_t cu_skip_flag[64][64];
+    // uint8_t cu_skip_flag;
     uint8_t skip_intra_flag[64][64];
     // pred_mode_flag[][]; use value below
     uint8_t CuPredMode[64][64];

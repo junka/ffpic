@@ -5562,8 +5562,8 @@ parse_transform_unit(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
               cu->intra_chroma_pred_mode[xP + nCbS / 2][yP] == 4 &&
               cu->intra_chroma_pred_mode[xP][yP + nCbS / 2] == 4 &&
               cu->intra_chroma_pred_mode[xP + nCbS / 2][yP + nCbS / 2] == 4))) {
-            //FIXME
-            tt->tu_residual_act_flag[x0][y0] = CABAC_BP(d);
+            tt->tu_residual_act_flag[x0][y0] =
+                CABAC(d, CTX_TYPE_TU_RESIDUAL_ACT_FLAG);
             VDBG(hevc, "tu_residual_act_flag %d",
                  tt->tu_residual_act_flag[x0][y0]);
         }

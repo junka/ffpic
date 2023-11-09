@@ -82,6 +82,7 @@ static int initValue_prev_intra_luma_pred_flag[3] = {184, 154, 183};
 static int initValue_intra_chrome_pred_mode[3] = {63, 152, 152};
 static int initValue_rqt_root_cbf[2] = {79, 79};
 
+static int initValue_tu_residual_act_flag[3] = {154, 154, 154};
 static int initValue_merge_flag[2] = {110, 154};
 static int initValue_merge_index[2] = {122, 137};
 static int initValue_inter_pred_idc[2][5] = {95, 79, 63, 31, 31, 95, 79, 63, 31, 31};
@@ -353,6 +354,8 @@ void cabac_init_models(int qpy, int initType)
     init_model_ctx(ctx + CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_IDX, qpy,
                    initValue_cu_chroma_qp_offset_idx[initType]);
 
+    init_model_ctx(ctx + CTX_TYPE_TU_RESIDUAL_ACT_FLAG, qpy,
+                   initValue_tu_residual_act_flag[initType]);
     if (initType > 0) {
         for (int i = 0; i < 3; i++) {
           init_model_ctx(ctx + CTX_TYPE_CU_SKIP_FLAG + i, qpy,

@@ -254,6 +254,10 @@ HEIF_load(const char *filename)
     }
     // process mdata
     VINFO(heif, "mdat_num %d", h->mdat_num);
+    p->width = ((p->width + 3) >> 2) << 2;
+    p->pixels = malloc(p->width * p->height * 32);
+    p->depth = 32;
+    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     decode_items(h, f, p->pixels);
 
     fclose(f);
@@ -312,6 +316,8 @@ HEIF_free(struct pic *p)
     // }
     // free(h->mdat);
     free(h->items);
+
+    free(p->pixels);
     pic_free(p);
 }
 

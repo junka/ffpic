@@ -372,7 +372,7 @@ read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
     while (s > 0) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
-        printf("type %s, size %d\n", UINT2TYPE(type), p.size);
+        // printf("type %s, size %d\n", UINT2TYPE(type), p.size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
             case TYPE2UINT("hvcC"):

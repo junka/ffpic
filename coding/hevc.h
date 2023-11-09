@@ -673,7 +673,7 @@ struct pps {
     // pps 3d extension 
     struct pps_3d_extension *pps_3d_ext;
     // pps scc extension
-    struct pps_scc_extension *pps_scc_ext;
+    struct pps_scc_extension pps_scc_ext;
     // pps extension 4bits
     // uint8_t pps_extension_data_flag:1;
 
@@ -941,7 +941,7 @@ struct sps {
     // sps 3d extension 
     struct sps_3d_extension sps_3d_ext[2];
     // sps scc extension , see 7.3.2.2.3
-    struct sps_scc_extension *sps_scc_ext;
+    struct sps_scc_extension sps_scc_ext;
     // sps extension 4bits
     // rbsp tailling
 };
@@ -1214,8 +1214,9 @@ enum part_mode {
 
 
 struct cross_comp_pred {
-    uint32_t log2_res_scale_abs_plus1;
-    uint32_t res_scale_sign_flag;
+    // uint32_t log2_res_scale_abs_plus1;
+    // uint32_t res_scale_sign_flag;
+    uint32_t ResScaleVal[3];
 };
 
 struct trans_tree {
@@ -1275,6 +1276,7 @@ struct cu_extension {
 };
 
 struct cu {
+    int blkIdx;
     uint8_t cu_transquant_bypass_flag;
     uint8_t cu_skip_flag[64][64];
     uint8_t skip_intra_flag[64][64];
@@ -1299,14 +1301,19 @@ struct cu {
     uint8_t intra_chroma_pred_mode[64][64];
     uint8_t rqt_root_cbf;
 
+    struct cross_comp_pred ccp[64][64];
+
     uint8_t IntraPredModeY[64][64];
     int IntraPredModeC;
 
     int candIntraPredModeA;
     int candIntraPredModeB;
     int candModeList[3];
-     
-    int CtDepth[64][64];
+
+    int CtDepth;
+    int x0;
+    int y0;
+    int nCbS;
     struct cu_extension ext[64][64];
 
     struct predication_unit pu[8][8];
@@ -1329,18 +1336,15 @@ struct chroma_qp_offset {
 };
 
 
-struct quad_tree {
-    struct cu *cu;
-    uint8_t split_cu_flag;
-    struct quad_tree *n;
-    struct quad_tree *r1;
-    struct quad_tree *t1;
-    struct quad_tree *rt1;
-};
+// struct quad_tree {
+//     struct cu *cu;
+//     // uint8_t split_cu_flag;
+// };
 
 struct ctu {
     struct sao *sao;
-    struct quad_tree *cqt;
+    int cu_num;
+    struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu, 
 };
 
 

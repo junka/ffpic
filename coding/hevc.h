@@ -900,8 +900,8 @@ struct sps {
     
     uint8_t scaling_list_enabled_flag:1;
     uint8_t sps_scaling_list_ref_layer_id:6;
-    // uint8_t sps_scaling_list_data_present_flag:1;
-    
+    uint8_t sps_scaling_list_data_present_flag:1;
+
     struct scaling_list_data *list_data;
 
     uint8_t amp_enabled_flag:1;

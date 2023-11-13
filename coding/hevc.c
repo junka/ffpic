@@ -3453,51 +3453,50 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
     // scaling factor
     VDBG(hevc, "nTbS %d, scaling_list_enabled_flag %d", nTbS, sps->scaling_list_enabled_flag);
     int m = 16;
-
-    for (int y = 0; y < nTbS; y++) {
-        for (int x = 0; x < nTbS; x++) {
-            if (sps->scaling_list_enabled_flag == 0 ||
-                (transform_skip_flag[cIdx] == 1 && nTbS > 4)) {
-                m = 16;
-            } else {
-                int sizeid = log2floor(nTbS) - 2;
-                assert(sizeid < 4);
-                int mid = (cu->CuPredMode[xTbY][yTbY] == MODE_INTRA)
-                                ? cIdx
-                                : cIdx - 3;
-                m = slice->ScalingFactor[sizeid][mid][x][y];
+    int sizeid = log2floor(nTbS) - 2;
+    assert(sizeid < 4);
+    int mid = (cu->CuPredMode[xTbY][yTbY] == MODE_INTRA) ? cIdx : cIdx - 3;
+    if (sps->scaling_list_enabled_flag == 0 ||
+        (transform_skip_flag[cIdx] == 1 && nTbS > 4)) {
+        for (int y = 0; y < nTbS; y++) {
+            for (int x = 0; x < nTbS; x++) {
+                // scaled transform coefficient
+                d[x + y * nTbS] =
+                    clip3(coeffMin, coeffMax,
+                        ((tt->TransCoeffLevel[cIdx][xTbY + x - cu->x0][yTbY + y - cu->y0] *
+                        m * levelScale[qP % 6] << (qP / 6)) + (1 << (bdShift - 1))) >> bdShift);
             }
-            // scaled transform coefficient
-            d[x + y * nTbS] =
-                clip3(coeffMin, coeffMax,
-                    ((tt->TransCoeffLevel[cIdx][xTbY + x - cu->x0]
-                                        [yTbY + y - cu->y0] *
-                        m * levelScale[qP % 6]
-                    << (qP / 6)) +
-                    (1 << (bdShift - 1))) >>
-                        bdShift);
-
+        }
+    } else {
+        for (int y = 0; y < nTbS; y++) {
+            for (int x = 0; x < nTbS; x++) {
+                m = slice->ScalingFactor[sizeid][mid][x][y];
+                d[x + y * nTbS] =
+                    clip3(coeffMin, coeffMax,
+                          ((tt->TransCoeffLevel[cIdx][xTbY + x - cu->x0][yTbY + y - cu->y0] *
+                          m * levelScale[qP % 6]<< (qP / 6)) + (1 << (bdShift - 1))) >> bdShift);
+            }
         }
     }
-    
+
     VDBG(hevc, "scale_transform_coefficients");
     for (int j = 0; j < nTbS; j++) {
         for (int i = 0; i < nTbS; i++) {
-            fprintf(vlog_get_stream(), " %d", d[i + j * nTbS]);
+            vlog(VLOG_DEBUG, vlog_hevc, " %d", d[i + j * nTbS]);
         }
-        fprintf(vlog_get_stream(), "\n");
+        vlog(VLOG_DEBUG, vlog_hevc,"\n");
     }
 }
 
 // see 8.6.4.2
-static void transformation(int nTbS, int trType, int16_t *x, int16_t *y) {
-    const int16_t transMatrix[4][4] = {
+static void transformation(int nTbS, int trType, int16_t *x, int *y) {
+    const int8_t transMatrix[4][4] = {
         {29, 55, 74, 84},
         {74, 74, 0, -74},
         {84, -29, -74, 55},
         {55, -84, 74, -29}
     };
-    const int16_t transMatrixCol[32][32] = {
+    const int8_t transMatrixCol[32][32] = {
         {64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64,  64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64},
         {90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 46, 38, 31, 22, 13,  4,  -4,-13,-22,-31,-38,-46,-54,-61,-67,-73,-78,-82,-85,-88,-90,-90},
         {90, 87, 80, 70, 57, 43, 25,  9, -9,-25,-43,-57,-70,-80,-87,-90,  -90,-87,-80,-70,-57,-43,-25, -9,  9, 25, 43, 57, 70, 80, 87, 90},
@@ -3532,30 +3531,47 @@ static void transformation(int nTbS, int trType, int16_t *x, int16_t *y) {
         {4,-13, 22,-31, 38,-46, 54,-61, 67,-73, 78,-82, 85,-88, 90,-90,  90,-90, 88,-85, 82,-78, 73,-67, 61,-54, 46,-38, 31,-22, 13, -4}
     };
 
+    // save unnecessary multiply with zero
+    int last_nz = 0;
+    for (int i = nTbS -1; i>=0; i--) {
+        if (x[i]) {
+            last_nz = i;
+            break;
+        }
+    }
+
     if (trType == 1) {
         for (int i = 0; i < nTbS; i++) {
             y[i] = 0;
-            for (int j = 0; j < nTbS; j++) {
-                y[i] += transMatrix[i][j] * x[j];
+            for (int j = 0; j <= last_nz; j++) {
+                y[i] += transMatrix[j][i] * x[j];
             }
         }
     } else {
         for (int i = 0; i < nTbS; i++) {
             y[i] = 0;
-            for (int j = 0; j < nTbS; j++) {
-                y[i] += transMatrixCol[i][j * (1 << (5 - log2floor(nTbS)))] * x[j];
+            for (int j = 0; j <= last_nz; j++) {
+                y[i] += transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i] * x[j];
+                // fprintf(vlog_get_stream(), "(j %d, i %d: %d * %d)",
+                //         (1 << (5 - log2floor(nTbS)))* j
+                //             , i, transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i],
+                //         x[j]);
             }
+            // fprintf(vlog_get_stream(), "%d\n", y[i]);
         }
     }
 }
 
-// see 8.6.4 Transformation process for scaled transform coefficients
+// see 8.6.4.1 Transformation process for scaled transform coefficients
 static int transform_scaled_coeffients(struct sps *sps, struct cu *cu, int xTbY,
                                        int yTbY, int nTbS, int cIdx,
                                        int16_t* d, int16_t* r) {
     int BitDepthY = sps->bit_depth_luma_minus8 + 8;
     int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
+    int bitdepth = (cIdx == 0) ? BitDepthY : BitDepthC;
     struct sps_range_extension *sre = &sps->sps_range_ext;
+    int bdShift = MAX(20 - bitdepth,(sps->sps_range_ext.extended_precision_processing_flag ? 11 : 0));
+
     // see 7-27, 7-30
     int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15));
     int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthC + 6) : 15));
@@ -3571,29 +3587,46 @@ static int transform_scaled_coeffients(struct sps *sps, struct cu *cu, int xTbY,
     if (cu->CuPredMode[xTbY][yTbY] == MODE_INTRA && nTbS == 4 && cIdx == 0) {
         trType = 1;
     }
+    VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
+         coeffMin, coeffMax);
     // Each (vertical) column of scaled transform coefficients s d[x][y]  is
     // transformed by invoking the one-dimensional transformation process
-    // int16_t** e = malloc(sizeof(int16_t *) * nTbS);
-    int16_t e[32][32];
+    int e[32];
+    int16_t tmp[32];
     int16_t g[32][32];
     for (int x = 0; x < nTbS; x++) {
-        int16_t z[32];
-        for (int y = 0; y < nTbS; y++) { z[x] = d[x+y*nTbS]; }
-        // invoke 8.6.4.2
-        transformation(nTbS, trType, z, e[x]);
         for (int y = 0; y < nTbS; y++) {
-            g[x][y] = clip3(coeffMin, coeffMax, (e[x][y]+64)>>7);
+            tmp[y] = d[x+y*nTbS];
+            // fprintf(vlog_get_stream(), " %d", tmp[y]);
+        }
+        // fprintf(vlog_get_stream(), "\n");
+        // invoke 8.6.4.2
+        transformation(nTbS, trType, tmp, e);
+        for (int y = 0; y < nTbS; y++) {
+            g[x][y] = clip3(coeffMin, coeffMax, (e[y]+64)>>7);
         }
     }
+    // VDBG(hevc, "tranform DTCV %d ", nTbS);
+    // for (int j = 0; j < nTbS; j++) {
+    //     for (int i = 0; i < nTbS; i++) {
+    //         fprintf(vlog_get_stream(), " %d", g[i][j]);
+    //     }
+    //     fprintf(vlog_get_stream(), "\n");
+    // }
+
     // Each (horizontal) row of the resulting array g[x][y] is transformed to
     // r[x][y] by invoking the one-dimensional transformation
     for (int y = 0; y < nTbS; y++) {
-        int16_t z[32], out[32];
-        for (int x = 0; x < nTbS; x++) { z[x] = g[x][y];}
-        // invoke 8.6.4.2
-         transformation(nTbS, trType, z, out);
+        int out[32];
         for (int x = 0; x < nTbS; x++) {
-            r[x+y*nTbS] = out[x];
+            tmp[x] = g[x][y];
+            // fprintf(vlog_get_stream(), " %d", tmp[x]);
+        }
+        // fprintf(vlog_get_stream(), "\n");
+        // invoke 8.6.4.2
+        transformation(nTbS, trType, tmp, out);
+        for (int x = 0; x < nTbS; x++) {
+            r[x + y * nTbS] = (out[x] +(1 << (bdShift - 1))) >> bdShift;
         }
     }
 
@@ -3815,8 +3848,6 @@ static int scale_and_tranform(struct cu *cu, int transform_skip_flag[],
             }
         }
     } else {
-        int bdShift = MAX(20 - bitdepth,
-                sps->sps_range_ext.extended_precision_processing_flag ? 11 : 0);
         int tsShift = 5 + log2floor(nTbS);
         int16_t d[32*32];
         // step 1, invoke 8.6.3
@@ -3836,13 +3867,14 @@ static int scale_and_tranform(struct cu *cu, int transform_skip_flag[],
             transform_scaled_coeffients(sps, cu, xTbY, yTbY, nTbS, cIdx, d, r);
         }
 
-        //step 3
-        for (int y = 0; y < nTbS; y++) {
-            for (int x = 0; x < nTbS; x++) {
-                r[x + y * nTbS] =
-                    (r[x + y * nTbS] + (1 << (bdShift - 1))) >> bdShift;
-            }
-        }
+        // step 3, move this step in transform_scaled_coeffients so int16 array
+        // can hold the right value range
+        //  for (int y = 0; y < nTbS; y++) {
+        //      for (int x = 0; x < nTbS; x++) {
+        //          r[x + y * nTbS] =
+        //              (r[x + y * nTbS] + (1 << (bdShift - 1))) >> bdShift;
+        //      }
+        //  }
 
         VDBG(hevc, "scale_and_tranform %d ", nTbS);
         for (int j = 0; j < nTbS; j++) {
@@ -3855,8 +3887,8 @@ static int scale_and_tranform(struct cu *cu, int transform_skip_flag[],
 
     return 0;
 }
-#define Clip1Y(x) clip3(0, (1 << BitDepthY) - 1, x)
-#define Clip1C(x) clip3(0, (1 << BitDepthC) - 1, x)
+#define Clip1Y(x) clip3(0, (1 << BitDepthY) - 1, (x))
+#define Clip1C(x) clip3(0, (1 << BitDepthC) - 1, (x))
 // 8.6.7
 static void construct_pic_pior_to_filtering(struct sps *sps, int xCurr,
                                             int yCurr, int nCurrSw, int nCurrSh,
@@ -3868,15 +3900,15 @@ static void construct_pic_pior_to_filtering(struct sps *sps, int xCurr,
     if (cIdx == 0) {
         for (int i = 0; i < nCurrSw; i++) {
             for (int j = 0; j < nCurrSh; j++) {
-                recSamples[xCurr + i + 64 * (yCurr + j)] = Clip1Y(
-                    predSamples[i + j * 64] + resSamples[i + j * nCurrSw]);
+                recSamples[xCurr + i + nCurrSw * (yCurr + j)] = Clip1Y(
+                    predSamples[i + j * nCurrSw] + resSamples[i + j * nCurrSw]);
             }
         }
     } else {
         for (int i = 0; i < nCurrSw; i++) {
             for (int j = 0; j < nCurrSh; j++) {
-                recSamples[xCurr + i + 64 * (yCurr + j)] = Clip1C(
-                    predSamples[i + j * 64] + resSamples[i + j * nCurrSw]);
+                recSamples[xCurr + i + nCurrSw * (yCurr + j)] = Clip1C(
+                    predSamples[i + j * nCurrSw] + resSamples[i + j * nCurrSw]);
             }
         }
     }
@@ -4196,7 +4228,7 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
                            cIdx, predModeIntra, disableIntraBoundaryFilter,
                            sps->bit_depth_luma_minus8 + 8);
     }
-#if 0
+#if 1
     VDBG(hevc, "predication %d (%d, %d)-(%d, %d)", nTbS, xTbCmp, yTbCmp, xTbY, yTbY);
     for (int j = 0; j < nTbS; j++) {
         for (int i = 0; i < nTbS; i++) {
@@ -4318,7 +4350,15 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
         } else {
             // in 8.6.7 ( xTb0, yTb0 + yTbOffset )
             int16_t recSamples[64*64]; // reconstructed sample array as output
+            //add predSamples and resSamples to recSamples
             construct_pic_pior_to_filtering(hps->sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, recSamples);
+            VDBG(hevc, "construct_pic_pior_to_filtering %d ", nTbS);
+            for (int j = 0; j < nTbS; j++) {
+                for (int i = 0; i < nTbS; i++) {
+                    fprintf(vlog_get_stream(), " %x", recSamples[i + j * nTbS]);
+                }
+                fprintf(vlog_get_stream(), "\n");
+            }
         }
     }
 }

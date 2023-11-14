@@ -464,21 +464,7 @@ renormD(cabac_dec *dec)
 void
 cabac_dec_free(cabac_dec *dec)
 {
-    // int i = 0;
-    // for (i = 0; i < dec_num; i ++) {
-    //     if (dec_list[i] == dec) {
-    //         break;
-    //     }
-    // }
-    // if (i < dec_num) {
-    //     for (; i < dec_num - 1; i ++) {
-    //         dec_list[i] = dec_list[i+1];
-    //     }
-    //     dec_list[dec_num - 1] = NULL;
-    //     dec_num --;
-    //     free(dec);
-    // }
-    // bits_vec_free(dec->bits);
+
     free(dec);
 }
 

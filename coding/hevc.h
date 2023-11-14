@@ -684,26 +684,6 @@ struct pps {
 };
 
 
-struct residual_coding {
-    // int transform_skip_flag[4];
-    // int explicit_rdpcm_flag[4];
-    // int explicit_rdpcm_dir_flag[4];
-
-    // int last_sig_coeff_x_prefix;
-    // int last_sig_coeff_y_prefix;
-    // int last_sig_coeff_x_suffix;
-    // int last_sig_coeff_y_suffix;
-
-    // int coded_sub_block_flag;
-
-    int sig_coeff_flag;
-    int coeff_abs_level_greater1_flag[16];//could be 4*4 sub-block
-    int coeff_abs_level_greater2_flag[16];
-    int coeff_sign_flag[16];
-
-    // int coeff_abs_level_remaining[16];
-};
-
 #define EXTENDED_SAR 255
 //see annex E
 struct vui_parameters {

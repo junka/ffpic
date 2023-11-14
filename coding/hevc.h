@@ -685,14 +685,14 @@ struct pps {
 
 
 struct residual_coding {
-    int transform_skip_flag[4];
-    int explicit_rdpcm_flag[4];
-    int explicit_rdpcm_dir_flag[4];
+    // int transform_skip_flag[4];
+    // int explicit_rdpcm_flag[4];
+    // int explicit_rdpcm_dir_flag[4];
 
-    int last_sig_coeff_x_prefix;
-    int last_sig_coeff_y_prefix;
-    int last_sig_coeff_x_suffix;
-    int last_sig_coeff_y_suffix;
+    // int last_sig_coeff_x_prefix;
+    // int last_sig_coeff_y_prefix;
+    // int last_sig_coeff_x_suffix;
+    // int last_sig_coeff_y_suffix;
 
     // int coded_sub_block_flag;
 
@@ -701,7 +701,7 @@ struct residual_coding {
     int coeff_abs_level_greater2_flag[16];
     int coeff_sign_flag[16];
 
-    int coeff_abs_level_remaining[16];
+    // int coeff_abs_level_remaining[16];
 };
 
 #define EXTENDED_SAR 255
@@ -1220,14 +1220,17 @@ struct cross_comp_pred {
 };
 
 struct trans_tree {
-    uint8_t split_transform_flag[3][64][64];
-    uint32_t cbf_cb[3][64][64];
-    uint32_t cbf_cr[3][64][64];
-    uint32_t cbf_luma[3][64][64];
+    int xT0;
+    int yT0;
+    uint8_t split_transform_flag[3][32][32];
+    uint32_t cbf_cb[3][32][32];
+    uint32_t cbf_cr[3][32][32];
+    uint32_t cbf_luma[3][32][32];
 
+    int8_t transform_skip_flag[4][32][32];
     // see 7.4.9.10
-    uint8_t tu_residual_act_flag[64][64];
-    int16_t TransCoeffLevel[3][64][64]; // 3 for color index, 0 for Y, 1 for Cb,
+    uint8_t tu_residual_act_flag[32][32];
+    int16_t TransCoeffLevel[3][32][32]; // 3 for color index, 0 for Y, 1 for Cb,
                                         // 2 for Cr
 
 };

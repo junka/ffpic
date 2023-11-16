@@ -8,7 +8,7 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(cabac, DEBUG)
+VLOG_REGISTER(cabac, INFO)
 
 
 //see Table 9-53 state transition for next stat of lsp and mps

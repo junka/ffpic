@@ -677,9 +677,9 @@ struct pps {
     // pps extension 4bits
     // uint8_t pps_extension_data_flag:1;
 
-    uint32_t * CtbAddrTsToRs;
-    uint32_t *CtbAddrRsToTs;
-    uint32_t *TileId;
+    int * CtbAddrTsToRs;
+    int *CtbAddrRsToTs;
+    int *TileId;
     int ** MinTbAddrZs;
 };
 

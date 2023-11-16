@@ -67,5 +67,5 @@ log2ceil(uint32_t n)
 uint32_t
 divceil(uint32_t a, uint32_t div)
 {
-    return ((a/div));
+    return ((a/div)+((a%div>0)?1:0));
 }

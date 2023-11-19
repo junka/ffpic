@@ -647,9 +647,18 @@ void pred_chrome(int16_t *coff, int imode, uint8_t *uout, uint8_t *vout, int str
 void hevc_intra_planar(uint16_t *dst, uint16_t *left, uint16_t *top,
                        int nTbS, int stride) // both take top-left included
 {
+    int log2v = log2floor(nTbS);
     for (int y = 0; y < nTbS; y ++) {
         for (int x = 0; x < nTbS; x++) {
-            DST(y, x) = ((nTbS - 1 - x) * left[y] + (x+1) * top[nTbS] + (nTbS -1 - y) * top[x] + (y+1) * left[nTbS] + nTbS) >> (log2floor(nTbS)+1);
+            DST(y, x) = ((nTbS - 1 - x) * left[y] + (x+1) * top[nTbS] + (nTbS -1 - y) * top[x] + (y+1) * left[nTbS] + nTbS) >> (log2v+1);
+            // if (y == 0 && x == 0) {
+            //     fprintf(stdout,
+            //             "(%d, %d) %x: (%d * %d + %d * %d + %d * %d + %d * %d + "
+            //             "%d)>> (%d+1)\n",
+            //             x, y, DST(y, x), (nTbS - 1 - x), left[y], (x + 1),
+            //             top[nTbS], (nTbS - 1 - y), top[x], (y + 1), left[nTbS],
+            //             nTbS, log2v);
+            // }
         }
     }
 }

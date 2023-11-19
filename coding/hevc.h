@@ -1199,6 +1199,14 @@ struct cross_comp_pred {
     uint32_t ResScaleVal[3];
 };
 
+struct tu {
+    int x0;
+    int y0;
+    int nTbS;
+    int qpy;
+    int depth;
+};
+
 struct trans_tree {
     int xT0;
     int yT0;
@@ -1212,7 +1220,8 @@ struct trans_tree {
     uint8_t tu_residual_act_flag[32][32];
     int16_t TransCoeffLevel[3][32][32]; // 3 for color index, 0 for Y, 1 for Cb,
                                         // 2 for Cr
-
+    int tu_num;
+    struct tu tus[64];
 };
 
 
@@ -1262,23 +1271,25 @@ struct cu {
     int blkIdx;
     uint8_t cu_transquant_bypass_flag;
     // uint8_t cu_skip_flag;
+#ifdef ENABLE_3D
     uint8_t skip_intra_flag[64][64];
+#endif
     // pred_mode_flag[][]; use value below
-    uint8_t CuPredMode[64][64];
+    uint8_t CuPredMode;
     int PartMode;
 
     int MaxTrafoDepth;
     uint8_t IntraSplitFlag;
-    uint8_t palette_mode_flag[64][64];
+    uint8_t palette_mode_flag;
     struct palette_coding *pc[64][64];
     // part_mode;
     uint8_t pcm_flag[64][64];
     struct pcm_sample *pcm;
     //pcm_alignment_zero_bit
     uint8_t prev_intra_luma_pred_flag[64][64];
-
+#if 0
     struct intra_mode_ext intra_ext[64][64];
-
+#endif
     uint8_t mpm_idx[64][64];
     uint8_t rem_intra_luma_pred_mode[64][64];
     uint8_t intra_chroma_pred_mode[64][64];
@@ -1288,10 +1299,6 @@ struct cu {
 
     uint8_t IntraPredModeY[64][64];
     int IntraPredModeC;
-
-    int candIntraPredModeA;
-    int candIntraPredModeB;
-    int candModeList[3];
 
     int CtDepth;
     int x0;
@@ -1327,7 +1334,7 @@ struct chroma_qp_offset {
 struct ctu {
     struct sao *sao;
     int cu_num;
-    struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu, 
+    struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu
 };
 
 

@@ -675,19 +675,23 @@ void hevc_intra_DC(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
     dc = DC_ROUND(dc, (log2floor(nTbS) + 1));
 
     if (cIdx == 0 && nTbS < 32 && intra_boundary_filtering_disabled_flag == 0) {
-        DST(0, 0) = (left[0] + 2 *dc + top[0] + 2) >> 2;
+        DST(0, 0) = ((left[0] + 2 *dc + top[0] + 2) >> 2);
         for (int x = 1; x < nTbS; x++) {
             DST(0, x) = (top[x] + 3* dc + 2) >> 2;
         }
         for (int y = 1; y < nTbS; y++) {
-            DST(y, 0) = (left[y] + 3 *dc + 2) >> 2;
+            DST(y, 0) = (left[y] + 3 * dc + 2) >> 2;
         }
         for (int y = 1; y < nTbS; y++) {
-            memset(dst + y * stride + 1, dc, nTbS-1);
+            for (int x = 1; x < nTbS; x++) {
+                DST(y, x) = dc;
+            }
         }
     } else {
         for (int y = 0; y < nTbS; y++) {
-            memset(dst + y * stride, dc, nTbS);
+            for (int x = 0; x < nTbS; x++) {
+                DST(y, x) = dc;
+            }
         }
     }
 }

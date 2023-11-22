@@ -4136,14 +4136,8 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
             }
         }
     }
-    //now all samples are marked as "available"
-}
-
-//8.4.4.2.3
-static void
-filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int nTbS, int16_t* left, int16_t *top)
-{
-
+    // now all samples are marked as "available"    VDBG(hevc, "left: %d", 2 *
+    // nTbS);
     VDBG(hevc, "left: %d", 2 * nTbS);
     for (int i = 0; i < 2 * nTbS; i++) {
         fprintf(vlog_get_stream(), "%x ", left[i]);
@@ -4153,6 +4147,22 @@ filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int
     for (int i = 0; i < 2 * nTbS; i++) {
         fprintf(vlog_get_stream(), "%x ", top[i]);
     }
+}
+
+//8.4.4.2.3
+static void
+filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int nTbS, int16_t* left, int16_t *top)
+{
+
+    // VDBG(hevc, "left: %d", 2 * nTbS);
+    // for (int i = 0; i < 2 * nTbS; i++) {
+    //     fprintf(vlog_get_stream(), "%x ", left[i]);
+    // }
+    // VDBG(hevc, "");
+    // VDBG(hevc, "top: %x", top[-1]);
+    // for (int i = 0; i < 2 * nTbS; i++) {
+    //     fprintf(vlog_get_stream(), "%x ", top[i]);
+    // }
 
     const int intraHorVerDistThres[] = {7, 1, 0};
     int filterFlag = -1;

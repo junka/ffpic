@@ -1205,15 +1205,16 @@ struct tu {
     int nTbS;
     int qpy;
     int depth;
+    uint8_t split_transform_flag;
 };
 
 struct trans_tree {
     int xT0;
     int yT0;
-    uint8_t split_transform_flag[3][32][32];
-    uint32_t cbf_cb[3][32][32];
-    uint32_t cbf_cr[3][32][32];
-    uint32_t cbf_luma[3][32][32];
+    // uint8_t split_transform_flag[3];
+    // uint32_t cbf_cb[3][32][32];
+    // uint32_t cbf_cr[3][32][32];
+    // uint32_t cbf_luma[3][32][32];
 
     int8_t transform_skip_flag[4][32][32];
     // see 7.4.9.10
@@ -1286,19 +1287,19 @@ struct cu {
     uint8_t pcm_flag[64][64];
     struct pcm_sample *pcm;
     //pcm_alignment_zero_bit
-    uint8_t prev_intra_luma_pred_flag[64][64];
-#if 0
+    // uint8_t prev_intra_luma_pred_flag[64][64];
+#if ENABLE_3D
     struct intra_mode_ext intra_ext[64][64];
 #endif
-    uint8_t mpm_idx[64][64];
-    uint8_t rem_intra_luma_pred_mode[64][64];
-    uint8_t intra_chroma_pred_mode[64][64];
+    // uint8_t mpm_idx[64][64];
+    // uint8_t rem_intra_luma_pred_mode[64][64];
+    // uint8_t intra_chroma_pred_mode[64][64];
     uint8_t rqt_root_cbf;
 
     struct cross_comp_pred ccp[64][64];
 
-    uint8_t IntraPredModeY[64][64];
-    int IntraPredModeC;
+    // uint8_t IntraPredModeY[64][64];
+    // int IntraPredModeC;
 
     int CtDepth;
     int x0;

@@ -4107,14 +4107,14 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
         if (unavaibleL[nTbS * 2 - 1]) {
             int y;
             for (y = nTbS*2-1; y >= 0; y--) {
-                if (unavaibleL[y]) {
+                if (unavaibleL[y] == 0) {
                     left[nTbS*2-1] = left[y];
                     break;
                 }
             }
             if (y < 0) {
                 for (int x = -1; x < nTbS * 2; x++) {
-                    if (unavaibleT[x]) {
+                    if (unavaibleT[x] == 0) {
                         left[nTbS*2-1] = top[x];
                         break;
                     }

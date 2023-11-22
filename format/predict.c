@@ -706,7 +706,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                                          -390,  -315,  -256, -315,  -390,
                                          -482,  -630,  -910, -1638, -4096};
 
-    int ref[16];
+    int ref[32+1];
 
     if (predModeIntra >= 18) {
         for (int x = 0; x <= nTbS; x++) {
@@ -716,7 +716,11 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
         if (angle < 0) {
             if (((nTbS * angle) >> 5) < -1) {
                 for (int x = -1; x >= ((angle *nTbS) >> 5); x--) {
-                    ref[x] = left[-1 + ((x * invAngle[predModeIntra-11] + 128) >> 8)];
+                    if (((x * invAngle[predModeIntra-11] + 128) >> 8) == 0) {
+                        ref[x] = top[-1];
+                    } else {
+                        ref[x] = left[-1 + ((x * invAngle[predModeIntra-11] + 128) >> 8)];
+                    }
                 }
             }
         } else {
@@ -725,10 +729,10 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
             }
         }
 
-        for (int y = 0; y < nTbS; y ++) {
+        for (int y = 0; y < nTbS; y++) {
+            int iIdx = (y + 1) * angle >> 5;
+            int iFact = ((y + 1) * angle) & 31;
             for (int x = 0; x < nTbS; x++) {
-                int iIdx = (y + 1) * angle >> 5;
-                int iFact = ((y+1) * angle) & 31;
                 if (iFact != 0) {
                     DST(y, x) = ((32-iFact)*ref[x+iIdx+1] + iFact*ref[x+iIdx+2] + 16)>>5;
                 } else {
@@ -736,13 +740,14 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                 }
 
                 if (predModeIntra == 26 && cIdx == 0 && nTbS < 32 &&
-                    disableIntraBoundaryFilter == 0) {
+                    disableIntraBoundaryFilter == 0 && x == 0) {
                     DST(y, x) = clip3(0, (1 << (bitdepth))-1, top[x] + ((left[y]-top[-1])>>1));
                 }
             }
         }
     } else {
-        for (int x = 0; x <= nTbS; x++) {
+        ref[0] = top[-1];
+        for (int x = 1; x <= nTbS; x++) {
             ref[x] = left[x-1];
         }
         int angle = intraPredAngle[predModeIntra - 2];

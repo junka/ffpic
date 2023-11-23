@@ -710,7 +710,8 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                                          -390,  -315,  -256, -315,  -390,
                                          -482,  -630,  -910, -1638, -4096};
 
-    int ref[32+1];
+    int ref_arr[67];
+    int *ref = ref_arr + 33;
 
     if (predModeIntra >= 18) {
         for (int x = 0; x <= nTbS; x++) {
@@ -758,7 +759,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
         if (angle < 0) {
             if ((nTbS * angle >> 5) < -1) {
                 for (int x = -1; x >= ((angle * nTbS) >> 5); x--) {
-                    ref[x] = top[-1 + ((x *angle + 128)>> 8)];
+                    ref[x] = top[-1 + ((x * invAngle[predModeIntra-11] + 128)>> 8)];
                 }
             }
         } else {
@@ -767,10 +768,10 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
             }
         }
 
-        for (int y = 0; y < nTbS; y++) {
-            for (int x = 0; x < nTbS; x++) {
-                int iIdx = (x + 1) * angle >> 5;
-                int iFact = ((x + 1) * angle) & 31;
+        for (int x = 0; x < nTbS; x++) {
+            int iIdx = (x + 1) * angle >> 5;
+            int iFact = ((x + 1) * angle) & 31;
+            for (int y = 0; y < nTbS; y++) {
                 if (iFact != 0) {
                     DST(y, x) = ((32 - iFact) *ref[y + iIdx +1] + iFact * ref[y + iIdx + 2] + 16)>>5;
                 } else {

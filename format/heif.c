@@ -93,7 +93,7 @@ read_hvcc_box(FILE *f, struct box **bn)
             b->nal_arrays[i].nals[j].unit_length = SWAP(b->nal_arrays[i].nals[j].unit_length);
             b->nal_arrays[i].nals[j].nal_units = malloc(b->nal_arrays[i].nals[j].unit_length);
             fread(b->nal_arrays[i].nals[j].nal_units, 1, b->nal_arrays[i].nals[j].unit_length, f);
-            parse_nalu(b->nal_arrays[i].nals[j].nal_units, b->nal_arrays[i].nals[j].unit_length);
+            parse_nalu(b->nal_arrays[i].nals[j].nal_units, b->nal_arrays[i].nals[j].unit_length, NULL);
         }
     }
     return b->size;
@@ -110,7 +110,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
         return;
     }
     int size = meta->size -= 12;
-    while (size) {
+    while (size > 0) {
         type = read_box(f, &b, size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
@@ -164,22 +164,22 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
 }
 
 void
-decode_hvc1(HEIF * h, uint8_t *data, uint64_t len, uint8_t* pixels)
+decode_hvc1(HEIF * h, uint8_t *data, uint64_t len, uint8_t** pixels)
 {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
-    while (len) {
+    while (len > 0) {
         int sample_len = p[0] << 24 | p[1] << 16| p[2] << 8| p[3];
         len -= 4;
         p += 4;
-        parse_nalu(p, sample_len);
+        parse_nalu(p, sample_len, pixels);
         len -= sample_len;
         p += sample_len;
     }
 }
 
 static void
-decode_items(HEIF *h, FILE *f, uint8_t *pixels)
+decode_items(HEIF *h, FILE *f, uint8_t **pixels)
 {
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         pre_read_item(h, f, i);
@@ -203,13 +203,13 @@ HEIF_load(const char *filename)
     HEIF *h = p->pic;
     FILE *f = fopen(filename, "rb");
     fseek(f, 0, SEEK_END);
-    uint32_t size = ftell(f);
+    int size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
     size -= read_ftyp(f, &h->ftyp);
     // h->mdat = malloc(sizeof(struct mdat_box));
     struct box b;
-    while (size) {
+    while (size > 0) {
         uint32_t type = read_box(f, &b, size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
@@ -258,7 +258,7 @@ HEIF_load(const char *filename)
     p->pixels = malloc(p->width * p->height * 32);
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    decode_items(h, f, p->pixels);
+    decode_items(h, f, &p->pixels);
 
     fclose(f);
 

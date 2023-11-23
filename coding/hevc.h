@@ -1203,7 +1203,7 @@ struct tu {
     int x0;
     int y0;
     int nTbS;
-    int qpy;
+    // int qpy;
     int depth;
     uint8_t split_transform_flag;
 };
@@ -1336,6 +1336,7 @@ struct ctu {
     struct sao *sao;
     int cu_num;
     struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu
+    int CtbAddrInTs;
 };
 
 
@@ -1359,7 +1360,7 @@ struct hevc_slice {
 
 #pragma pack(pop)
 
-void parse_nalu(uint8_t *data, int len);
+void parse_nalu(uint8_t *data, int len, uint8_t **pixels);
 
 #ifdef __cplusplus
 }

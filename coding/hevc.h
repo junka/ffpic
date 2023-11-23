@@ -1284,7 +1284,7 @@ struct cu {
     uint8_t palette_mode_flag;
     struct palette_coding *pc[64][64];
     // part_mode;
-    uint8_t pcm_flag[64][64];
+    // uint8_t pcm_flag[64][64];
     struct pcm_sample *pcm;
     //pcm_alignment_zero_bit
     // uint8_t prev_intra_luma_pred_flag[64][64];

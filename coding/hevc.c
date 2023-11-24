@@ -4143,6 +4143,16 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
             top[i] = 1 << (bitDepth - 1);
         }
     } else {
+        VDBG(hevc, "unavaibleL");
+        for (int i = 0; i < 2 * nTbS; i++) {
+            fprintf(vlog_get_stream(), "%x ", unavaibleL[i]);
+        }
+        fprintf(vlog_get_stream(), "\n");
+        VDBG(hevc, "unavaibleT: %x", unavaibleT[-1]);
+        for (int i = 0; i < 2 * nTbS; i++) {
+            fprintf(vlog_get_stream(), "%x ", unavaibleT[i]);
+        }
+        fprintf(vlog_get_stream(), "\n");
         if (unavaibleL[nTbS * 2 - 1]) {
             int y;
             for (y = nTbS*2-1; y >= 0; y--) {
@@ -4193,17 +4203,6 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
 static void
 filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int nTbS, int16_t* left, int16_t *top)
 {
-
-    // VDBG(hevc, "left: %d", 2 * nTbS);
-    // for (int i = 0; i < 2 * nTbS; i++) {
-    //     fprintf(vlog_get_stream(), "%x ", left[i]);
-    // }
-    // fprintf(vlog_get_stream(), "\n");
-    // VDBG(hevc, "top: %x", top[-1]);
-    // for (int i = 0; i < 2 * nTbS; i++) {
-    //     fprintf(vlog_get_stream(), "%x ", top[i]);
-    // }
-    // fprintf(vlog_get_stream(), "\n");
 
     const int intraHorVerDistThres[] = {7, 1, 0};
     int filterFlag = -1;
@@ -4409,6 +4408,8 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
 
     int xTbY = (cIdx == 0) ? xTbCmp : xTbCmp * slice->SubWidthC;
     int yTbY = (cIdx == 0) ? yTbCmp : yTbCmp * slice->SubHeightC;
+    VDBG(hevc, "intra_sample_prediction (%d, %d), (%d, %d)", xTbCmp, yTbCmp, xTbY,
+         yTbY);
     for (int x = -1; x < nTbS * 2; x++) {
         int xNbCmp = xTbCmp + x;
         int yNbCmp = yTbCmp - 1;
@@ -4427,7 +4428,7 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
             unavaibleT[x] = 1;
         } else {
             // VDBG(hevc, "assign top (%d, %d) %d", xNbCmp, yNbCmp,
-            //      dst[xNbCmp + yNbCmp * stride]);
+            //     dst[xNbCmp + yNbCmp * stride]);
             top[x] = dst[xNbCmp + yNbCmp*stride];
         }
     }
@@ -4450,10 +4451,20 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
             unavaibleL[y] = 1;
         } else {
             // VDBG(hevc, "assign left (%d, %d) %d", xNbCmp, yNbCmp,
-            //      dst[xNbCmp + yNbCmp * stride]);
+            //         dst[xNbCmp + yNbCmp * stride]);
             left[y] = dst[xNbCmp + yNbCmp * stride];
         }
     }
+    VDBG(hevc, "from image left: %d", 2 * nTbS);
+    for (int i = 0; i < 2 * nTbS; i++) {
+        fprintf(vlog_get_stream(), "%x ", left[i]);
+    }
+    fprintf(vlog_get_stream(), "\n");
+    VDBG(hevc, "from image top: %x", top[-1]);
+    for (int i = 0; i < 2 * nTbS; i++) {
+        fprintf(vlog_get_stream(), "%x ", top[i]);
+    }
+    fprintf(vlog_get_stream(), "\n");
     if (unavaible > 0 && predModeIntra != INTRA_SINGLE) {
         // 8.4.4.2.2 invoked
         reference_sample_substitution(sps, left, top, nTbS, cIdx, unavaible,
@@ -4536,96 +4547,96 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                            trafoDepth + 1, predModeIntra, cIdx, controlParaAct,
                            p);
     } else {
-        for (int blkIdx = 0;
-             blkIdx <=(cIdx > 0 && slice->ChromaArrayType == 2 ? 1 : 0); blkIdx++) {
-            //FIXME
-        }
-        int nTbS = 1 << log2TrafoSize;
-        int yTbOffset = cu->blkIdx * nTbS;
-        int yTbOffsetY = yTbOffset * slice->SubHeightC;
-        int residualDpcm = 0;
-        int16_t predSamples[64 * 64];
-        int16_t resSamples[32*32];
-        struct trans_tree *tt = &cu->tt;
-        int transform_skip_flag =
-            tt->transform_skip_flag[cIdx][xTbY-tt->xT0][yTbY + yTbOffsetY- tt->yT0];
+        for (int blkIdx = 0; blkIdx <=(cIdx > 0 && slice->ChromaArrayType == 2 ? 1 : 0); blkIdx++) {
+            int nTbS = 1 << log2TrafoSize;
+            int yTbOffset = blkIdx * nTbS;
+            int yTbOffsetY = yTbOffset * slice->SubHeightC;
+            int residualDpcm = 0;
+            int16_t predSamples[64 * 64];
+            int16_t resSamples[32*32];
+            struct trans_tree *tt = &cu->tt;
+            int transform_skip_flag =
+                tt->transform_skip_flag[cIdx][xTbY-tt->xT0][yTbY + yTbOffsetY- tt->yT0];
 
-        VDBG(hevc, "controlParaAct %d, predModeIntra %d", controlParaAct, predModeIntra);
-        // step 4
-        if (controlParaAct != 2) {
-            if (hps->sps->sps_range_ext.implicit_rdpcm_enabled_flag == 1 &&
-                (transform_skip_flag == 1 ||
-                 cu->cu_transquant_bypass_flag == 1) &&
-                (predModeIntra == 10 || predModeIntra == 26)) {
-                residualDpcm = 1;
-            }
-        }
-
-        if (controlParaAct != 1) {
-            // step 5, invoke 8.4.4.2.1
-            intra_sample_prediction(slice, hps, cu, xTb0, yTb0 + yTbOffsetY,
-                                    predModeIntra, nTbS, cIdx, predSamples,
-                                    p);
-        }
-        if (controlParaAct != 2) {
-            // step 6,  8.6.2
-            scale_and_tranform(cu, transform_skip_flag,
-                               hps, slice, &cu->tt, xTbY, yTbY + yTbOffsetY,
-                               trafoDepth, cIdx, nTbS, resSamples, p);
-            
-            //step 7
-            VDBG(hevc, "residualDpcm %d", residualDpcm);
-            if (residualDpcm == 1) {
-                // 8.6.5 directional residual modification
-                residual_modification_transform_bypass(predModeIntra / 26, nTbS,
-                                                       resSamples);
-            }
-            //step 8
-            if (hps->pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
-                slice->ChromaArrayType == 3 && cIdx != 0) {
-                //  8.6.6 residual modification process
-                residual_modification_transform_cross_prediction(
-                    hps->sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
-                    resSamples);
-            }
-        }
-
-        int16_t *dst = (cIdx == 0) ? p->Y : (cIdx == 1 ? p->U : p->V);
-        int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
-        int xTbInCb, yTbInCb;
-        if (controlParaAct != 0) {
-            int nCbS = 1<<(log2TrafoSize + trafoDepth);
-            xTbInCb = xTb0 & (nCbS - 1);
-            yTbInCb = yTb0 & (nCbS - 1);
-        }
-        if (controlParaAct == 2) {
-            for (int y = 0; y < nTbS; y++) {
-                for (int x = 0; x < nTbS; y++) {
-                    resSamples[x + nTbS * y] =
-                        dst[x + xTbInCb + stride * (y + yTbInCb)];
+            VDBG(hevc, "controlParaAct %d, predModeIntra %d", controlParaAct, predModeIntra);
+            // step 4
+            if (controlParaAct != 2) {
+                if (hps->sps->sps_range_ext.implicit_rdpcm_enabled_flag == 1 &&
+                    (transform_skip_flag == 1 ||
+                    cu->cu_transquant_bypass_flag == 1) &&
+                    (predModeIntra == 10 || predModeIntra == 26)) {
+                    residualDpcm = 1;
                 }
             }
-        }
-        if (controlParaAct == 1) {
-            for (int y = 0; y < nTbS; y++) {
-                for (int x = 0; x < nTbS; y++) {
-                    // TBD, did not find resSamplesArray declare
-                    resSamples[x + xTbInCb + nTbS * (y + yTbInCb)] =
-                        resSamples[x + nTbS * y];
+
+            if (controlParaAct != 1) {
+                // step 5, invoke 8.4.4.2.1
+                intra_sample_prediction(slice, hps, cu, xTb0, yTb0 + yTbOffsetY,
+                                        predModeIntra, nTbS, cIdx, predSamples,
+                                        p);
+            }
+            if (controlParaAct != 2) {
+                // step 6,  8.6.2
+                scale_and_tranform(cu, transform_skip_flag,
+                                hps, slice, &cu->tt, xTbY, yTbY + yTbOffsetY,
+                                trafoDepth, cIdx, nTbS, resSamples, p);
+                
+                //step 7
+                VDBG(hevc, "residualDpcm %d", residualDpcm);
+                if (residualDpcm == 1) {
+                    // 8.6.5 directional residual modification
+                    residual_modification_transform_bypass(predModeIntra / 26, nTbS,
+                                                        resSamples);
+                }
+                //step 8
+                if (hps->pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
+                    slice->ChromaArrayType == 3 && cIdx != 0) {
+                    //  8.6.6 residual modification process
+                    residual_modification_transform_cross_prediction(
+                        hps->sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
+                        resSamples);
                 }
             }
-        } else {
-            // in 8.6.7 ( xTb0, yTb0 + yTbOffset )
-            // int16_t recSamples[64*64]; // reconstructed sample array as output
-            //add predSamples and resSamples to recSamples
-            construct_pic_pior_to_filtering(hps->sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, dst, stride);
-            VDBG(hevc, "construct_pic_pior_to_filtering %d ", nTbS);
-            for (int j = 0; j < nTbS; j++) {
-                for (int i = 0; i < nTbS; i++) {
-                    fprintf(vlog_get_stream(), " %x",
-                            dst[xTb0 + i + (yTb0 + yTbOffset + j) * stride]);
+            // step 9
+            int16_t *dst = (cIdx == 0) ? p->Y : (cIdx == 1 ? p->U : p->V);
+            int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
+            int xTbInCb, yTbInCb;
+            if (controlParaAct != 0) {
+                int nCbS = 1<<(log2TrafoSize + trafoDepth);
+                xTbInCb = xTb0 & (nCbS - 1);
+                yTbInCb = yTb0 & (nCbS - 1);
+            }
+            // step 10
+            if (controlParaAct == 2) {
+                for (int y = 0; y < nTbS; y++) {
+                    for (int x = 0; x < nTbS; y++) {
+                        resSamples[x + nTbS * y] =
+                            dst[x + xTbInCb + stride * (y + yTbInCb)];
+                    }
                 }
-                fprintf(vlog_get_stream(), "\n");
+            }
+            // step 11
+            if (controlParaAct == 1) {
+                for (int y = 0; y < nTbS; y++) {
+                    for (int x = 0; x < nTbS; y++) {
+                        // TBD, did not find resSamplesArray declare
+                        resSamples[x + xTbInCb + nTbS * (y + yTbInCb)] =
+                            resSamples[x + nTbS * y];
+                    }
+                }
+            } else {
+                // in 8.6.7 ( xTb0, yTb0 + yTbOffset )
+                // int16_t recSamples[64*64]; // reconstructed sample array as output
+                //add predSamples and resSamples to recSamples
+                construct_pic_pior_to_filtering(hps->sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, dst, stride);
+                VDBG(hevc, "construct_pic_pior_to_filtering %d ", nTbS);
+                for (int j = 0; j < nTbS; j++) {
+                    for (int i = 0; i < nTbS; i++) {
+                        fprintf(vlog_get_stream(), " %x",
+                                dst[xTb0 + i + (yTb0 + yTbOffset + j) * stride]);
+                    }
+                    fprintf(vlog_get_stream(), "\n");
+                }
             }
         }
     }
@@ -6988,6 +6999,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             bits_vec_dump(v);
         }
     } while (!end_of_slice_segment_flag);
+    cabac_dec_free(d);
 }
 
 static void parse_slice_segment_layer(struct hevc_nalu_header *headr,

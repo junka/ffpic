@@ -463,7 +463,7 @@ void read_dinf_box(FILE *f, struct dinf_box *b)
     b->dref.size = SWAP(b->dref.size);
     fread(&b->dref.entry_count, 4, 1, f);
     b->dref.entry_count = SWAP(b->dref.entry_count);
-    printf("dinf %d, dref %d, count %d\n", b->size, b->dref.size, b->dref.entry_count);
+    // printf("dinf %d, dref %d, count %d\n", b->size, b->dref.size, b->dref.entry_count);
     b->dref.entries = malloc(b->dref.entry_count * sizeof(struct DataEntryBox));
     for (int i = 0; i < b->dref.entry_count; i++) {
         fread(b->dref.entries+i, 12, 1, f);

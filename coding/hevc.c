@@ -3135,6 +3135,7 @@ parse_depth_dcs(cabac_dec *d, struct cu *cu, int x0, int y0, int log2CbSize)
     }
 }
 #endif
+
 //see 7.3.8.3 sample adaptive offset
 static struct sao *parse_sao(cabac_dec *d,
                              struct sps *sps, struct slice_segment_header *slice,
@@ -3142,25 +3143,33 @@ static struct sao *parse_sao(cabac_dec *d,
                              int CtbAddrInTs, int CtbAddrInRs,
                              int SliceAddrRs, int *TileId) {
     struct sao * sao = calloc(1, sizeof(*sao));
+
+    uint8_t sao_merge_left_flag = 0;
+    uint8_t sao_merge_up_flag = 0;
+    uint8_t sao_eo_class_luma = 0;
+    uint8_t sao_eo_class_chroma = 0;
+    uint8_t sao_offset_abs[3][4];
+    uint8_t sao_offset_sign[3][4];
+    uint8_t sao_band_position[3];
     VDBG(hevc, "parsing sao (%d, %d):", rx, ry);
     if (rx > 0 ) {
         bool leftCtbInSliceSeg = (CtbAddrInRs > SliceAddrRs);
         bool leftCtbInTile = (TileId[CtbAddrInTs] == TileId[CtbAddrRsToTs[CtbAddrInRs - 1]]);
         if (leftCtbInSliceSeg && leftCtbInTile) {
-            sao->sao_merge_left_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
-            VDBG(hevc, "sao_merge_left_flag %d", sao->sao_merge_up_flag);
+            sao_merge_left_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
+            VDBG(hevc, "sao_merge_left_flag %d", sao_merge_up_flag);
         }
     }
-    if (ry > 0 && !sao->sao_merge_left_flag) {
+    if (ry > 0 && !sao_merge_left_flag) {
         bool upCtbInSliceSeg = ((CtbAddrInRs - slice->PicWidthInCtbsY) >= SliceAddrRs);
         bool upCtbInTile = (TileId[CtbAddrInTs] ==
                 TileId[CtbAddrRsToTs[CtbAddrInRs - slice->PicWidthInCtbsY]]);
         if (upCtbInSliceSeg && upCtbInTile) {
-            sao->sao_merge_up_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
-            VDBG(hevc, "sao_merge_up_flag %d", sao->sao_merge_up_flag);
+            sao_merge_up_flag = CABAC(d, CTX_TYPE_SAO_MERGE);
+            VDBG(hevc, "sao_merge_up_flag %d", sao_merge_up_flag);
         }
     }
-    if (!sao->sao_merge_up_flag && !sao->sao_merge_left_flag) {
+    if (!sao_merge_up_flag && !sao_merge_left_flag) {
         for (int cIdx = 0; cIdx < (slice->ChromaArrayType != 0 ? 3 : 1 ); cIdx++) {
             if ((slice->slice_sao_luma_flag && cIdx == 0) ||
                 (slice->slice_sao_chroma_flag && cIdx > 0)) {
@@ -3168,122 +3177,124 @@ static struct sao *parse_sao(cabac_dec *d,
                     uint8_t sao_type_idx_luma =
                         CABAC_TR(d, CTX_TYPE_SAO_TYPE_INDEX, 2, 0, NULL);
                     VDBG(hevc, "sao_type_idx_luma %d", sao_type_idx_luma);
-                    sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_luma;
+                    sao->SaoTypeIdx[0][rx][ry] = sao_type_idx_luma;
                 } else if (cIdx == 1) {
                     uint8_t sao_type_idx_chroma =
                         CABAC_TR(d, CTX_TYPE_SAO_TYPE_INDEX, 2, 0, NULL);
                     VDBG(hevc, "sao_type_idx_chroma %d", sao_type_idx_chroma);
-                    sao->SaoTypeIdx[cIdx][rx][ry] = sao_type_idx_chroma;
-                } else {
-                    sao->SaoTypeIdx[cIdx][rx][ry] = 0;
+                    sao->SaoTypeIdx[1][rx][ry] = sao_type_idx_chroma;
+                    sao->SaoTypeIdx[2][rx][ry] = sao_type_idx_chroma;
                 }
                 VDBG(hevc, "cIdx %d, SaoTypeIdx %d", cIdx, sao->SaoTypeIdx[cIdx][rx][ry]);
                 if (sao->SaoTypeIdx[cIdx][rx][ry] != 0 ) {
                     for (int i = 0; i < 4; i++) {
-                        int bitdepth =
-                            ((i == 0) ? (sps->bit_depth_luma_minus8 + 8)
+                        int bitdepth = ((i == 0) ? (sps->bit_depth_luma_minus8 + 8)
                                          : (sps->bit_depth_chroma_minus8 + 8));
                         int cMax = (1 << (MIN(bitdepth, 10) - 5)) - 1;
-                        sao->sao_offset_abs[cIdx][rx][ry][i] =
+                        sao_offset_abs[cIdx][i] =
                             CABAC_TR(d, CTX_TYPE_ALL_BYPASS, cMax, 0, NULL);
                         VDBG(hevc, "cMax %d, sao_offset_abs[%d][%d][%d][%d] %d", cMax,
                              cIdx, rx, ry, i,
-                             sao->sao_offset_abs[cIdx][rx][ry][i]);
+                             sao_offset_abs[cIdx][i]);
                     }
                     if (sao->SaoTypeIdx[cIdx][rx][ry] == 1) {
                         for (int i = 0; i < 4; i++ ) {
-                            if (sao->sao_offset_abs[cIdx][rx][ry][i] != 0 ) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = CABAC_BP(d);
+                            if (sao_offset_abs[cIdx][i] != 0) {
+                                sao_offset_sign[cIdx][i] = CABAC_BP(d);
                             } else {
-                                if (sao->sao_merge_left_flag) {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
-                                } else if (sao->sao_merge_up_flag) {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx][ry-1][i];
+                                // if sao_offset_sign not present
+                                // TODO: FIXME
+                                if (sao_merge_left_flag) {
+                                    // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx-1][ry][i];
+                                } else if (sao_merge_up_flag) {
+                                    // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx][ry-1][i];
                                 } else if (sao->SaoTypeIdx[cIdx][rx][ry] == 2) {
                                     if (i == 0|| i == 1) {
-                                        sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                        sao_offset_sign[cIdx][i] = 0;
                                     } {
-                                        sao->sao_offset_sign[cIdx][rx][ry][i] = 1;
+                                        sao_offset_sign[cIdx][i] = 1;
                                     }
                                 } else {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                    sao_offset_sign[cIdx][i] = 0;
                                 }
                             }
-                            VDBG(hevc, "sao_offset_sign %d",
-                                 sao->sao_offset_sign[cIdx][rx][ry][i]);
+                            VDBG(hevc, "sao_offset_sign %d", sao_offset_sign[cIdx][i]);
                         }
-                        sao->sao_band_position[cIdx][rx][ry] = CABAC_FL(d, 5);
+                        sao_band_position[cIdx] = CABAC_FL(d, 5);
                     } else {
                         if (cIdx == 0) {
-                            sao->sao_eo_class_luma = CABAC_FL(d, 2);
+                            sao_eo_class_luma = CABAC_FL(d, (1 << 2) -1);
                         } else if (cIdx == 1) {
-                            sao->sao_eo_class_chroma = CABAC_FL(d, 2);
+                            sao_eo_class_chroma = CABAC_FL(d, (1 << 2) - 1);
                         }
                         VDBG(hevc,
                              "sao_eo_class_luma %d, sao_eo_class_chroma %d",
-                             sao->sao_eo_class_luma, sao->sao_eo_class_chroma);
+                             sao_eo_class_luma, sao_eo_class_chroma);
                         for (int i = 0; i < 4; i++ ) {
-                            if (sao->sao_merge_left_flag) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
-                            } else if (sao->sao_merge_up_flag) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx][ry-1][i];
+                            if (sao_merge_left_flag) {
+                                // sao_offset_sign[cIdx][rx][ry][i] = sao_offset_sign[cIdx][rx-1][ry][i];
+                            } else if (sao_merge_up_flag) {
+                                // sao_offset_sign[cIdx][rx][ry][i] = sao_offset_sign[cIdx][rx][ry-1][i];
                             } else if (sao->SaoTypeIdx[cIdx][rx][ry] == 2) {
                                 if (i == 0|| i == 1) {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                    sao_offset_sign[cIdx][i] = 0;
                                 } {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = 1;
+                                    sao_offset_sign[cIdx][i] = 1;
                                 }
                             } else {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                sao_offset_sign[cIdx][i] = 0;
                             }
                         }
                     }
                 } else {
                     for (int i = 0; i < 4; i++) {
-                        if (sao->sao_merge_left_flag) {
-                            sao->sao_offset_abs[cIdx][rx][ry][i] = sao->sao_offset_abs[cIdx][rx-1][ry][i];
-                            sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
-                        } else if (sao->sao_merge_up_flag) {
-                            sao->sao_offset_abs[cIdx][rx][ry][i] = sao->sao_offset_abs[cIdx][rx][ry-1][i];
-                            sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx][ry-1][i];
+                        if (sao_merge_left_flag) {
+                            // sao_offset_abs[cIdx][i] = sao_offset_abs[cIdx][rx-1][ry][i];
+                            // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx-1][ry][i];
+                        } else if (sao_merge_up_flag) {
+                            // sao_offset_abs[cIdx][i] = sao_offset_abs[cIdx][rx][ry-1][i];
+                            // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx][ry-1][i];
                         } else {
-                            sao->sao_offset_abs[cIdx][rx][ry][i] = 0;
+                            sao_offset_abs[cIdx][i] = 0;
                             if (sao->SaoTypeIdx[cIdx][rx][ry] == 2) {
                                 if (i == 0|| i == 1) {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                    sao_offset_sign[cIdx][i] = 0;
                                 } {
-                                    sao->sao_offset_sign[cIdx][rx][ry][i] = 1;
+                                    sao_offset_sign[cIdx][i] = 1;
                                 }
                             } else {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                sao_offset_sign[cIdx][i] = 0;
                             }
                         }
                     }
                 }
             } else {
+                assert(0);
                 //see Table 7-8
-                if (sao->sao_merge_left_flag) {
+                if (sao_merge_left_flag) {
                     sao->SaoTypeIdx[cIdx][rx][ry] = sao->SaoTypeIdx[cIdx][rx - 1][ry];
-                } else if (sao->sao_merge_up_flag) {
+                } else if (sao_merge_up_flag) {
                     sao->SaoTypeIdx[cIdx][rx][ry] = sao->SaoTypeIdx[cIdx][rx][ry - 1];
+                } else {
+                    sao->SaoTypeIdx[cIdx][rx][ry] = 0;
                 }
                 for (int i = 0; i < 4; i++) {
-                    if (sao->sao_merge_left_flag) {
-                        sao->sao_offset_abs[cIdx][rx][ry][i] = sao->sao_offset_abs[cIdx][rx-1][ry][i];
-                        sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx-1][ry][i];
-                    } else if (sao->sao_merge_up_flag) {
-                        sao->sao_offset_abs[cIdx][rx][ry][i] = sao->sao_offset_abs[cIdx][rx][ry-1][i];
-                        sao->sao_offset_sign[cIdx][rx][ry][i] = sao->sao_offset_sign[cIdx][rx][ry-1][i];
+                    if (sao_merge_left_flag) {
+                        // sao_offset_abs[cIdx][i] = sao_offset_abs[cIdx][rx-1][ry][i];
+                        // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx-1][ry][i];
+                    } else if (sao_merge_up_flag) {
+                        // sao_offset_abs[cIdx][i] = sao_offset_abs[cIdx][rx][ry-1][i];
+                        // sao_offset_sign[cIdx][i] = sao_offset_sign[cIdx][rx][ry-1][i];
                     } else {
-                        sao->sao_offset_abs[cIdx][rx][ry][i] = 0;
+                        sao_offset_abs[cIdx][i] = 0;
                         if (sao->SaoTypeIdx[cIdx][rx][ry] == 2) {
                             if (i == 0|| i == 1) {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                                sao_offset_sign[cIdx][i] = 0;
                             } {
-                                sao->sao_offset_sign[cIdx][rx][ry][i] = 1;
+                                sao_offset_sign[cIdx][i] = 1;
                             }
                         } else {
-                            sao->sao_offset_sign[cIdx][rx][ry][i] = 0;
+                            sao_offset_sign[cIdx][i] = 0;
                         }
                     }
                 }
@@ -6774,6 +6785,7 @@ coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
     struct ctu *ctu = calloc(1, sizeof(*ctu));
     ctu->CtbAddrInTs = CtbAddrInTs;
     p->ctus[p->ctu_num++] = ctu;
+    VDBG(hevc, "ctu num %d", p->ctu_num);
     struct slice_segment_header *slice = hslice->slice;
     struct vps *vps = hps->vps;
     struct sps *sps = hps->sps;

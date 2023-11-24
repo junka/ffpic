@@ -627,10 +627,9 @@ int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
     VDBG(cabac, "tid %d, (binIdx %d)flag %d, range %x, value %x", tid,
          binIdx, ctx_bypass_flags(cb(tid, binIdx), binIdx),
          dec->range, dec->value);
-    while (ctx_bypass_flags(cb(tid, binIdx), binIdx) >= 0 &&
+    while (prefix < t && ctx_bypass_flags(cb(tid, binIdx), binIdx) >= 0 &&
            cabac_dec_bin(dec, cb(tid, binIdx),
-                         ctx_bypass_flags(cb(tid, binIdx), binIdx)) == 1 &&
-           prefix < t) {
+                         ctx_bypass_flags(cb(tid, binIdx), binIdx)) == 1) {
         binIdx++;
         prefix++;
     }

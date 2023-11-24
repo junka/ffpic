@@ -5532,11 +5532,11 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
     int last_sig_coeff_x_prefix =
         CABAC_TR(d, CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX,
                  (log2TrafoSize << 1) - 1, 0, ctx_for_last_sig_coeff_prefix);
-    // VDBG(hevc, "last_significant_coeff_x_prefix %d", last_sig_coeff_x_prefix);
+    VDBG(hevc, "last_significant_coeff_x_prefix %d", last_sig_coeff_x_prefix);
     int last_sig_coeff_y_prefix =
         CABAC_TR(d, CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX,
                  (log2TrafoSize << 1) - 1, 0, ctx_for_last_sig_coeff_prefix);
-    // VDBG(hevc, "last_significant_coeff_y_prefix %d", last_sig_coeff_y_prefix);
+    VDBG(hevc, "last_significant_coeff_y_prefix %d", last_sig_coeff_y_prefix);
     if (last_sig_coeff_x_prefix > 3) {
         int last_sig_coeff_x_suffix = CABAC_FL(d,
             (1 << ((last_sig_coeff_x_prefix >> 1) - 1)) - 1);

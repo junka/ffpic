@@ -110,8 +110,10 @@ read_meta_box(FILE *f, struct meta_box *meta)
         return;
     }
     int size = meta->size -= 12;
+    struct dinf_box dinf;
     while (size > 0) {
         type = read_box(f, &b, size);
+        VDBG(heif, "%s: size %d", UINT2TYPE(type), b.size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
         case TYPE2UINT("hdlr"):
@@ -132,7 +134,11 @@ read_meta_box(FILE *f, struct meta_box *meta)
         case TYPE2UINT("iref"):
             read_iref_box(f, &meta->iref);
             break;
+        case TYPE2UINT("dinf"):
+            read_dinf_box(f, &dinf);
+            break;
         default:
+            fseek(f, b.size, SEEK_CUR);
             break;
         }
         size -= b.size;

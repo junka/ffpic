@@ -101,7 +101,6 @@ struct meta_box {
     struct iref_box iref;
 };
 
-
 struct heif_item {
     const struct item_location *item;
     uint32_t type;

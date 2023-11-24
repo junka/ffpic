@@ -62,7 +62,7 @@ struct ftyp_box {
     uint32_t *compatible_brands;
 };
 
-/* see 14496-12 8.3 */
+/* see 14496-12 8.3 ? 8.2.2.2 (2015) */
 struct mvhd_box {
     FULL_BOX_ST;
 
@@ -277,6 +277,68 @@ struct tref_box {
     
 };
 
+// see 8.4.1 (14496-12:2015)
+struct mdia_box {
+    BOX_ST;
+};
+
+struct mdhd_box {
+    FULL_BOX_ST;
+    // version == 1, bits width is below, version == 0, all four is 32-bits wide
+    uint64_t ctime;
+    uint64_t mtime;
+    uint32_t timescale;
+    uint64_t duration;
+
+    uint16_t pad:1;
+    uint16_t langugae; //ISO-639-2/T, three bit-5 wide
+    uint16_t pre_defined; // = 0
+};
+
+// see 8.4.4 (14496-12:2015)
+// media information box
+struct minf_box {
+    BOX_ST;
+};
+
+struct nmhd_box {
+    FULL_BOX_ST;
+};
+
+struct elng_box {
+    FULL_BOX_ST;
+    char * extended_language; // such as "en-US", "fr-FR", "zh-CN"
+};
+
+struct stbl_box {
+    BOX_ST;
+};
+
+struct stsd_box {
+    BOX_ST;
+};
+
+
+// could be "url " or "urn "
+struct DataEntryBox {
+    FULL_BOX_ST;
+    char *name; // mandatory for urn, not exist for url
+    char *location; // mandatory for url, optional for url
+};
+
+// see 8.7.2 (14496-12:2015)
+struct dref_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    struct DataEntryBox *entries;
+};
+
+
+struct dinf_box {
+    BOX_ST;
+    struct dref_box dref;
+};
+
 /* hint, cdsc, hind, vdep, vplx */
 struct track_ref_type_box {
     BOX_ST;
@@ -376,6 +438,8 @@ void read_iinf_box(FILE *f, struct iinf_box *b);
 void read_sinf_box(FILE *f, struct sinf_box *b);
 
 void read_iref_box(FILE *f, struct iref_box *b);
+
+void read_dinf_box(FILE *f, struct dinf_box *b);
 
 typedef int (* read_box_callback)(FILE *f, struct box **b);
 

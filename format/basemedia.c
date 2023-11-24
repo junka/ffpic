@@ -454,3 +454,29 @@ read_mdat_box(FILE *f, struct mdat_box *b)
     fread(b->data, 1, b->size - 8, f);
     // hexdump(stdout, "mdat ", "", b->data, 256);
 }
+
+void read_dinf_box(FILE *f, struct dinf_box *b)
+{
+    fread(b, 8, 1, f);
+    b->size = SWAP(b->size);
+    fread(&b->dref, 12, 1, f);
+    b->dref.size = SWAP(b->dref.size);
+    fread(&b->dref.entry_count, 4, 1, f);
+    b->dref.entry_count = SWAP(b->dref.entry_count);
+    printf("dinf %d, dref %d, count %d\n", b->size, b->dref.size, b->dref.entry_count);
+    b->dref.entries = malloc(b->dref.entry_count * sizeof(struct DataEntryBox));
+    for (int i = 0; i < b->dref.entry_count; i++) {
+        fread(b->dref.entries+i, 12, 1, f);
+        b->dref.entries[i].size = SWAP(b->dref.entries[i].size);
+        // printf("data entry size %d, type %s\n", b->dref.entries[i].size,
+        //        type2name(b->dref.entries[i].type));
+        if (b->dref.entries[i].type == TYPE2UINT("url ")) {
+            b->dref.entries[i].location = malloc(b->dref.entries[i].size-12);
+            printf("%s\n", b->dref.entries[i].location);
+            fread(b->dref.entries[i].location, b->dref.entries[i].size - 12, 1, f);
+        } else if (b->dref.entries[i].type == TYPE2UINT("urn ")) {
+            b->dref.entries[i].name = malloc(b->dref.entries[i].size-12);
+            fread(b->dref.entries[i].name, b->dref.entries[i].size - 12, 1, f);
+        }
+    }
+}

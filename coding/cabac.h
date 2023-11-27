@@ -115,6 +115,7 @@ int cabac_dec_bypass_fl(cabac_dec *dec, int max);
 int cabac_dec_egk(cabac_dec *dec, int kth, int max_pre_ext_len,
                   int trunc_suffix_len);
 void cabac_dec_free(cabac_dec *dec);
+void cabac_dec_reset(cabac_dec *dec);
 
 void cabac_init_models(int qpy, int initType);//here initType should alway be 0
 

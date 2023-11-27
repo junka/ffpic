@@ -680,5 +680,10 @@ int cabac_dec_egk(cabac_dec *dec, int kth, int max_pre_ext_len,
 
 void cabac_dec_reset(cabac_dec *dec)
 {
+    VDBG(cabac, "dec: count %d, range %x, v %x", dec->count, dec->range, dec->value);
+    bits_vec_reinit_cur(dec->bits);
     dec->range = 510;
+    dec->count = 8;
+    dec->value = READ_BITS(dec->bits, 16);
+    VDBG(cabac, "dec: count %d, range %x, v %x", dec->count, dec->range, dec->value);
 }

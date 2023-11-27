@@ -52,6 +52,7 @@ byte_alignment(struct bits_vec *v)
     assert(READ_BIT(v) == 1);
     while (!BYTE_ALIGNED(v)) {
         SKIP_BITS(v, 1);
+        VDBG(hevc, "skip 1 bit");
     }
 }
 
@@ -2532,7 +2533,11 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
 
     assert(slice->slice_segment_address < (uint32_t)slice->PicSizeInCtbsY);
     slice->CuQpDeltaVal = 0;
-    VDBG(hevc, "dependent_slice_segment_flag %d", slice->dependent_slice_segment_flag);
+    VDBG(hevc,
+         "dependent_slice_segments_enabled_flag %d, "
+         "dependent_slice_segment_flag %d",
+         pps->dependent_slice_segments_enabled_flag,
+         slice->dependent_slice_segment_flag);
     if (slice->dependent_slice_segment_flag) {
         *SliceAddrRs = pps->CtbAddrTsToRs[pps->CtbAddrRsToTs[slice->slice_segment_address] - 1];
     }
@@ -3883,8 +3888,8 @@ quatization_parameters(int xCb, int yCb, struct hevc_param_set *hps,
     VDBG(hevc, "tu (%d %d) %d, %d", tu->x0, tu->y0, tu->nTbS, tt->tu_num);
 
     int firstCtbaddrRs = slice->slice_segment_address;
-    int xSinSlice = (1 << slice->CtbLog2SizeY) * (firstCtbaddrRs%slice->PicWidthInCtbsY);
-    int ySinSlice = (1 << slice->CtbLog2SizeY) * (firstCtbaddrRs / slice->PicWidthInCtbsY);
+    int xSinSlice = 1 << slice->CtbSizeY * (firstCtbaddrRs%slice->PicWidthInCtbsY);
+    int ySinSlice = slice->CtbSizeY * (firstCtbaddrRs / slice->PicWidthInCtbsY);
     if (xSinSlice == xQg && ySinSlice == yQg) {
         first_quant_group_in_slice = true;
     }
@@ -3892,8 +3897,8 @@ quatization_parameters(int xCb, int yCb, struct hevc_param_set *hps,
         first_quant_group_in_ctb = true;
     }
     if (pps->tiles_enabled_flag) {
-        if ((xQg & ((1<<slice->CtbLog2SizeY)-1)) == 0 &&
-            (yQg & ((1<<slice->CtbLog2SizeY)-1)) == 0) {
+        if ((xQg & (slice->CtbSizeY-1)) == 0 &&
+            (yQg & (slice->CtbSizeY-1)) == 0) {
             //FIXME
             first_quant_group_in_tile = true;
         }
@@ -6971,11 +6976,11 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     do {
         // see 7-55, 7-56, but slice->entry_point_offset is alreay accumlated
         int firstByte = (i > 0) ? slice->entry_point_offset[i]: 0;
-        int lastByte =
-            (i < slice->num_entry_point_offsets) ? (slice->entry_point_offset[i] - firstByte): v->len;
+        int lastByte = (i < slice->num_entry_point_offsets) ? (slice->entry_point_offset[i] - firstByte): v->len;
         // bits_vec_dump(v);
         VDBG(hevc, "CtbAddrInTs %u, CtbAddrInRs %u, TileId %d", CtbAddrInTs,
              CtbAddrInRs, pps->TileId[CtbAddrInTs]);
+
         struct ctu * ctu = coding_tree_unit(d, hslice, hps, CtbAddrInTs, CtbAddrInRs, SliceAddrRs, pps->TileId, p);
         end_of_slice_segment_flag = cabac_dec_terminate(d);
         VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
@@ -6995,8 +7000,14 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             uint8_t end_of_subset_one_bit = cabac_dec_terminate(d); // should be equal to 1
 
             assert(end_of_subset_one_bit == 1);
-            byte_alignment(v);
             bits_vec_dump(v);
+            // end of entry_point_offset
+            assert(lastByte == v->ptr - v->start);
+
+            cabac_dec_reset(d);
+            // int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
+
+            // cabac_init_models(slice_qpy, 0);
         }
     } while (!end_of_slice_segment_flag);
     cabac_dec_free(d);

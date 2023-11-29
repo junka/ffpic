@@ -129,6 +129,10 @@ int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
 
 #define CABAC_TB(br, max) cabac_dec_bypass_tb(br, max)
 
+void storage_process_for_cabac_context(int *StatCoeff);
+
+void sync_process_for_cabac_context(int *StatCoeff);
+
 #ifdef __cplusplus
 }
 #endif

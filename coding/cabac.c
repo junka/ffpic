@@ -232,6 +232,7 @@ static void init_bypass_flag(struct ctx_model *ctx, uint8_t flags, uint8_t len)
     ctx->bypass_len = len;
 }
 
+// see 9.3.2.2 initialization process for context variables
 static void init_model_ctx(struct ctx_model *ctx, int qpy, int initValue) {
     // see 9-4
     int slopeIdx = initValue >> 4;
@@ -686,4 +687,37 @@ void cabac_dec_reset(cabac_dec *dec)
     dec->count = 8;
     dec->value = READ_BITS(dec->bits, 16);
     VDBG(cabac, "dec: count %d, range %x, v %x", dec->count, dec->range, dec->value);
+}
+
+// for storage and sync, see 9.3.2.4 , 9.3.2.5
+static int tableStatCoeffSync[4];
+static uint8_t tableStateSync[CTX_TYPE_MAX_NUM];
+static uint8_t tableMPSSync[CTX_TYPE_MAX_NUM];
+
+void storage_process_for_cabac_context(int *StatCoeff) {
+    // see Figure 9-4
+    // if (pps->entropy_coding_sync_enabled_flag &&
+    //     (CtbAddrInRs % slice->PicWidthInCtbsY == 1 ||
+    //      (CtbAddrInRs > 1 && pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]]
+    //      !=
+    //                              pps->TileId[CtbAddrInTs]))) {
+    // store context in Wpp
+    for (int i = 0; i < CTX_TYPE_MAX_NUM; i++) {
+        tableStateSync[i] = ctx_table[i].state;
+        tableMPSSync[i] = ctx_table[i].mpsbit;
+    }
+
+    for (int i = 0; i < 4; i++) {
+        tableStatCoeffSync[i] = StatCoeff[i];
+    }
+}
+
+void sync_process_for_cabac_context(int *StatCoeff) {
+    for (int i = 0; i < CTX_TYPE_MAX_NUM; i++) {
+        ctx_table[i].state = tableStateSync[i];
+        ctx_table[i].mpsbit = tableMPSSync[i];
+    }
+    for (int i = 0; i < 4; i++) {
+        StatCoeff[i] = tableStatCoeffSync[i];
+    }
 }

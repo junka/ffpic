@@ -760,7 +760,8 @@ parse_pps(struct bits_vec *v)
     pps->transquant_bypass_enabled_flag = READ_BIT(v);
     pps->tiles_enabled_flag = READ_BIT(v);
     pps->entropy_coding_sync_enabled_flag = READ_BIT(v);
-    VDBG(hevc, "tiles_enabled_flag %d", pps->tiles_enabled_flag);
+    VDBG(hevc, "tiles_enabled_flag %d, entropy_coding_sync_enabled_flag %d",
+         pps->tiles_enabled_flag, pps->entropy_coding_sync_enabled_flag);
     if (pps->tiles_enabled_flag) {
         pps->num_tile_columns_minus1 = GOL_UE(v);
         pps->num_tile_rows_minus1 = GOL_UE(v);
@@ -5479,6 +5480,8 @@ static int ctx_for_coded_sub_block_flag(struct slice_segment_header *slice,
     return ctxInc;
 }
 
+static int StatCoeff[4] = {0};
+
 /*see 7.3.8.11 */
 static void
 parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
@@ -5779,7 +5782,6 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
             //      "(%d, %d) lastGreater1ScanPos %d, coeff_abs_level_greater2_flag %d",
             //      lastGreater1ScanPos, x0, y0, coeff_abs_level_greater2_flag[lastGreater1ScanPos]);
         }
-        static int StatCoeff[4] = {0};
         // see 9-20, 9-21, 9-22
         int sbType = 0;
         if (cu->cu_transquant_bypass_flag == 0 &&
@@ -6972,7 +6974,8 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     int CtbAddrInTs = pps->CtbAddrRsToTs[CtbAddrInRs];
     VDBG(hevc, "starting CtbAddrInTs %d", CtbAddrInTs);
     int i = 0;
-    cabac_dec *d = cabac_dec_init(v);
+    cabac_dec *d;
+    bool first_ctu_in_tile = true, first_ctu_in_row = true, first_ctu_in_slice_segment = true;
     do {
         // see 7-55, 7-56, but slice->entry_point_offset is alreay accumlated
         int firstByte = (i > 0) ? slice->entry_point_offset[i]: 0;
@@ -6981,15 +6984,47 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         VDBG(hevc, "CtbAddrInTs %u, CtbAddrInRs %u, TileId %d", CtbAddrInTs,
              CtbAddrInRs, pps->TileId[CtbAddrInTs]);
 
+        uint32_t xCtb = (CtbAddrInRs % slice->PicWidthInCtbsY) << slice->CtbLog2SizeY;
+        uint32_t yCtb = (CtbAddrInRs / slice->PicWidthInCtbsY) << slice->CtbLog2SizeY;
+        //see Figure 9-3
+        if (first_ctu_in_tile || first_ctu_in_slice_segment) {
+            // reset cabac
+            first_ctu_in_tile = false;
+            first_ctu_in_slice_segment = false;
+            d = cabac_dec_init(v);
+        } else if ((CtbAddrInRs % slice->PicWidthInCtbsY == 0) && pps->entropy_coding_sync_enabled_flag) {
+            //load cabac context with upper-right CTU if it is avaibale and at the start of a line
+            int availableFlagT = process_zscan_order_block_availablity(slice, hps, xCtb, yCtb, xCtb + slice->CtbSizeY, yCtb - slice->CtbSizeY);
+            if (availableFlagT) {
+                sync_process_for_cabac_context(StatCoeff);
+            } else {
+                // reset cabac
+            }
+        } else if (first_ctu_in_slice_segment &&
+                   slice->dependent_slice_segment_flag) {
+            first_ctu_in_slice_segment = false;
+        }
+
         struct ctu * ctu = coding_tree_unit(d, hslice, hps, CtbAddrInTs, CtbAddrInRs, SliceAddrRs, pps->TileId, p);
+
+        // store the second CTU state in a row
+        // see Figure 9-4
+        if (pps->entropy_coding_sync_enabled_flag &&
+            (CtbAddrInRs % slice->PicWidthInCtbsY == 1 ||
+                (CtbAddrInRs > 1 &&
+                pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]] !=
+                                        pps->TileId[CtbAddrInTs]))) {
+            VDBG(hevc, "storage process for cabac context");
+            storage_process_for_cabac_context(StatCoeff);
+        }
+
         end_of_slice_segment_flag = cabac_dec_terminate(d);
         VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
         bits_vec_dump(v);
         CtbAddrInTs ++;
         CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
-        VDBG(hevc,
-             "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
-             "pps->CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
+        VDBG(hevc, "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
+             "CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
              "TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]] %d",
              CtbAddrInTs, pps->TileId[CtbAddrInTs],
              pps->CtbAddrRsToTs[CtbAddrInRs - 1],
@@ -7007,7 +7042,6 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             cabac_dec_reset(d);
             // int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
 
-            // cabac_init_models(slice_qpy, 0);
         }
     } while (!end_of_slice_segment_flag);
     cabac_dec_free(d);

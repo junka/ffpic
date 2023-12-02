@@ -779,7 +779,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                 }
 
                 if (predModeIntra == 10 && cIdx == 0 && nTbS < 32 &&
-                    disableIntraBoundaryFilter == 0) {
+                    disableIntraBoundaryFilter == 0 && y == 0) {
                     DST(y, x) = clip3(0, (1 << (bitdepth)) - 1,
                                       left[y] + ((top[x] - top[-1]) >> 1));
                 }

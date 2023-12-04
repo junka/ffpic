@@ -1199,14 +1199,6 @@ struct cross_comp_pred {
     uint32_t ResScaleVal[3];
 };
 
-struct tu {
-    int x0;
-    int y0;
-    int nTbS;
-    // int qpy;
-    int depth;
-    uint8_t split_transform_flag;
-};
 
 struct trans_tree {
     int xT0;
@@ -1222,7 +1214,6 @@ struct trans_tree {
     int16_t TransCoeffLevel[3][32][32]; // 3 for color index, 0 for Y, 1 for Cb,
                                         // 2 for Cr
     int tu_num;
-    struct tu tus[64];
 };
 
 
@@ -1305,6 +1296,7 @@ struct cu {
     int x0;
     int y0;
     int nCbS;
+    int log2CbSize;
     struct cu_extension ext[64][64];
 
     struct predication_unit pu[8][8];

@@ -15,6 +15,7 @@ enum bits_order {
 };
 
 struct bits_vec {
+    uint8_t *buff;
     uint8_t *start;     /* bitstream start position */
     uint8_t *ptr;       /* current byte pointer */
     uint8_t offset;     /* bits left in a byte for current reader */

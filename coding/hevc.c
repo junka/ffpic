@@ -4431,18 +4431,20 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
     int16_t top_default[65] = {0};
     int16_t *top = top_default + 1;
     int16_t *left = left_default;
-    int16_t *dst = (cIdx == 0) ? p->Y: (cIdx == 1 ? p->U : p->V);
+    int16_t *dst = (cIdx == 0) ? p->Y: ((cIdx == 1) ? p->U : p->V);
     int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
 
     int xTbY = (cIdx == 0) ? xTbCmp : xTbCmp * slice->SubWidthC;
     int yTbY = (cIdx == 0) ? yTbCmp : yTbCmp * slice->SubHeightC;
-    VDBG(hevc, "intra_sample_prediction %d (%d, %d), (%d, %d) %d", predModeIntra,
-         xTbCmp, yTbCmp, xTbY, yTbY, nTbS);
+    VDBG(hevc, "intra_sample_prediction %d (%d, %d), (%d, %d) %d",
+         predModeIntra, xTbCmp, yTbCmp, xTbY, yTbY, nTbS);
+    int yNbCmp = yTbCmp - 1;
+    int yNbY = (cIdx == 0) ? yNbCmp : yNbCmp * slice->SubHeightC;
+    int xNbCmp;
+    int xNbY;
     for (int x = -1; x < nTbS * 2; x++) {
-        int xNbCmp = xTbCmp + x;
-        int yNbCmp = yTbCmp - 1;
-        int xNbY = (cIdx == 0) ? xNbCmp : xNbCmp * slice->SubWidthC;
-        int yNbY = (cIdx == 0) ? yNbCmp : yNbCmp * slice->SubHeightC;
+        xNbCmp = xTbCmp + x;
+        xNbY = (cIdx == 0) ? xNbCmp : xNbCmp * slice->SubWidthC;
         bool availableN = process_zscan_order_block_availablity(
             slice, hps, xTbY, yTbY, xNbY, yNbY);
 
@@ -4455,16 +4457,16 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
             unavaible ++;
             unavaibleT[x] = 1;
         } else {
-            // VDBG(hevc, "assign top (%d, %d) %d", xNbCmp, yNbCmp,
-            //     dst[xNbCmp + yNbCmp * stride]);
+            VDBG(hevc, "assign top cIdx %d (%d, %d) %d", cIdx, xNbCmp, yNbCmp,
+                 dst[xNbCmp + yNbCmp * stride]);
             top[x] = dst[xNbCmp + yNbCmp*stride];
         }
     }
+    xNbCmp = xTbCmp - 1;
+    xNbY = (cIdx == 0) ? xNbCmp : xNbCmp * slice->SubWidthC;
     for (int y = 0; y < nTbS*2; y++) {
-        int xNbCmp = xTbCmp - 1;
-        int yNbCmp = yTbCmp + y;
-        int xNbY = (cIdx == 0) ? xNbCmp : xNbCmp * slice->SubWidthC;
-        int yNbY = (cIdx == 0) ? yNbCmp : yNbCmp * slice->SubHeightC;
+        yNbCmp = yTbCmp + y;
+        yNbY = (cIdx == 0) ? yNbCmp : yNbCmp * slice->SubHeightC;
         bool availableN = process_zscan_order_block_availablity(
             slice, hps, xTbY, yTbY, xNbY, yNbY);
         // VDBG(hevc, "nTbS %d, xNbY yNbY(%d, %d), aval %d", nTbS, xNbY, yNbY,
@@ -4478,8 +4480,8 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
             unavaible++;
             unavaibleL[y] = 1;
         } else {
-            // VDBG(hevc, "assign left (%d, %d) %d", xNbCmp, yNbCmp,
-            //         dst[xNbCmp + yNbCmp * stride]);
+            VDBG(hevc, "assign left (%d, %d) %d", xNbCmp, yNbCmp,
+                     dst[xNbCmp + yNbCmp * stride]);
             left[y] = dst[xNbCmp + yNbCmp * stride];
         }
     }
@@ -5904,11 +5906,11 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
                                                 [y0 + yC - cu->y0];
                     }
                 }
-                VINFO(hevc, "predModeIntra %d TU (%d, %d) %d log2TrafoSize %d",
-                      predModeIntra, x0 + xC, y0 + yC,
-                      tt->TransCoeffLevel[cIdx][x0 + xC - cu->x0]
-                                         [y0 + yC - cu->y0],
-                      log2TrafoSize);
+                // VINFO(hevc, "predModeIntra %d TU (%d, %d) %d log2TrafoSize %d",
+                //       predModeIntra, x0 + xC, y0 + yC,
+                //       tt->TransCoeffLevel[cIdx][x0 + xC - cu->x0]
+                //                          [y0 + yC - cu->y0],
+                //       log2TrafoSize);
                 numSigCoeff++;
             }
         }
@@ -7130,7 +7132,10 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     p.split_transform_flag = calloc(PicWidthInTbsY * PicHeightInTbsY, sizeof(uint8_t));
     parse_slice_segment_data(v, &hslice, hps, SliceAddrRs, &p);
-    rbsp_trailing_bits(v);
+    bits_vec_dump(v);
+    if (!bits_vec_aligned(v)) {
+        rbsp_trailing_bits(v);
+    }
 
     // YUV420_to_BGRA32(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2,
     //                  Y, U, V, y_stride, uv_stride, width, height);

@@ -10,6 +10,7 @@ bits_vec_alloc(uint8_t *buff, int len, uint8_t msb)
 {
     struct bits_vec *vec = (struct bits_vec *)malloc(sizeof(struct bits_vec));
     vec->start = vec->ptr = buff;
+    vec->buff = buff;
     vec->offset = 0;
     vec->len = len;
     vec->msb = msb;
@@ -19,8 +20,9 @@ bits_vec_alloc(uint8_t *buff, int len, uint8_t msb)
 void
 bits_vec_free(struct bits_vec *v)
 {
-    if (v->start)
-        free(v->start);
+    if (v->buff) {
+        free(v->buff);
+    }
     free(v);
 }
 

@@ -3233,7 +3233,8 @@ static struct sao *parse_sao(cabac_dec *d,
                             }
                             VDBG(hevc, "sao_offset_sign %d", sao_offset_sign[cIdx][i]);
                         }
-                        sao_band_position[cIdx] = CABAC_FL(d, 5);
+                        sao_band_position[cIdx] = CABAC_FL(d, (1<<5)-1);
+                        VDBG(hevc, "sao_band_position %d", sao_band_position[cIdx]);
                     } else {
                         if (cIdx == 0) {
                             sao_eo_class_luma = CABAC_FL(d, (1 << 2) -1);

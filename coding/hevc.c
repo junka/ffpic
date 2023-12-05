@@ -6996,7 +6996,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     bool first_ctu_in_tile = true, first_ctu_in_row = true, first_ctu_in_slice_segment = true;
     do {
         // see 7-55, 7-56, but slice->entry_point_offset is alreay accumlated
-        int firstByte = (i > 0) ? slice->entry_point_offset[i]: 0;
+        int firstByte = (i > 0) ? slice->entry_point_offset[i-1]: 0;
         int lastByte = (i < slice->num_entry_point_offsets) ? (slice->entry_point_offset[i] - firstByte): v->len;
         // bits_vec_dump(v);
         VDBG(hevc, "CtbAddrInTs %u, CtbAddrInRs %u, TileId %d", CtbAddrInTs,
@@ -7054,11 +7054,12 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 
             assert(end_of_subset_one_bit == 1);
             bits_vec_dump(v);
+            VDBG(hevc,"firstByte %d, lastByte %d, len %zu", firstByte, lastByte, (v->ptr - v->start));
 
-            cabac_dec_reset(d);
-            // end of entry_point_offset
             assert(lastByte == v->ptr - v->start);
-            // int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
+            cabac_dec_reset(d);
+            i ++;
+            // end of entry_point_offset
 
         }
     } while (!end_of_slice_segment_flag);

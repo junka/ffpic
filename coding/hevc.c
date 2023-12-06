@@ -7096,9 +7096,9 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     int height = ((hps->sps->pic_height_in_luma_samples + 3 )>>2)<<2;
     int y_stride = ((width + 3) >> 2) << 2;
     int uv_stride = y_stride >> 1;
-    int16_t *Y = malloc(height * y_stride);
-    int16_t *U = malloc(height * uv_stride);
-    int16_t *V = malloc(height * uv_stride);
+    int16_t *Y = malloc(height * y_stride * 2);
+    int16_t *U = malloc(height * uv_stride * 2);
+    int16_t *V = malloc(height * uv_stride * 2);
     struct picture p = {
         .Y = Y,
         .U = U,

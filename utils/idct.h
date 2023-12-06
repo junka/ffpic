@@ -5,8 +5,11 @@
 extern "C" {
 #endif
 #include <stdint.h>
+#include <stdbool.h>
 
 void idct_4x4(const int16_t *in, int16_t *out);
+
+void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp);
 
 void idct_8x8(int16_t in[64], int16_t *out, int stride);
 

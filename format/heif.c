@@ -264,7 +264,7 @@ HEIF_load(const char *filename)
     p->pixels = malloc(p->width * p->height * 32);
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    decode_items(h, f, &p->pixels);
+    decode_items(h, f, (uint8_t **)&p->pixels);
 
     fclose(f);
 

@@ -3,7 +3,58 @@
 #include "utils.h"
 #include "idct.h"
 
+#if 1
+// got from hevc spec 8.6.4.2
+void idct_1d_4(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, int bdShift)
+{
+    const int8_t transMatrix[4][4] = {
+    {29, 55, 74, 84},
+    {74, 74, 0, -74},
+    {84, -29, -74, 55},
+    {55, -84, 74, -29}
+    };
 
+    int last_nz = 0;
+    for (int i = 3; i >= 0; i--) {
+        if (in[i]) {
+            last_nz = i;
+            break;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        int tmp = 0;
+        for (int j = 0; j <= last_nz; j++) {
+            tmp += transMatrix[j][i] * in[j];
+        }
+        out[i] = clip3(mincoeff, maxcoeff, (tmp + (bdShift - 1)) >> bdShift);
+    }
+}
+// hevc spec 8.6.4.1
+void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp)
+{
+
+    int bdShift = MAX(20 - bitdepth, (epp ? 11 : 0));
+    int mincoeff = -(1 << (epp ? MAX(15, bitdepth + 6) : 15));
+    int maxcoeff = (1 << (epp ? MAX(15, bitdepth + 6) : 15)) - 1;
+    int16_t tmp[4];
+    int16_t e[4][4];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            tmp[j] = in[i + j * 4];
+        }
+        idct_1d_4(tmp, e[i], mincoeff, maxcoeff, 7);
+    }
+    for (int j = 0; j < 4; j ++) {
+        for (int i = 0; i < 4; i ++) {
+            tmp[i] = e[i][j];
+        }
+        idct_1d_4(tmp, out + j * 4, mincoeff, maxcoeff, bdShift);
+    }
+}
+#endif
+
+#if 1
+// got from webp spec
 void idct_4x4(const int16_t *in, int16_t *out)
 {
     static const int c1 = 20091;
@@ -35,7 +86,7 @@ void idct_4x4(const int16_t *in, int16_t *out)
         out[4 * i + 2] = (a1 - a2 + 4) >> 3;
     }
 }
-
+#endif
 #if 0
 static inline uint8_t
 descale_and_clamp(int x, int shift)

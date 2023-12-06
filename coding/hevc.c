@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "bitstream.h"
+#include "idct.h"
 #include "vlog.h"
 #include "utils.h"
 #include "hevc.h"
@@ -3715,7 +3716,7 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
     int bitdepth = (cIdx == 0) ? BitDepthY : BitDepthC;
     struct sps_range_extension *sre = &sps->sps_range_ext;
-    int bdShift = MAX(20 - bitdepth,(sps->sps_range_ext.extended_precision_processing_flag ? 11 : 0));
+    int bdShift = MAX(20 - bitdepth,(sre->extended_precision_processing_flag ? 11 : 0));
 
     // see 7-27, 7-30
     int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15));
@@ -3731,6 +3732,8 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     int trType = 0;
     if (get_CuPredMode(slice, p, xTbY, yTbY) == MODE_INTRA && nTbS == 4 && cIdx == 0) {
         trType = 1;
+        idct_4x4_hevc(d, r, BitDepthY, sre->extended_precision_processing_flag);
+        return 0;
     }
     VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
          coeffMin, coeffMax);
@@ -3739,6 +3742,7 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     int e[32];
     int16_t tmp[32];
     int16_t g[32][32];
+
     for (int x = 0; x < nTbS; x++) {
         for (int y = 0; y < nTbS; y++) {
             tmp[y] = d[x+y*nTbS];

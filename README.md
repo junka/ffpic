@@ -1,10 +1,16 @@
 ### For on-hands learning, with no third-party lib dependency
 
+For all kind of images, we treat the data as two parts. ```format meta``` and ```raw coded data```.
+The format meta typically is a file header or mixed with raw coded data in certain structure.
+The raw coded data is usualy data that has been quantized, transformed, and entropy coded.
+
+There is no secret in all the image compression tech. With knowledge about the above two parts, we can decode a image all by ourself.
+
 We should learn the picture format following the order:
 ```
-bmp -> png -> jpeg -> webp
+bmp -> png -> jpeg -> webp -> heif
 ```
-if you would like to know gif/pnm/tiff/tga, this could be learned before jpeg.
+if you would like to know gif/pnm/tiff/tga, this could be learned before jpeg. These raw data are not compressed-coded.
 
 ### FFPic Layers
 
@@ -40,6 +46,7 @@ supported file formart is:
 |  ICO  |    y     |        icon bitmap image         |
 |  EXR  |    y     |          OpenEXR image           |
 | WEBP  |    y     |         WEBP lossy image         |
+| HEIF  |    y     |         heif/hevc image          |
 
 [Format reference](http://www.martinreddy.net/gfx/2d-hi.html)
 
@@ -47,8 +54,9 @@ supported file formart is:
 Tips on display:
 after decoding, usually we get rgb data from least significant byte, But
 for sdl display, the data need to be  ```BGRA``` from least significant byte.
-
 So, a reorder is need for display.
+
+Or we can use YUV data to display directly via sdl api.
 
 ### Samples
 

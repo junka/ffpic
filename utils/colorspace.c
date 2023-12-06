@@ -110,3 +110,42 @@ void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
         p2 = p - pitch + 16 * 4 + right_space;
     }
 }
+
+void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int mbrows,
+                      int mbcols, int ctbsize) {
+    uint8_t *p = ptr, *p2 = ptr;
+    int width = mbcols * ctbsize;
+    int right_space = pitch - width * 4;
+    int16_t *Y, *U, *V;
+    int16_t yy, u, v;
+    uint8_t r, g, b;
+
+    for (int y = 0; y < mbrows; y++) {
+        for (int x = 0; x < mbcols; x++) {
+            Y = yout + y_stride * y * ctbsize + x * ctbsize;
+            U = uout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
+            V = vout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
+            p = p2;
+            for (int i = 0; i < ctbsize; i++) {
+                if (i == 0) {
+                    p2 = p + ctbsize * 4;
+                }
+                for (int j = 0; j < ctbsize; j++) {
+                    yy = Y[i * y_stride + j] - ctbsize;
+                    u = U[(i / 2) * uv_stride + (j / 2)] - 128;
+                    v = V[(i / 2) * uv_stride + (j / 2)] - 128;
+                    r = clamp(yy + 1.4075 * v, 255);
+                    g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
+                    b = clamp(yy + 1.779 * u, 255);
+                    p[4 * j] = b;
+                    p[4 * j + 1] = g;
+                    p[4 * j + 2] = r;
+                    p[4 * j + 3] = 0xFF;
+                }
+                p += pitch;
+            }
+        }
+        p2 = p - pitch + ctbsize * 4 + right_space;
+    }
+}

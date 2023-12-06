@@ -11,6 +11,11 @@ void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *Cb,
 void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
                       uint8_t *vout, int y_stride, int uv_stride, int mbrows,
                       int mbcols);
+
+void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
+                            int16_t *uout, int16_t *vout, int y_stride,
+                            int uv_stride, int mbrows, int mbcols, int ctbsize);
+
 #ifdef __cplusplus
 }
 #endif

@@ -7137,8 +7137,11 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         rbsp_trailing_bits(v);
     }
 
-    // YUV420_to_BGRA32(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2,
-    //                  Y, U, V, y_stride, uv_stride, width, height);
+    YUV420_to_BGRA32_16bit(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, Y, U,
+                           V, y_stride, uv_stride,
+                           divceil(height, (1 << hslice.slice->CtbLog2SizeY)),
+                           divceil(width, (1 << hslice.slice->CtbLog2SizeY)),
+                           1 << hslice.slice->CtbLog2SizeY);
 }
 
 struct hevc_param_set hps;

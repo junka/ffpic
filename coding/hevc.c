@@ -13,7 +13,7 @@
 #include "predict.h"
 #include "colorspace.h"
 
-VLOG_REGISTER(hevc, DEBUG)
+VLOG_REGISTER(hevc, INFO)
 
 struct picture {
     int16_t *Y;
@@ -3626,7 +3626,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
             }
         }
     }
-
+#ifndef NDEBUG
     VDBG(hevc, "scale_transform_coefficients");
     for (int j = 0; j < nTbS; j++) {
         for (int i = 0; i < nTbS; i++) {
@@ -3634,6 +3634,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
         }
         vlog(VLOG_DEBUG, vlog_hevc,"\n");
     }
+#endif
 }
 
 // see 8.6.4.2
@@ -3700,12 +3701,7 @@ static void transformation(int nTbS, int trType, int16_t *x, int *y) {
             y[i] = 0;
             for (int j = 0; j <= last_nz; j++) {
                 y[i] += transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i] * x[j];
-                // fprintf(vlog_get_stream(), "(j %d, i %d: %d * %d)",
-                //         (1 << (5 - log2floor(nTbS)))* j
-                //             , i, transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i],
-                //         x[j]);
             }
-            // fprintf(vlog_get_stream(), "%d\n", y[i]);
         }
     }
 }
@@ -3746,22 +3742,13 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     for (int x = 0; x < nTbS; x++) {
         for (int y = 0; y < nTbS; y++) {
             tmp[y] = d[x+y*nTbS];
-            // fprintf(vlog_get_stream(), " %d", tmp[y]);
         }
-        // fprintf(vlog_get_stream(), "\n");
         // invoke 8.6.4.2
         transformation(nTbS, trType, tmp, e);
         for (int y = 0; y < nTbS; y++) {
             g[x][y] = clip3(coeffMin, coeffMax, (e[y]+64)>>7);
         }
     }
-    // VDBG(hevc, "transform DTCV %d ", nTbS);
-    // for (int j = 0; j < nTbS; j++) {
-    //     for (int i = 0; i < nTbS; i++) {
-    //         fprintf(vlog_get_stream(), " %d", g[i][j]);
-    //     }
-    //     fprintf(vlog_get_stream(), "\n");
-    // }
 
     // Each (horizontal) row of the resulting array g[x][y] is transformed to
     // r[x][y] by invoking the one-dimensional transformation
@@ -3769,9 +3756,7 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
         int out[32];
         for (int x = 0; x < nTbS; x++) {
             tmp[x] = g[x][y];
-            // fprintf(vlog_get_stream(), " %d", tmp[x]);
         }
-        // fprintf(vlog_get_stream(), "\n");
         // invoke 8.6.4.2
         transformation(nTbS, trType, tmp, out);
         for (int x = 0; x < nTbS; x++) {
@@ -4113,15 +4098,7 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
         //              (r[x + y * nTbS] + (1 << (bdShift - 1))) >> bdShift;
         //      }
         //  }
-#if 0
-        VDBG(hevc, "scale_and_transform %d ", nTbS);
-        for (int j = 0; j < nTbS; j++) {
-            for (int i = 0; i < nTbS; i++) {
-                fprintf(vlog_get_stream(), " %d", r[i + j * nTbS]);
-            }
-            fprintf(vlog_get_stream(), "\n");
-        }
-#endif
+
     }
 
     return 0;
@@ -4172,15 +4149,17 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
         }
     } else {
         VDBG(hevc, "unavaibleL");
+#ifndef NDEBUG
         for (int i = 0; i < 2 * nTbS; i++) {
-            fprintf(vlog_get_stream(), "%x ", unavaibleL[i]);
+            vlog(VLOG_DEBUG, vlog_hevc, "%x ", unavaibleL[i]);
         }
-        fprintf(vlog_get_stream(), "\n");
+        vlog(VLOG_DEBUG, vlog_hevc, "\n");
         VDBG(hevc, "unavaibleT: %x", unavaibleT[-1]);
         for (int i = 0; i < 2 * nTbS; i++) {
-            fprintf(vlog_get_stream(), "%x ", unavaibleT[i]);
+            vlog(VLOG_DEBUG, vlog_hevc, "%x ", unavaibleT[i]);
         }
-        fprintf(vlog_get_stream(), "\n");
+        vlog(VLOG_DEBUG, vlog_hevc, "\n");
+#endif
         if (unavaibleL[nTbS * 2 - 1]) {
             int y;
             for (y = nTbS*2-1; y >= 0; y--) {
@@ -4215,16 +4194,18 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
     }
     // now all samples are marked as "available"    VDBG(hevc, "left: %d", 2 *
     // nTbS);
+#ifndef NDEBUG
     VDBG(hevc, "left: %d", 2 * nTbS);
     for (int i = 0; i < 2 * nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", left[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", left[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
     VDBG(hevc, "top: %x", top[-1]);
     for (int i = 0; i < 2 * nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", top[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", top[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
+#endif
 }
 
 //8.4.4.2.3
@@ -4290,16 +4271,18 @@ filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int
             memcpy(left, fleft, nTbS * 2 * sizeof(int16_t));
         }
     }
+#ifndef NDEBUG
     VDBG(hevc, "filtering left: ");
     for (int i = 0; i < 2*nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", left[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", left[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
     VDBG(hevc, "filtering top: %x", top[-1]);
     for (int i = 0; i < 2*nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", top[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", top[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
+#endif
 }
 
 // see 8.4.4.2.7
@@ -4485,16 +4468,18 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
             left[y] = dst[xNbCmp + yNbCmp * stride];
         }
     }
+#ifndef NDEBUG
     VDBG(hevc, "from image left: %d", 2 * nTbS);
     for (int i = 0; i < 2 * nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", left[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", left[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
     VDBG(hevc, "from image top: %x", top[-1]);
     for (int i = 0; i < 2 * nTbS; i++) {
-        fprintf(vlog_get_stream(), "%x ", top[i]);
+        vlog(VLOG_DEBUG, vlog_hevc, "%x ", top[i]);
     }
-    fprintf(vlog_get_stream(), "\n");
+    vlog(VLOG_DEBUG, vlog_hevc, "\n");
+#endif
     if (unavaible > 0 && predModeIntra != INTRA_SINGLE) {
         // 8.4.4.2.2 invoked
         reference_sample_substitution(sps, left, top, nTbS, cIdx, unavaible,
@@ -4526,14 +4511,14 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
                            disableIntraBoundaryFilter,
                            sps->bit_depth_luma_minus8 + 8);
     }
-#if 1
+#ifndef NDEBUG
     VDBG(hevc, "predication %d (%d, %d)-(%d, %d) %d", nTbS, xTbCmp, yTbCmp,
          xTbY, yTbY, predModeIntra);
     for (int j = 0; j < nTbS; j++) {
         for (int i = 0; i < nTbS; i++) {
-            fprintf(vlog_get_stream(), " %x", predSamples[i + j * nTbS]);
+            vlog(VLOG_DEBUG, vlog_hevc, " %x", predSamples[i + j * nTbS]);
         }
-        fprintf(vlog_get_stream(), "\n");
+        vlog(VLOG_DEBUG, vlog_hevc, "\n");
     }
 #endif
 }
@@ -4659,14 +4644,16 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                 // int16_t recSamples[64*64]; // reconstructed sample array as output
                 //add predSamples and resSamples to recSamples
                 construct_pic_pior_to_filtering(hps->sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, dst, stride);
+#ifndef NDEBUG
                 VDBG(hevc, "construct_pic_pior_to_filtering %d ", nTbS);
                 for (int j = 0; j < nTbS; j++) {
                     for (int i = 0; i < nTbS; i++) {
-                        fprintf(vlog_get_stream(), " %x",
-                                dst[xTb0 + i + (yTb0 + yTbOffset + j) * stride]);
+                        vlog(VLOG_DEBUG, vlog_hevc, " %x",
+                             dst[xTb0 + i + (yTb0 + yTbOffset + j) * stride]);
                     }
-                    fprintf(vlog_get_stream(), "\n");
+                    vlog(VLOG_DEBUG, vlog_hevc, "\n");
                 }
+#endif
             }
         }
     }
@@ -4936,13 +4923,6 @@ static void decode_cu_coded_intra_prediction_mode(
             pps->pps_scc_ext.residual_adaptive_colour_transform_enabled_flag ? 2 : 0,
             p);
 
-        // for (int j = 0; j < nCbS; j++) {
-        //     for (int i = 0; i < nCbS; i++) {
-        //         fprintf(vlog_get_stream(), " %d",
-        //                 resSamplesL[i + j * 64]);
-        //     }
-        //     fprintf(vlog_get_stream(), "\n");
-        // }
     } else if (!get_pcm_flag(slice, p, xCb, yCb) && !cu->palette_mode_flag &&
                cu->IntraSplitFlag == 1) {
         VDBG(hevc, "decode TU with IntraSplitFlag");
@@ -6049,13 +6029,6 @@ static void parse_transform_unit(cabac_dec *d, struct cu *cu,
         }
     }
 
-    // for (int j = 0; j < (1 << log2TrafoSize); j++) {
-    //     for (int i = 0; i < (1 << log2TrafoSize); i++) {
-    //         fprintf(vlog_get_stream(), " %d",
-    //                 dst[i + j * (1 << log2TrafoSize)]);
-    //     }
-    //     fprintf(vlog_get_stream(), "\n");
-    // }
 }
 
 /* see table 9-22 */
@@ -6756,14 +6729,7 @@ static struct cu *parse_coding_unit(cabac_dec *d, struct ctu *ctu,
                                      slice->ChromaArrayType != 0 ? 1 : 0,
                                      slice->ChromaArrayType != 0 ? 1 : 0);
                 VDBG(hevc, "CU has tu num %d", cu->tt.tu_num);
-#if 0
-                for (int i = 0; i < 64; i ++) {
-                    for (int j = 0; j < 64; j++) {
-                        fprintf(vlog_get_stream(), "%d ", cu->tt.TransCoeffLevel[0][i][j]);
-                    }
-                    fprintf(vlog_get_stream(), "\n");
-                }
-#endif
+
             }
     }
     return cu;
@@ -6874,9 +6840,7 @@ init_zscan_array(struct slice_segment_header *slice, struct sps *sps, int *CtbAd
                 p += (m & x ? m * m : 0) + (m & y ? 2 * m * m : 0);
             }
             MinTbAddrZs[x][y] += p;
-            // fprintf(vlog_get_stream(), "%d ", MinTbAddrZs[x][y]);
         }
-        // fprintf(vlog_get_stream(), "\n");
     }
     return MinTbAddrZs;
 }

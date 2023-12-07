@@ -3,6 +3,7 @@
 
 #include "file.h"
 #include "vlog.h"
+#include "accl.h"
 
 int main(int argc, const char *argv[])
 {
@@ -16,6 +17,7 @@ int main(int argc, const char *argv[])
     vlog_init();
     vlog_openlog_stream(logf);
 
+    accl_ops_init();
     file_ops_init();
     struct file_ops *ops = file_probe(filename);
     if (ops == NULL) {

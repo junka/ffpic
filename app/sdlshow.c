@@ -8,6 +8,7 @@
 #include "file.h"
 #include "gif.h"
 #include "vlog.h"
+#include "accl.h"
 
 #define SCREEN_WIDTH   640
 #define SCREEN_HEIGHT  480
@@ -31,6 +32,7 @@ main(int argc, const char *argv[])
     vlog_openlog_stream(logf);
 
     file_ops_init();
+    accl_ops_init();
     sdl_screen_register();
     struct file_ops *ops = file_probe(filename);
     if (ops == NULL) {

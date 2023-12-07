@@ -23,13 +23,18 @@ endif()
 # Enable generators like Xcode and Visual Studio to place projects in folders.
 set_property(GLOBAL PROPERTY USE_FOLDERS TRUE)
 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2)
 
 list(APPEND FFPIC_DIRS
   "${FFPIC_ROOT}/display"
   "${FFPIC_ROOT}/format"
   "${FFPIC_ROOT}/coding"
-  "${FFPIC_ROOT}/utils")
+  "${FFPIC_ROOT}/utils"
+  "${FFPIC_ROOT}/arch"
+  "${FFPIC_ROOT}/arch/x86")
 
 list(APPEND FFPIC_DISPLAY
   "${FFPIC_ROOT}/display/bmpwriter.c"
@@ -77,17 +82,21 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/bpg.c"
   "${FFPIC_ROOT}/format/predict.c")
 
+list(APPEND FFPIC_SIMD
+  "${FFPIC_ROOT}/arch/accl.c"
+  "${FFPIC_ROOT}/arch/x86/avx.c")
+
 find_package(SDL2)
 find_library(MATH_LIBRARY m)
 
-add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING})
+add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING} ${FFPIC_SIMD})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
 # target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c")
-add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING})
+add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_SIMD})
 
-add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING})
+add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_SIMD})
 
 target_link_libraries(sdlshow ffpic m)
 target_link_libraries(picinfo m)

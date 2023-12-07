@@ -1,0 +1,28 @@
+#ifndef __ACCL_H__
+#define __ACCL_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+#include <sys/queue.h>
+
+typedef void (*accl_idct)(int16_t *in, int16_t *out, int bitdepth);
+
+struct accl_ops {
+    accl_idct idct_4x4;
+    TAILQ_ENTRY(accl_ops) next;
+};
+
+void accl_ops_register(struct accl_ops *ops);
+
+void accl_ops_init(void);
+
+struct accl_ops *accl_first_available(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

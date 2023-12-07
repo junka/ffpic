@@ -13,6 +13,7 @@
 #include "cabac.h"
 #include "predict.h"
 #include "colorspace.h"
+#include "accl.h"
 
 VLOG_REGISTER(hevc, INFO)
 
@@ -3732,7 +3733,13 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     int trType = 0;
     if (get_CuPredMode(slice, p, xTbY, yTbY) == MODE_INTRA && nTbS == 4 && cIdx == 0) {
         trType = 1;
-        idct_4x4_hevc(d, r, BitDepthY, sre->extended_precision_processing_flag);
+        struct accl_ops *ops = accl_first_available();
+        if (ops) {
+            ops->idct_4x4(d, r, BitDepthY);
+        } else {
+            idct_4x4_hevc(d, r, BitDepthY,
+                          sre->extended_precision_processing_flag);
+        }
         return 0;
     }
     VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,

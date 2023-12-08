@@ -84,6 +84,7 @@ list(APPEND FFPIC_FORMART
 
 list(APPEND FFPIC_SIMD
   "${FFPIC_ROOT}/arch/accl.c"
+  "${FFPIC_ROOT}/arch/x86/sse2.c"
   "${FFPIC_ROOT}/arch/x86/avx.c")
 
 find_package(SDL2)

@@ -13,7 +13,7 @@ static inline __m256i clip_avx2(__m256i v, __m256i debias, int32_t shift) {
     return _mm256_srai_epi32(truncable, shift);
 }
 
-__m256i x86_idct_1d_4_avx2(const __m256i left, __m256i right, int shift) {
+__m256i x86_idct_1dx4_avx2(const __m256i left, __m256i right, int shift) {
     const __m256i debias = _mm256_set1_epi32((1 << (shift - 1)));
 
     // 64bits holds 4 elements 16bit val which can be taken as a row
@@ -90,13 +90,14 @@ static void x86_idct_4x4_avx2(int16_t *in, int16_t *out, int bitdepth)
         _mm256_load_si256((const __m256i *)transMatrix); // 16 * 16 = 256 bit size
     __m256i tranT = _mm256_load_si256((const __m256i *)transMatrixT);
     __m256i input = _mm256_load_si256((const __m256i *)in);
-    __m256i tmp = x86_idct_1d_4_avx2(tranT, input, 7);
-    __m256i ret = x86_idct_1d_4_avx2(tmp, tran, bdShift);
+    __m256i tmp = x86_idct_1dx4_avx2(tranT, input, 7);
+    __m256i ret = x86_idct_1dx4_avx2(tmp, tran, bdShift);
     _mm256_store_si256((__m256i *)out, ret);
 }
 
 struct accl_ops avx_accl = {
     .idct_4x4 = x86_idct_4x4_avx2,
+    .type = SIMD_TYPE_AVX2,
 };
 
 

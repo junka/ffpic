@@ -10,8 +10,14 @@ extern "C" {
 
 typedef void (*accl_idct)(int16_t *in, int16_t *out, int bitdepth);
 
+enum simd_type {
+    SIMD_TYPE_SSE2 = 1,
+    SIMD_TYPE_AVX2 = 2,
+};
+
 struct accl_ops {
     accl_idct idct_4x4;
+    enum simd_type type;
     TAILQ_ENTRY(accl_ops) next;
 };
 
@@ -20,6 +26,8 @@ void accl_ops_register(struct accl_ops *ops);
 void accl_ops_init(void);
 
 struct accl_ops *accl_first_available(void);
+
+struct accl_ops *accl_find(int type);
 
 #ifdef __cplusplus
 }

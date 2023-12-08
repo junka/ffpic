@@ -15,6 +15,7 @@
 #include "webp.h"
 #include "idct.h"
 #include "colorspace.h"
+#include "accl.h"
 
 VLOG_REGISTER(webp, DEBUG)
 
@@ -1137,6 +1138,8 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
 
     struct WEBP_decoder *d = &w->d[block->segment_id];
 
+    struct accl_ops* ops = accl_find(SIMD_TYPE_SSE2);
+
     int firstCoeff;
     const VP8BandProbas* const * ac_proba;
 
@@ -1176,7 +1179,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
             int ctx = top[block->x].ctx[x + 1] + l;
             const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
             if (nz > 1 || dst[0] != 0) {
-                idct_4x4(dst, dst);
+                ops ? ops->idct_4x4(dst, dst, 8) : idct_4x4(dst, dst);
             }
             dst += 16;
             l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
@@ -1192,7 +1195,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
                 int ctx = l + top[block->x].ctx[x + ch];
                 const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
                 if (nz > 1 || dst[0] != 0) {
-                    idct_4x4(dst, dst);
+                    ops ? ops->idct_4x4(dst, dst, 8) : idct_4x4(dst, dst);
                 }
                 dst += 16;
                 l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;

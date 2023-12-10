@@ -516,6 +516,7 @@ JPG_load(const char *filename)
     p->height = ((j->sof.height + 7) >> 3) << 3;
     p->depth = 32;
     p->pitch = ((p->width * 32 + 32 - 1) >> 5) << 2;
+    p->format = CS_PIXELFORMAT_RGB888;
     p->pixels = j->data;
 
     return p;

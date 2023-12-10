@@ -6,6 +6,7 @@
 
 #include "file.h"
 #include "tga.h"
+#include "colorspace.h"
 
 static int 
 TGA_probe(const char *filename)
@@ -162,6 +163,7 @@ TGA_load(const char *filename)
     }
     fclose(f);
     p->pixels = t->data;
+    p->format = CS_PIXELFORMAT_RGB888;
     return p;
 }
 

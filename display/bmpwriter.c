@@ -58,8 +58,7 @@ bmp_writer_init(const char* title, int w, int h)
 }
 
 int 
-bmp_writer_puts(void *buff, int left UNUSED, int top UNUSED, int width, int height, int depth, int pitch UNUSED,
-            uint32_t rmask UNUSED, uint32_t gmask UNUSED, uint32_t bmask UNUSED, uint32_t amask UNUSED)
+bmp_writer_puts(void *buff, int left UNUSED, int top UNUSED, int width, int height, int depth, int pitch UNUSED, int format UNUSED)
 {
 
     FILE *fd = bmp_pri.fp;

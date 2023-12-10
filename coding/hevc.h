@@ -924,6 +924,11 @@ struct sps {
     struct sps_scc_extension sps_scc_ext;
     // sps extension 4bits
     // rbsp tailling
+
+    int BitDepthY;
+    int BitDepthC;
+    int QpBdOffsetY;
+    int QpBdOffsetC;
 };
 
 
@@ -1097,8 +1102,6 @@ struct slice_segment_header {
 
     GUE(poc_msb_cycle_val);
 
-    // struct residual_coding rc[64][64];
-
     //Coding Tree Block
     int SubWidthC, SubHeightC;
 
@@ -1203,10 +1206,6 @@ struct cross_comp_pred {
 struct trans_tree {
     int xT0;
     int yT0;
-    // uint8_t split_transform_flag[3];
-    // uint32_t cbf_cb[3][32][32];
-    // uint32_t cbf_cr[3][32][32];
-    // uint32_t cbf_luma[3][32][32];
 
     int8_t transform_skip_flag[4][32][32];
     // see 7.4.9.10

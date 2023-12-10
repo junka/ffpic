@@ -13,6 +13,7 @@
 #include "byteorder.h"
 #include "basemedia.h"
 #include "bitstream.h"
+#include "colorspace.h"
 
 VLOG_REGISTER(heif, DEBUG);
 
@@ -264,6 +265,7 @@ HEIF_load(const char *filename)
     p->pixels = malloc(p->width * p->height * 32);
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    p->format = CS_PIXELFORMAT_RGB888;
     decode_items(h, f, (uint8_t **)&p->pixels);
 
     fclose(f);

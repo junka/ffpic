@@ -2,7 +2,9 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <assert.h>
 
+#include "colorspace.h"
 #include "file.h"
 #include "pnm.h"
 
@@ -294,12 +296,9 @@ PNM_load(const char *filename)
     fgetc(f);
     uint8_t v = m->pn.version - '0';
 
-    if (v == 7)
-    {
+    if (v == 7) {
         read_pam_attribe(m, f);
-    }
-    else
-    {
+    } else {
         // ascii format may get comments
         if(v == 1 || v == 2 || v ==3 ) {
             read_skip_comments_line(f);
@@ -319,11 +318,14 @@ PNM_load(const char *filename)
             m->color_size = read_int_till_delimeter(f);
         }
     }
+    assert(m->height != 0);
+    assert(m->width != 0);
     p->width = m->width;
     p->height = m->height;
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     m->data = malloc(p->pitch * p->height);
+    p->format = CS_PIXELFORMAT_RGB888;
 
     switch (v) {
         case 7:

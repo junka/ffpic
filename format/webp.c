@@ -1815,7 +1815,7 @@ static void
 vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 {
     struct macro_block *block;
-    
+
     int width = ((w->fi.width + 3) >> 2) << 2;
     int height = ((w->fi.height + 3) >> 2) << 2;
     int mbrows = (height + 15) >> 4;
@@ -1834,7 +1834,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     // one more struct for left of zero col
     struct context *top = calloc(mbcols, sizeof(struct context));
 
-    VDBG(webp, "rows %d, cols %d", mbrows, mbcols);
+    VDBG(webp, "rows %d, cols %d, y_stride %d", mbrows, mbcols, y_stride);
 
     int16_t coeffs[384]; // 384 coeffs = (16+4+4) * 4*4
 
@@ -2078,12 +2078,9 @@ WEBP_load(const char *filename)
     }
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    p->rmask = 0x00ff0000u;
-    p->gmask = 0x0000ff00u;
-    p->bmask = 0x000000ffu;
-    p->amask = 0xff000000u;
     VDBG(webp, "decoded with width %d, pitch %d\n", p->width, p->pitch);
     p->pixels = w->data;
+    p->format = CS_PIXELFORMAT_RGB888;
 
     return p;
 }

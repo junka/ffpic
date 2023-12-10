@@ -76,7 +76,7 @@ void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
                       uint8_t *vout, int y_stride, int uv_stride, int mbrows,
                       int mbcols) {
     uint8_t *p = ptr, *p2 = ptr;
-    int width = mbcols * 16;
+    int width = mbcols << 4;
     int right_space = pitch - width * 4;
     uint8_t *Y, *U, *V;
     int16_t yy, u, v;
@@ -84,14 +84,12 @@ void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
 
     for (int y = 0; y < mbrows; y++) {
         for (int x = 0; x < mbcols; x++) {
-            Y = yout + y_stride * y * 16 + x * 16;
-            U = uout + 8 * uv_stride * y + x * 8;
-            V = vout + 8 * uv_stride * y + x * 8;
+            Y = yout + (y_stride * y + x) * 16;
+            U = uout + 8 * (uv_stride * y + x);
+            V = vout + 8 * (uv_stride * y + x);
             p = p2;
+            p2 = p + 16 * 4;
             for (int i = 0; i < 16; i++) {
-                if (i == 0) {
-                    p2 = p + 16 * 4;
-                }
                 for (int j = 0; j < 16; j++) {
                     yy = Y[i * y_stride + j] - 16;
                     u = U[(i / 2) * uv_stride + (j / 2)] - 128;
@@ -127,10 +125,8 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uou
             U = uout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
             V = vout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
             p = p2;
+            p2 = p + ctbsize * 4;
             for (int i = 0; i < ctbsize; i++) {
-                if (i == 0) {
-                    p2 = p + ctbsize * 4;
-                }
                 for (int j = 0; j < ctbsize; j++) {
                     yy = Y[i * y_stride + j] - ctbsize;
                     u = U[(i / 2) * uv_stride + (j / 2)] - 128;
@@ -147,5 +143,208 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uou
             }
         }
         p2 = p - pitch + ctbsize * 4 + right_space;
+    }
+}
+
+uint32_t CS_MasksToPixelFormatEnum(int bpp, uint32_t rmask, uint32_t gmask,
+                                    uint32_t bmask, uint32_t amask) {
+    switch (bpp) {
+    case 1:
+        /* SDL defaults to MSB ordering */
+        return CS_PIXELFORMAT_INDEX1MSB;
+    case 4:
+        /* SDL defaults to MSB ordering */
+        return CS_PIXELFORMAT_INDEX4MSB;
+    case 8:
+        if (rmask == 0) {
+            return CS_PIXELFORMAT_INDEX8;
+        }
+        if (rmask == 0xE0 && gmask == 0x1C && bmask == 0x03 && amask == 0x00) {
+            return CS_PIXELFORMAT_RGB332;
+        }
+        break;
+    case 12:
+        if (rmask == 0) {
+            return CS_PIXELFORMAT_RGB444;
+        }
+        if (rmask == 0x0F00 && gmask == 0x00F0 && bmask == 0x000F &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_RGB444;
+        }
+        if (rmask == 0x000F && gmask == 0x00F0 && bmask == 0x0F00 &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_BGR444;
+        }
+        break;
+    case 15:
+        if (rmask == 0) {
+            return CS_PIXELFORMAT_RGB555;
+        }
+    /* fallthrough */
+    case 16:
+        if (rmask == 0) {
+            return CS_PIXELFORMAT_RGB565;
+        }
+        if (rmask == 0x7C00 && gmask == 0x03E0 && bmask == 0x001F &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_RGB555;
+        }
+        if (rmask == 0x001F && gmask == 0x03E0 && bmask == 0x7C00 &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_BGR555;
+        }
+        if (rmask == 0x0F00 && gmask == 0x00F0 && bmask == 0x000F &&
+            amask == 0xF000) {
+            return CS_PIXELFORMAT_ARGB4444;
+        }
+        if (rmask == 0xF000 && gmask == 0x0F00 && bmask == 0x00F0 &&
+            amask == 0x000F) {
+            return CS_PIXELFORMAT_RGBA4444;
+        }
+        if (rmask == 0x000F && gmask == 0x00F0 && bmask == 0x0F00 &&
+            amask == 0xF000) {
+            return CS_PIXELFORMAT_ABGR4444;
+        }
+        if (rmask == 0x00F0 && gmask == 0x0F00 && bmask == 0xF000 &&
+            amask == 0x000F) {
+            return CS_PIXELFORMAT_BGRA4444;
+        }
+        if (rmask == 0x7C00 && gmask == 0x03E0 && bmask == 0x001F &&
+            amask == 0x8000) {
+            return CS_PIXELFORMAT_ARGB1555;
+        }
+        if (rmask == 0xF800 && gmask == 0x07C0 && bmask == 0x003E &&
+            amask == 0x0001) {
+            return CS_PIXELFORMAT_RGBA5551;
+        }
+        if (rmask == 0x001F && gmask == 0x03E0 && bmask == 0x7C00 &&
+            amask == 0x8000) {
+            return CS_PIXELFORMAT_ABGR1555;
+        }
+        if (rmask == 0x003E && gmask == 0x07C0 && bmask == 0xF800 &&
+            amask == 0x0001) {
+            return CS_PIXELFORMAT_BGRA5551;
+        }
+        if (rmask == 0xF800 && gmask == 0x07E0 && bmask == 0x001F &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_RGB565;
+        }
+        if (rmask == 0x001F && gmask == 0x07E0 && bmask == 0xF800 &&
+            amask == 0x0000) {
+            return CS_PIXELFORMAT_BGR565;
+        }
+        if (rmask == 0x003F && gmask == 0x07C0 && bmask == 0xF800 &&
+            amask == 0x0000) {
+            /* Technically this would be BGR556, but Witek says this works in
+             * bug 3158 */
+            return CS_PIXELFORMAT_RGB565;
+        }
+        break;
+    case 24:
+        switch (rmask) {
+        case 0:
+        case 0x00FF0000:
+#if CS_BYTEORDER == CS_BIG_ENDIAN
+            return CS_PIXELFORMAT_RGB24;
+#else
+            return CS_PIXELFORMAT_BGR24;
+#endif
+        case 0x000000FF:
+#if CS_BYTEORDER == CS_BIG_ENDIAN
+            return CS_PIXELFORMAT_BGR24;
+#else
+            return CS_PIXELFORMAT_RGB24;
+#endif
+        }
+    case 32:
+        if (rmask == 0) {
+            return CS_PIXELFORMAT_RGB888;
+        }
+        if (rmask == 0x00FF0000 && gmask == 0x0000FF00 && bmask == 0x000000FF &&
+            amask == 0x00000000) {
+            return CS_PIXELFORMAT_RGB888;
+        }
+        if (rmask == 0xFF000000 && gmask == 0x00FF0000 && bmask == 0x0000FF00 &&
+            amask == 0x00000000) {
+            return CS_PIXELFORMAT_RGBX8888;
+        }
+        if (rmask == 0x000000FF && gmask == 0x0000FF00 && bmask == 0x00FF0000 &&
+            amask == 0x00000000) {
+            return CS_PIXELFORMAT_BGR888;
+        }
+        if (rmask == 0x0000FF00 && gmask == 0x00FF0000 && bmask == 0xFF000000 &&
+            amask == 0x00000000) {
+            return CS_PIXELFORMAT_BGRX8888;
+        }
+        if (rmask == 0x00FF0000 && gmask == 0x0000FF00 && bmask == 0x000000FF &&
+            amask == 0xFF000000) {
+            return CS_PIXELFORMAT_ARGB8888;
+        }
+        if (rmask == 0xFF000000 && gmask == 0x00FF0000 && bmask == 0x0000FF00 &&
+            amask == 0x000000FF) {
+            return CS_PIXELFORMAT_RGBA8888;
+        }
+        if (rmask == 0x000000FF && gmask == 0x0000FF00 && bmask == 0x00FF0000 &&
+            amask == 0xFF000000) {
+            return CS_PIXELFORMAT_ABGR8888;
+        }
+        if (rmask == 0x0000FF00 && gmask == 0x00FF0000 && bmask == 0xFF000000 &&
+            amask == 0x000000FF) {
+            return CS_PIXELFORMAT_BGRA8888;
+        }
+        if (rmask == 0x3FF00000 && gmask == 0x000FFC00 && bmask == 0x000003FF &&
+            amask == 0xC0000000) {
+            return CS_PIXELFORMAT_ARGB2101010;
+        }
+    }
+    return CS_PIXELFORMAT_UNKNOWN;
+}
+
+const char *CS_GetPixelFormatName(uint32_t format) {
+    switch (format) {
+#define CASE(X)                                                                \
+  case X:                                                                      \
+    return #X;
+        CASE(CS_PIXELFORMAT_INDEX1LSB)
+        CASE(CS_PIXELFORMAT_INDEX1MSB)
+        CASE(CS_PIXELFORMAT_INDEX4LSB)
+        CASE(CS_PIXELFORMAT_INDEX4MSB)
+        CASE(CS_PIXELFORMAT_INDEX8)
+        CASE(CS_PIXELFORMAT_RGB332)
+        CASE(CS_PIXELFORMAT_RGB444)
+        CASE(CS_PIXELFORMAT_BGR444)
+        CASE(CS_PIXELFORMAT_RGB555)
+        CASE(CS_PIXELFORMAT_BGR555)
+        CASE(CS_PIXELFORMAT_ARGB4444)
+        CASE(CS_PIXELFORMAT_RGBA4444)
+        CASE(CS_PIXELFORMAT_ABGR4444)
+        CASE(CS_PIXELFORMAT_BGRA4444)
+        CASE(CS_PIXELFORMAT_ARGB1555)
+        CASE(CS_PIXELFORMAT_RGBA5551)
+        CASE(CS_PIXELFORMAT_ABGR1555)
+        CASE(CS_PIXELFORMAT_BGRA5551)
+        CASE(CS_PIXELFORMAT_RGB565)
+        CASE(CS_PIXELFORMAT_BGR565)
+        CASE(CS_PIXELFORMAT_RGB24)
+        CASE(CS_PIXELFORMAT_BGR24)
+        CASE(CS_PIXELFORMAT_RGB888)
+        CASE(CS_PIXELFORMAT_RGBX8888)
+        CASE(CS_PIXELFORMAT_BGR888)
+        CASE(CS_PIXELFORMAT_BGRX8888)
+        CASE(CS_PIXELFORMAT_ARGB8888)
+        CASE(CS_PIXELFORMAT_RGBA8888)
+        CASE(CS_PIXELFORMAT_ABGR8888)
+        CASE(CS_PIXELFORMAT_BGRA8888)
+        CASE(CS_PIXELFORMAT_ARGB2101010)
+        CASE(CS_PIXELFORMAT_YV12)
+        CASE(CS_PIXELFORMAT_IYUV)
+        CASE(CS_PIXELFORMAT_YUY2)
+        CASE(CS_PIXELFORMAT_UYVY)
+        CASE(CS_PIXELFORMAT_YVYU)
+        CASE(CS_PIXELFORMAT_NV12)
+        CASE(CS_PIXELFORMAT_NV21)
+#undef CASE
+    default:
+        return "CS_PIXELFORMAT_UNKNOWN";
     }
 }

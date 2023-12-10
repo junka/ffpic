@@ -3,6 +3,7 @@
 #include <unistd.h> 
 #include <fcntl.h>
 
+#include "colorspace.h"
 #include "display.h"
 #include "sdl_screen.h"
 #include "file.h"
@@ -55,8 +56,7 @@ main(int argc, const char *argv[])
         top = top ? top : 360/2 - p->height/2;
         left = left ? left : 480 /2 - p->width/2;
     }
-    ret = display_show(d, p->pixels, left, top, p->width, p->height, p->depth,
-                 p->pitch, p->rmask, p->gmask, p->bmask, p->amask);
+    ret = display_show(d, p->pixels, left, top, p->width, p->height, p->depth, p->pitch, p->format);
     if (ret) {
         printf("fail to draw\n");
         goto quit;
@@ -70,7 +70,7 @@ main(int argc, const char *argv[])
                 display_show(d, g->graphics[i].image->data, g->graphics[i].image->image_dsc.left, 
                         g->graphics[i].image->image_dsc.top, g->graphics[i].image->image_dsc.width,
                         g->graphics[i].image->image_dsc.height, p->depth,
-                        (((g->graphics[i].image->image_dsc.width * p->depth + p->depth -1)>>5)<<2), 0, 0, 0, 0xFF);
+                        (((g->graphics[i].image->image_dsc.width * p->depth + p->depth -1)>>5)<<2), p->format);
             }
         }
     }

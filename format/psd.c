@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <arpa/inet.h>
 
+#include "colorspace.h"
 #include "file.h"
 #include "psd.h"
 #include "vlog.h"
@@ -316,6 +317,7 @@ PSD_load(const char* filename)
     p->width = ((s->h.width + 3) >> 2) << 2;
     p->height = s->h.height;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
+    p->format = CS_PIXELFORMAT_RGB888;
 
     read_color_mode_data(s, f);
 

@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
     struct display *d = display_get("bmpwriter");
     display_init(d, bmpfile, p->width, p->height);
     ret = display_show(d, p->pixels, left, top, p->width, p->height, p->depth,
-                 p->pitch, p->rmask, p->gmask, p->bmask, p->amask);
+                 p->pitch, p->format);
     if (ret) {
         printf("fail to save to bmp\n");
         goto quit;

@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "display.h"
+#include "utils.h"
 
 TAILQ_HEAD(device_list, display);
 
@@ -23,7 +24,7 @@ display_get(const char *name)
 int 
 display_init(struct display* d, const char* title, int w, int h)
 {
-    if (d->init)
+    if (LIKELY(d->init))
         d->init(title, w, h);
     return 0;
 }
@@ -31,18 +32,16 @@ display_init(struct display* d, const char* title, int w, int h)
 int 
 display_uninit(struct display* d)
 {
-    if (d->uninit)
+    if (LIKELY(d->uninit))
         d->uninit();
     return 0;
 }
 
-int 
-display_show(struct display* d, void *buff, int left, int top, 
-        int width, int height, int depth, int pitch, uint32_t rmask, 
-        uint32_t gmask, uint32_t bmask, uint32_t amask)
+int display_show(struct display *d, void *buff, int left, int top, int width,
+                 int height, int depth, int pitch, int format)
 {
-    if (d->draw_pixels)
-        d->draw_pixels(buff, left, top, width, height, depth, pitch, rmask, gmask, bmask, amask);
+    if (LIKELY(d->draw_pixels))
+        d->draw_pixels(buff, left, top, width, height, depth, pitch, format);
     return 0;
 }
 

@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <math.h>
 
+#include "colorspace.h"
 #include "exr.h"
 #include "file.h"
 #include "vlog.h"
@@ -238,6 +239,7 @@ EXR_load(const char* filename)
     fclose(f);
     free(offset);
     p->pixels = e->data;
+    p->format = CS_PIXELFORMAT_RGB888;
 
     return p;
 }

@@ -6,8 +6,8 @@
 extern "C" {
 #endif
 
-#include <stdio.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/queue.h>
 
 struct file_ops {
@@ -27,10 +27,7 @@ struct pic {
     int height;
     int depth;
     int pitch;  //bytes per line
-    uint32_t rmask;
-    uint32_t gmask;
-    uint32_t bmask;
-    uint32_t amask;
+    int format;
     void *pic;
 };
 

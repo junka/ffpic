@@ -8,6 +8,7 @@
 #include "tiff.h"
 #include "lzw.h"
 #include "vlog.h"
+#include "colorspace.h"
 
 VLOG_REGISTER(tiff, INFO)
 
@@ -368,6 +369,7 @@ TIFF_load(const char *filename)
     p->height = t->ifd[0].height;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = t->ifd[0].data;
+    p->format = CS_PIXELFORMAT_RGB888;
     return p;
 }
 

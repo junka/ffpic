@@ -14,8 +14,7 @@ typedef struct display{
     void *private;
     int (*init)(const char* title, int w, int h);
     int (*uninit)(void);
-    int (*draw_pixels)(void *buff, int left, int top, int width, int height, int depth, int pitch,
-            uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask);
+    int (*draw_pixels)(void *buff, int left, int top, int width, int height, int depth, int pitch, int format);
     TAILQ_ENTRY(display) next;
 } display_t;
 
@@ -27,8 +26,7 @@ int display_init(struct display* d, const char* title, int w, int h);
 int display_uninit(struct display* d);
 
 int display_show(struct display* d, void *buff, int left, int top, 
-        int width, int height, int depth, int pitch, uint32_t rmask, 
-        uint32_t gmask, uint32_t bmask, uint32_t amask);
+        int width, int height, int depth, int pitch, int format);
 
 void display_register(struct display* d);
 

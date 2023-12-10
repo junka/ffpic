@@ -17,6 +17,8 @@
 
 VLOG_REGISTER(hevc, INFO)
 
+
+
 struct picture {
     int16_t *Y;
     int16_t *U;
@@ -27,11 +29,14 @@ struct picture {
     uint8_t *IntraPredModeY;
     uint8_t *IntraPredModeC;
 
-    uint8_t *CuPredMode;
-    uint8_t *pcm_flag;
-    uint8_t *qpy;
-    uint8_t *split_transform_flag;
-    // uint8_t *log2CbSize;
+    struct {
+      uint8_t CuPredMode : 2;
+      uint8_t pcm_flag : 1;
+      uint8_t qpy;
+    } * info;
+
+
+    uint8_t* split_transform_flag;
 
     int ctu_num;
     struct ctu* ctus[1024];
@@ -1018,8 +1023,16 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
             sps->conf_win_top_offset = GOL_UE(v);
             sps->conf_win_bottom_offset = GOL_UE(v);
         }
+        // bit_depth_luma_minus8 in the range 0 - 8
+        // bit_depth_chroma_minus8 in the range 0 - 8
         sps->bit_depth_luma_minus8 = GOL_UE(v);
         sps->bit_depth_chroma_minus8 = GOL_UE(v);
+
+        sps->BitDepthY = sps->bit_depth_luma_minus8 + 8;
+        sps->BitDepthC = sps->bit_depth_chroma_minus8 + 8;
+        sps->QpBdOffsetY = 6 * sps->bit_depth_luma_minus8;
+        sps->QpBdOffsetC = 6 * sps->bit_depth_chroma_minus8;
+
         VDBG(hevc, "bit_depth_luma_minus8 %d, bit_depth_chroma_minus8 %d",
             sps->bit_depth_luma_minus8, sps->bit_depth_chroma_minus8);
     }
@@ -3203,8 +3216,8 @@ static struct sao *parse_sao(cabac_dec *d,
                 VDBG(hevc, "cIdx %d, SaoTypeIdx %d", cIdx, sao->SaoTypeIdx[cIdx][rx][ry]);
                 if (sao->SaoTypeIdx[cIdx][rx][ry] != 0 ) {
                     for (int i = 0; i < 4; i++) {
-                        int bitdepth = ((i == 0) ? (sps->bit_depth_luma_minus8 + 8)
-                                         : (sps->bit_depth_chroma_minus8 + 8));
+                        int bitdepth =
+                            ((i == 0) ? (sps->BitDepthY) : (sps->BitDepthC));
                         int cMax = (1 << (MIN(bitdepth, 10) - 5)) - 1;
                         sao_offset_abs[cIdx][i] =
                             CABAC_TR(d, CTX_TYPE_ALL_BYPASS, cMax, 0, NULL);
@@ -3433,7 +3446,7 @@ process_zscan_order_block_availablity(struct slice_segment_header *slice,
 
 static uint8_t get_CuPredMode(struct slice_segment_header *slice,
                               struct picture *p, int x, int y) {
-    return p->CuPredMode[(x>>slice->MinCbLog2SizeY) + (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY];
+    return p->info[(x>>slice->MinCbLog2SizeY) + (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY].CuPredMode;
 }
 
 static void set_CuPredMode(struct slice_segment_header *slice,
@@ -3444,15 +3457,14 @@ static void set_CuPredMode(struct slice_segment_header *slice,
                 (y0 >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY;
     for (int y = 0; y < CbSize; y++) {
         for (int x = 0; x < CbSize; x++) {
-            p->CuPredMode[CuIdx + x + y * slice->PicWidthInMinCbsY] =
-                CuPredMode;
+            p->info[CuIdx + x + y * slice->PicWidthInMinCbsY].CuPredMode = CuPredMode;
         }
     }
 }
 static uint8_t get_pcm_flag(struct slice_segment_header *slice, struct picture *p,
                           int x, int y) {
-    return p->pcm_flag[(x >> slice->MinCbLog2SizeY) +
-                     (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY];
+    return p->info[(x >> slice->MinCbLog2SizeY) +
+                     (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY].pcm_flag;
 }
 
 static void set_pcm_flag(struct slice_segment_header *slice,
@@ -3463,8 +3475,7 @@ static void set_pcm_flag(struct slice_segment_header *slice,
                 (y0 >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY;
     for (int y = 0; y < CbSize; y++) {
         for (int x = 0; x < CbSize; x++) {
-            p->CuPredMode[CuIdx + x + y * slice->PicWidthInMinCbsY] =
-                pcm_flag;
+            p->info[CuIdx + x + y * slice->PicWidthInMinCbsY].pcm_flag = pcm_flag;
         }
     }
 }
@@ -3570,14 +3581,12 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
                                          int16_t *d) {
     const int levelScale[] = {40, 45, 51, 57, 64, 72};
     int log2TransformRange, bdShift, coeffMin, coeffMax;
-    int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-    int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
     struct sps_range_extension *sre = &sps->sps_range_ext;
     // see 7-27, 7-30
-    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15));
-    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthC + 6) : 15));
-    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15)) - 1;
-    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthC + 6) : 15)) - 1;
+    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15));
+    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15));
+    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15)) - 1;
+    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15)) - 1;
 
     VDBG(hevc, "CoeffMinY %d, CoeffMaxY %d, CoeffMinC %d, CoeffMaxC %d",
          CoeffMinY, CoeffMaxY, CoeffMinC, CoeffMaxC);
@@ -3585,17 +3594,17 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
     if (cIdx == 0) {
         log2TransformRange =
             sps->sps_range_ext.extended_precision_processing_flag
-                ? MAX(15, BitDepthY + 6)
+                ? MAX(15, sps->BitDepthY + 6)
                 : 15;
-        bdShift = BitDepthY + log2floor(nTbS) + 10 - log2TransformRange;
+        bdShift = sps->BitDepthY + log2floor(nTbS) + 10 - log2TransformRange;
         coeffMin = CoeffMinY;
         coeffMax = CoeffMaxY;
     } else {
         log2TransformRange =
             sps->sps_range_ext.extended_precision_processing_flag
-                ? MAX(15, BitDepthC + 6)
+                ? MAX(15, sps->BitDepthC + 6)
                 : 15;
-        bdShift = BitDepthC + log2floor(nTbS) + 10 - log2TransformRange;
+        bdShift = sps->BitDepthC + log2floor(nTbS) + 10 - log2TransformRange;
         coeffMin = CoeffMinC;
         coeffMax = CoeffMaxC;
         VDBG(hevc, "bdShift %d, ", bdShift);
@@ -3713,17 +3722,15 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
                                        struct cu *cu, int xTbY,
                                        int yTbY, int nTbS, int cIdx,
                                        int16_t* d, int16_t* r) {
-    int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-    int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
-    int bitdepth = (cIdx == 0) ? BitDepthY : BitDepthC;
+    int bitdepth = (cIdx == 0) ? sps->BitDepthY : sps->BitDepthC;
     struct sps_range_extension *sre = &sps->sps_range_ext;
     int bdShift = MAX(20 - bitdepth,(sre->extended_precision_processing_flag ? 11 : 0));
 
     // see 7-27, 7-30
-    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15));
-    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthC + 6) : 15));
-    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthY + 6) : 15)) - 1;
-    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, BitDepthC + 6) : 15)) - 1;
+    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15));
+    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15));
+    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15)) - 1;
+    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15)) - 1;
     int coeffMin = CoeffMinY;
     int coeffMax = CoeffMaxY;
     if (cIdx > 0) {
@@ -3735,9 +3742,9 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
         trType = 1;
         struct accl_ops *ops = accl_first_available();
         if (ops) {
-            ops->idct_4x4(d, r, BitDepthY);
+            ops->idct_4x4(d, r, sps->BitDepthY);
         } else {
-            idct_4x4_hevc(d, r, BitDepthY,
+            idct_4x4_hevc(d, r, sps->BitDepthY,
                           sre->extended_precision_processing_flag);
         }
         return 0;
@@ -3802,12 +3809,10 @@ residual_modification_transform_bypass(int mDir, int nTbs, int16_t *r)
 static void
 residual_modification_transform_cross_prediction(struct sps *sps,struct cu *cu, int xTbY, int yTbY, int nTbS, int cIdx, int16_t *rY, int16_t* r)
 {
-    int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-    int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
     int ResScaleVal = cu->ccp[xTbY][yTbY].ResScaleVal[cIdx];
     for (int y = 0; y < nTbS; y++) {
         for (int x = 0; x < nTbS; x++) {
-            r[x + nTbS * y] += (ResScaleVal * ((rY[x + nTbS *y] << BitDepthC) >> BitDepthY)) >> 3;
+            r[x + nTbS * y] += (ResScaleVal * ((rY[x + nTbS *y] << sps->BitDepthC) >> sps->BitDepthY)) >> 3;
         }
     }
 }
@@ -3841,8 +3846,8 @@ static void set_split_transform_flag(struct slice_segment_header *slice,
 
 static uint8_t get_qpy(struct slice_segment_header *slice,
                            struct picture *p, int x, int y) {
-    return p->qpy[(x >> slice->MinCbLog2SizeY) +
-                     (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY];
+    return p->info[(x >> slice->MinCbLog2SizeY) +
+                     (y >> slice->MinCbLog2SizeY) * slice->PicWidthInMinCbsY].qpy;
 }
 
 static void set_qpy(struct slice_segment_header *slice, struct picture *p,
@@ -3855,7 +3860,7 @@ static void set_qpy(struct slice_segment_header *slice, struct picture *p,
          y0 + (1 << log2CbSize), qpy);
     for (int y = 0; y < CbSize; y++) {
         for (int x = 0; x < CbSize; x++) {
-            p->qpy[CuIdx + x + y * slice->PicWidthInMinCbsY] = qpy;
+            p->info[CuIdx + x + y * slice->PicWidthInMinCbsY].qpy = qpy;
         }
     }
 }
@@ -3887,15 +3892,11 @@ quatization_parameters(int xCb, int yCb,
 
     // see 7-54, SliceQpY should be in the range of [-QpBdOffsetY, +51]
     int SliceQpY = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
-    int QpBdOffsetY = 6 * sps->bit_depth_luma_minus8;
-    int QpBdOffsetC = 6 * sps->bit_depth_chroma_minus8;
     int xQg = xCb - (xCb & ((1 << slice->Log2MinCuQpDeltaSize) - 1));
     int yQg = yCb - (yCb & ((1 << slice->Log2MinCuQpDeltaSize) - 1));
 
     if (xQg == last_xQg && yQg == last_yQg) {
         VDBG(hevc, "last q %d (%d, %d)", last_q.q_y, xQg, yQg);
-        // set_qpy(slice, p, xCb, yCb, cu->log2CbSize, last_q.q_y - QpBdOffsetY);
-        // return last_q;
     } else {
         last_xQg = xQg;
         last_yQg = yQg;
@@ -3975,14 +3976,15 @@ quatization_parameters(int xCb, int yCb,
     VDBG(hevc,
          "avalaibleA %d, avalaibleB %d, qPY_A %d, qPY_B %d, qpy_pred %d, "
          "QpBdOffsetY %d",
-         availableA, availableB, qPY_A, qPY_B, qPY_pred, QpBdOffsetY);
+         availableA, availableB, qPY_A, qPY_B, qPY_pred, sps->QpBdOffsetY);
     int qPcb, qPcr;
-    int Qpy = ((qPY_pred + slice->CuQpDeltaVal + 52 + 2 * (QpBdOffsetY)) %(52 + QpBdOffsetY)) - QpBdOffsetY;
+    int Qpy = ((qPY_pred + slice->CuQpDeltaVal + 52 + 2 * (sps->QpBdOffsetY)) %
+               (52 + sps->QpBdOffsetY)) - sps->QpBdOffsetY;
     VDBG(hevc, "Qpy %d, CuQpDeltaVal %d, log2CbSize %d, %d", Qpy,
          slice->CuQpDeltaVal, cu->log2CbSize, slice->CtbLog2SizeY);
 
     set_qpy(slice, p, xCb, yCb, cu->log2CbSize, Qpy);
-    int Qp_Y = Qpy + QpBdOffsetY;
+    int Qp_Y = Qpy + sps->QpBdOffsetY;
     int Qp_Cb;
     int Qp_Cr;
     if (slice->ChromaArrayType != 0) {
@@ -3991,10 +3993,10 @@ quatization_parameters(int xCb, int yCb,
              tt->tu_residual_act_flag[xCb - tt->xT0][yCb - tt->yT0], Qp_Y,
              slice->CuQpDeltaVal, cu->CuQpOffsetCb, cu->CuQpOffsetCr);
         if (tt->tu_residual_act_flag[xCb - tt->xT0][yCb-tt->yT0] == 0) {
-            qPcb = clip3(-QpBdOffsetC, 57,
+            qPcb = clip3(-sps->QpBdOffsetC, 57,
                          Qpy + pps->pps_cb_qp_offset +
                              slice->slice_cb_qp_offset + cu->CuQpOffsetCb);
-            qPcr = clip3(-QpBdOffsetC, 57,
+            qPcr = clip3(-sps->QpBdOffsetC, 57,
                          Qpy + pps->pps_cr_qp_offset +
                              slice->slice_cr_qp_offset + cu->CuQpOffsetCr);
             VDBG(hevc,
@@ -4005,11 +4007,11 @@ quatization_parameters(int xCb, int yCb,
                     pps->pps_scc_ext.pps_act_cb_qp_offset_plus5 - 5;
             int PpsActQpOffsetCr =
                     pps->pps_scc_ext.pps_act_cr_qp_offset_plus3 - 3;
-            
-            qPcb = clip3(-QpBdOffsetC, 57,
+
+            qPcb = clip3(-sps->QpBdOffsetC, 57,
                          Qpy + PpsActQpOffsetCb +
                              slice->slice_act_cb_qp_offset + cu->CuQpOffsetCb);
-            qPcr = clip3(-QpBdOffsetC, 57,
+            qPcr = clip3(-sps->QpBdOffsetC, 57,
                          Qpy + PpsActQpOffsetCr +
                              slice->slice_act_cr_qp_offset + cu->CuQpOffsetCr);
         }
@@ -4020,8 +4022,8 @@ quatization_parameters(int xCb, int yCb,
             qPcb = MIN(qPcb, 51);
             qPcr = MIN(qPcr, 51);
         }
-        Qp_Cb = qPcb + QpBdOffsetC;
-        Qp_Cr = qPcr + QpBdOffsetC;
+        Qp_Cb = qPcb + sps->QpBdOffsetC;
+        Qp_Cr = qPcr + sps->QpBdOffsetC;
     }
     last_q.q_y = Qp_Y;
     last_q.q_cb = Qp_Cb;
@@ -4041,12 +4043,11 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
     int qP;
     int PpsActQpOffsetY = pps->pps_scc_ext.pps_act_y_qp_offset_plus5 - 5;
     struct sps *sps = hps->sps;
-    int QpBdOffsetY = 6 * sps->bit_depth_luma_minus8;
     struct quant_pixel q =
         quatization_parameters(xTbY, yTbY, hps, slice, cu, tt, p);
     // see 8-291, 8-292
     if (cIdx == 0) {
-        qP = clip3(0, 51 + QpBdOffsetY,
+        qP = clip3(0, 51 + sps->QpBdOffsetY,
                    q.q_y + (tt->tu_residual_act_flag[xTbY-tt->xT0][yTbY-tt->yT0]
                                 ? PpsActQpOffsetY + slice->slice_act_y_qp_offset
                                 : 0));
@@ -4056,9 +4057,7 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
         qP = q.q_cr;
     }
     VDBG(hevc, "(%d, %d) qP %d", xTbY, yTbY, qP);
-    int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-    int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
-    int bitdepth = (cIdx == 0) ? BitDepthY : BitDepthC;
+    int bitdepth = (cIdx == 0) ? sps->BitDepthY : sps->BitDepthC;
     
     int rotateCoeffs = 0;
 
@@ -4114,15 +4113,13 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
 
     return 0;
 }
-#define Clip1Y(x) clip3(0, (1 << BitDepthY) - 1, (x))
-#define Clip1C(x) clip3(0, (1 << BitDepthC) - 1, (x))
+#define Clip1Y(x) clip3(0, (1 << sps->BitDepthY) - 1, (x))
+#define Clip1C(x) clip3(0, (1 << sps->BitDepthC) - 1, (x))
 // 8.6.7
 static void
 construct_pic_pior_to_filtering(struct sps *sps, int xCurr, int yCurr, int nCurrSw, int nCurrSh,
                                 int cIdx, int16_t *predSamples, int16_t *resSamples,
                                 int16_t *recSamples, int stride) {
-    int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-    int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
     if (cIdx == 0) {
         for (int i = 0; i < nCurrSw; i++) {
             for (int j = 0; j < nCurrSh; j++) {
@@ -4145,11 +4142,9 @@ static void reference_sample_substitution(struct sps *sps, int16_t *left,
                                           int16_t *top, int nTbS, int cIdx,
                                           int unavailable, int8_t *unavaibleL,
                                           int8_t *unavaibleT) {
-    // bit_depth_luma_minus8 in the range 0 - 8
-    // bit_depth_chroma_minus8 in the range 0 - 8
+
     // so bitDepth - 1 should use 15bit at most which a int16_t could hold
-    int bitDepth = (cIdx == 0) ? sps->bit_depth_luma_minus8 + 8
-                               : sps->bit_depth_chroma_minus8 + 8;
+    int bitDepth = (cIdx == 0) ? sps->BitDepthY : sps->BitDepthC;
     VDBG(hevc, "unavailable %d, %d", unavailable, 4 * nTbS + 1);
     if (unavailable == 4*nTbS + 1) {
         for (int i = 0; i < nTbS * 2; i++) {
@@ -4241,13 +4236,12 @@ filtering_neighbouring_samples(struct sps *sps, int predModeIntra, int cIdx, int
          filterFlag, minDistVerHor, log2floor(nTbS / 8));
     if (filterFlag == 1) {
         int biIntFlag = 0;
-        int BitDepthY = sps->bit_depth_luma_minus8 + 8;
         if (sps->strong_intra_smoothing_enabled_flag == 1 && cIdx == 0 &&
             nTbS == 32 &&
             ABS(top[-1] + top[nTbS * 2 - 1] - 2 * top[nTbS - 1]) <
-                (1 << (BitDepthY - 5)) &&
+                (1 << (sps->BitDepthY - 5)) &&
             ABS(top[-1] + left[nTbS * 2 - 1] - 2 * left[nTbS - 1]) <
-                (1 << (BitDepthY - 5))) {
+                (1 << (sps->BitDepthY - 5))) {
             biIntFlag = 1;
         }
 
@@ -4343,8 +4337,8 @@ static void decode_palette_mode(struct hevc_param_set *hps,
                     qP = MAX(0, qp.q_cr);
                 }
                 int bitDepth = (cIdx == 0)
-                                   ? (hps->sps->bit_depth_luma_minus8 + 8)
-                                   : (hps->sps->bit_depth_chroma_minus8 + 8);
+                                   ? (hps->sps->BitDepthY)
+                                   : (hps->sps->BitDepthC);
                 const int levelScale[] = {40, 45, 51, 57, 64, 72};
                 int tmpVal = ((cu->PaletteEscapeVal[cIdx][xL][yL] * levelScale[qP % 6]) << ((qP / 6) + 32)) >> 6;
                 recSamples[x + nCbSX*y] = clip3(0, (1 << bitDepth) - 1, tmpVal);
@@ -4520,7 +4514,7 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
         hevc_intra_angular((uint16_t *)predSamples, (uint16_t *)left,
                            (uint16_t *)top, nTbS, nTbS, cIdx, predModeIntra,
                            disableIntraBoundaryFilter,
-                           sps->bit_depth_luma_minus8 + 8);
+                           sps->BitDepthY);
     }
 #ifndef NDEBUG
     VDBG(hevc, "predication %d (%d, %d)-(%d, %d) %d", nTbS, xTbCmp, yTbCmp,
@@ -4888,10 +4882,9 @@ static void decode_cu_coded_intra_prediction_mode(
     // store the residual samples of the current coding unit
     if (get_pcm_flag(slice, p, xCb, yCb) == 1) {
         int PcmBitDepthY = sps->pcm->pcm_sample_bit_depth_luma_minus1 + 1;
-        int BitDepthY = sps->bit_depth_luma_minus8 + 8;
         for (int j = 0; j < nCbS; j ++) {
             for (int i = 0; i < nCbS; i++) {
-                p->Y[xCb + i + (yCb + j) * p->y_stride] = cu->pcm->pcm_sample_luma[(nCbS*j)+i] << (BitDepthY - PcmBitDepthY);
+                p->Y[xCb + i + (yCb + j) * p->y_stride] = cu->pcm->pcm_sample_luma[(nCbS*j)+i] << (sps->BitDepthY - PcmBitDepthY);
             }
         }
     } else if (!get_pcm_flag(slice, p, xCb, yCb) &&
@@ -4964,8 +4957,6 @@ static void decode_cu_coded_intra_prediction_mode(
     }
     if (slice->ChromaArrayType != 0) {
         int log2CbSizeC = log2CbSize - (slice->ChromaArrayType == 3 ? 0 : 1);
-        int BitDepthY = sps->bit_depth_luma_minus8 + 8;
-        int BitDepthC = sps->bit_depth_chroma_minus8 + 8;
         int pcm_flag = get_pcm_flag(slice, p, xCb, yCb);
         if (pcm_flag == 1) {
             int PcmBitDepthY = sps->pcm->pcm_sample_bit_depth_luma_minus1 + 1;
@@ -4973,9 +4964,9 @@ static void decode_cu_coded_intra_prediction_mode(
             for (int i = 0; i < nCbS / slice->SubWidthC - 1; i++) {
                 for (int j = 0; j < nCbS / slice->SubHeightC - 1; j++) {
                     p->U[xCb / slice->SubWidthC + i+ (yCb / slice->SubHeightC + j)*p->uv_stride] =
-                        cu->pcm->pcm_sample_chroma[(nCbS / slice->SubWidthC * j) +i] << (BitDepthC - PcmBitDepthC);
+                        cu->pcm->pcm_sample_chroma[(nCbS / slice->SubWidthC * j) +i] << (sps->BitDepthC - PcmBitDepthC);
                     p->V[xCb / slice->SubWidthC + i+(yCb / slice->SubHeightC + j)*p->uv_stride] =
-                        cu->pcm->pcm_sample_chroma[(nCbS / slice->SubWidthC * ( j + nCbS / slice->SubHeightC)) +i] << (BitDepthC - PcmBitDepthC);
+                        cu->pcm->pcm_sample_chroma[(nCbS / slice->SubWidthC * ( j + nCbS / slice->SubHeightC)) +i] << (sps->BitDepthC - PcmBitDepthC);
                 }
             }
         } else if (!pcm_flag && cu->palette_mode_flag == 1) {
@@ -5318,7 +5309,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
                         (yC % 2 == 0 && pc->palette_transpose_flag &&
                         slice->ChromaArrayType == 2 ) || slice->ChromaArrayType == 3 ) {
                         int palette_escape_val = CABAC_FL(
-                            d, ((cIdx == 0) ? (sps->bit_depth_luma_minus8 + 8) : (sps->bit_depth_chroma_minus8 +8)));
+                            d, ((cIdx == 0) ? (sps->BitDepthY) : (sps->BitDepthC)));
                         // quantized escape-coded sample value
 
                         cu->PaletteEscapeVal[cIdx][xC-x0][yC-y0] = palette_escape_val;
@@ -7090,15 +7081,10 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         calloc(PicWidthInMinPUs * PicHeightInMinPUs, sizeof(uint8_t));
     p.IntraPredModeC =
         calloc(PicWidthInMinPUs * PicHeightInMinPUs, sizeof(uint8_t));
-    p.CuPredMode = calloc(hslice.slice->PicWidthInMinCbsY *
-                              hslice.slice->PicHeightInMinCbsY,
-                          sizeof(uint8_t));
-    p.pcm_flag = calloc(hslice.slice->PicWidthInMinCbsY *
-                            hslice.slice->PicHeightInMinCbsY,
-                        sizeof(uint8_t));
-    p.qpy = calloc(hslice.slice->PicWidthInMinCbsY *
-                       hslice.slice->PicHeightInMinCbsY,
-                   sizeof(uint8_t));
+
+    p.info = calloc(hslice.slice->PicWidthInMinCbsY *
+                        hslice.slice->PicHeightInMinCbsY,
+                    sizeof(uint8_t) * 2);
 
     int PicWidthInTbsY = hslice.slice->PicWidthInCtbsY
         << (hslice.slice->CtbLog2SizeY - hslice.slice->MinTbLog2SizeY);
@@ -7117,6 +7103,13 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
                            divceil(height, (1 << hslice.slice->CtbLog2SizeY)),
                            divceil(width, (1 << hslice.slice->CtbLog2SizeY)),
                            1 << hslice.slice->CtbLog2SizeY);
+    free(Y);
+    free(U);
+    free(V);
+    free(p.info);
+    free(p.split_transform_flag);
+    free(p.IntraPredModeC);
+    free(p.IntraPredModeY);
 }
 
 struct hevc_param_set hps;

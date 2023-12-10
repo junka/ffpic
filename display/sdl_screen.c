@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "display.h"
+#include "exr.h"
 #include "sdl_screen.h"
 
 #define SCREEN_WIDTH   640
@@ -16,16 +17,20 @@ static sdl_screen scrn = {
 };
 
 
-int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch,
-            uint32_t rmask, uint32_t gmask, uint32_t bmask, uint32_t amask)
+int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, int pitch, int format)
 {
     SDL_Rect rect;
+    rect.w = width;
+    rect.h = height;
+    rect.x = left;
+    rect.y = top;
 
-    SDL_Surface *s = SDL_CreateRGBSurfaceFrom(pixels, width, height, depth, pitch,
-         rmask, gmask, bmask, amask);
-    if (s == NULL) {
+    //SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, width, height, depth, format);
+    SDL_Surface * s = SDL_CreateRGBSurfaceWithFormatFrom(pixels, width, height, depth, pitch, format);
+    if (!s) {
         return -1;
     }
+    // SDL_memcpy(s->pixels, pixels, height * pitch);
 
     SDL_Texture * texture = SDL_CreateTextureFromSurface(scrn.r, s);
     // printf("width %d, height %d, left %d, top %d, pitch %d, depth %d\n", width, height, left, top, pitch, depth);
@@ -34,7 +39,7 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
     rect.x = left;
     rect.y = top;
 
-    if (scrn.t == NULL) {
+    if (!scrn.t) {
         scrn.t = texture;
         SDL_SetRenderTarget(scrn.r, scrn.t);
     } else {
@@ -95,7 +100,7 @@ sdl_screen_init(const char* title, int w, int h)
         return -1;
     }
 
-    scrn.t = SDL_CreateTexture(scrn.r, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STREAMING, w, h);
+    scrn.t = SDL_CreateTexture(scrn.r, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STATIC, w, h);
     if (scrn.t == NULL) {
         SDL_DestroyRenderer(scrn.r);
         SDL_DestroyWindow(scrn.w);

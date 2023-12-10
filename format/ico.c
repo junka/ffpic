@@ -4,6 +4,7 @@
 #include <string.h>
 #include <errno.h>
 
+#include "colorspace.h"
 #include "ico.h"
 #include "file.h"
 #include "vlog.h"
@@ -139,6 +140,7 @@ ICO_load(const char *filename)
     if (c->dir[select].depth > 8 && (c->dir[select].color_num == 0? c->images[select].bmpinfo.colors_used:0))
         p->depth = c->dir[select].depth;
     p->pixels = c->images[select].data;
+    p->format = CS_PIXELFORMAT_RGB888;
     // #include "utils.h"
     // hexdump(stdout, "decoded data", p->pixels, 160);
 

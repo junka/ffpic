@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <arpa/inet.h>
 
+#include "colorspace.h"
 #include "png.h"
 #include "file.h"
 #include "deflate.h"
@@ -452,9 +453,13 @@ PNG_load(const char* filename)
                 crc32 = update_crc(crc32, (uint8_t*)&(b->last_mod), length);
                 break;
             default:
-                data = malloc(length);
-                fread(data, length, 1, f);
-                crc32 = update_crc(crc32, (uint8_t*)data, length);
+                if (length) {
+                    VDBG(png, "length %d", length);
+                    data = malloc(length);
+                    fread(data, length, 1, f);
+                    crc32 = update_crc(crc32, (uint8_t*)data, length);
+                    free(data);
+                }
                 break;
         }
 
@@ -491,10 +496,7 @@ PNG_load(const char* filename)
     p->height = b->ihdr.height;
     p->depth = calc_png_bits_per_pixel(b);
     p->pixels = b->data;
-    p->rmask = 0;
-    p->gmask = 0;
-    p->bmask = 0;
-    p->amask = 0xFF;
+    p->format = CS_MasksToPixelFormatEnum(p->depth, 0, 0, 0, 0xFF);
     p->pitch = ((b->ihdr.width * p->depth + 31) >> 5) << 2;
     return p;
 }

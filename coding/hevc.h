@@ -929,6 +929,27 @@ struct sps {
     int BitDepthC;
     int QpBdOffsetY;
     int QpBdOffsetC;
+
+    int SubWidthC;
+    int SubHeightC;
+    int MinCbLog2SizeY;
+    int CtbLog2SizeY;
+    int MinCbSizeY;
+    int CtbSizeY;
+    int PicWidthInMinCbsY;
+    int PicWidthInCtbsY;
+    int PicHeightInMinCbsY;
+    int PicHeightInCtbsY;
+    int PicSizeInMinCbsY;
+    int PicSizeInCtbsY;
+    int PicSizeInSamplesY;
+    int PicWidthInSamplesC;
+    int PicHeightInSamplesC;
+    int CtbWidthC;
+    int CtbHeightC;
+    int MinTbLog2SizeY;
+    int MaxTbLog2SizeY;
+    uint8_t ChromaArrayType;
 };
 
 
@@ -966,13 +987,15 @@ struct sao {
     // uint8_t sao_merge_up_flag;
     // uint8_t sao_offset_abs[3][64][64][4];
     // uint8_t sao_offset_sign[3][64][64][4];
-    // uint8_t sao_band_position[3][64][64];
+    uint8_t sao_band_position[3];
     // uint8_t sao_eo_class_luma;
     // uint8_t sao_eo_class_chroma;
 
     // uint32_t sao_type_idx_luma;
     // uint32_t sao_type_idx_chroma;
-    uint8_t SaoTypeIdx[3][64][64];
+    uint8_t SaoEoClass[3]; // 0: 1d 0-degree; 1: 1d 90-degree; 2: 1d 135-degree; 3: 1d 45-degree;
+    uint8_t SaoTypeIdx[3]; // 0: not applied; 1: band offset; 2: edge offset;
+    int saoOffsetVal[3][4];
 };
 
 
@@ -1002,7 +1025,7 @@ typedef struct {
 } scanpos;
 
 struct slice_segment_header {
-    uint8_t ChromaArrayType;//= (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc)
+    int idx;
 
     uint8_t no_output_of_prior_pics_flag : 1;
     uint8_t dependent_slice_segment_flag : 1;
@@ -1101,32 +1124,6 @@ struct slice_segment_header {
     uint32_t poc_lsb_val;
 
     GUE(poc_msb_cycle_val);
-
-    //Coding Tree Block
-    int SubWidthC, SubHeightC;
-
-    int MinCbLog2SizeY;
-    int CtbLog2SizeY;
-    int MinCbSizeY;
-    int CtbSizeY;
-
-    int PicWidthInCtbsY;
-    int PicHeightInCtbsY;
-
-    int PicWidthInMinCbsY;
-    int PicHeightInMinCbsY;
-
-    int PicSizeInMinCbsY;
-    int PicSizeInCtbsY;
-
-    int PicSizeInSamplesY;
-
-    int PicWidthInSamplesC;
-    int PicHeightInSamplesC;
-
-    int CtbWidthC, CtbHeightC;
-
-    int MinTbLog2SizeY, MaxTbLog2SizeY;
 
     //code quadtree
     int IsCuQpDeltaCoded;
@@ -1288,10 +1285,6 @@ struct cu {
 
     struct cross_comp_pred ccp[64][64];
 
-    // uint8_t IntraPredModeY[64][64];
-    // int IntraPredModeC;
-
-    int CtDepth;
     int x0;
     int y0;
     int nCbS;
@@ -1325,6 +1318,8 @@ struct chroma_qp_offset {
 
 struct ctu {
     struct sao *sao;
+    int slice_id;
+
     int cu_num;
     struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu
     int CtbAddrInTs;
@@ -1336,17 +1331,16 @@ struct hevc_param_set {
     struct vps *vps;
 
     int sps_num;
-    struct sps *sps;
+    struct sps *sps; // for a sequence of a video
 
     int pps_num;
-    struct pps *pps;
+    struct pps *pps; // for several pictures
 };
 
 struct hevc_slice {
     struct hevc_nalu_header *nalu;
     struct slice_segment_header *slice;
     struct rps *rps;
-    struct ctu *ctu;
 };
 
 #pragma pack(pop)

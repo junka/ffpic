@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, INFO)
+VLOG_REGISTER(hevc, DEBUG)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -3171,6 +3171,10 @@ parse_depth_dcs(cabac_dec *d, struct cu *cu, int x0, int y0, int log2CbSize)
 }
 #endif
 
+static void set_ctu(struct sps *sps, struct picture *p, int rx, int ry, struct ctu *ctu) {
+    p->ctus[rx + ry * sps->PicWidthInCtbsY]= ctu;
+}
+
 static inline struct ctu *get_ctu(struct sps *sps,
                                   struct picture *p, int rx, int ry) {
     struct ctu *ctu = p->ctus[rx + ry * sps->PicWidthInCtbsY];
@@ -3484,8 +3488,7 @@ static uint8_t get_IntraPredModeY(struct sps *sps, struct picture *p, int x,
                                   int y) {
     int Log2MinPUSize = sps->MinCbLog2SizeY - 1;
     int PicWidthInMinPUs = sps->PicWidthInCtbsY << (sps->CtbLog2SizeY - Log2MinPUSize);
-    uint8_t v = p->IntraPredModeY[(x >> Log2MinPUSize) + (y >> Log2MinPUSize) * PicWidthInMinPUs];
-    return v;
+    return p->IntraPredModeY[(x >> Log2MinPUSize) + (y >> Log2MinPUSize) * PicWidthInMinPUs];
 }
 
 static void set_IntraPredModeY(struct sps *sps, int log2PbSize,
@@ -6743,14 +6746,14 @@ static struct ctu *coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
     struct ctu *ctu = calloc(1, sizeof(*ctu));
     ctu->CtbAddrInTs = CtbAddrInTs;
     ctu->slice_id = slice->idx;
-    p->ctus[p->ctu_num++] = ctu;
-    VDBG(hevc, "ctu num %d", p->ctu_num);
-    
     uint32_t xCtb = (CtbAddrInRs % sps->PicWidthInCtbsY) << sps->CtbLog2SizeY;
     uint32_t yCtb = (CtbAddrInRs / sps->PicWidthInCtbsY) << sps->CtbLog2SizeY;
 
-    VDBG(hevc,
-         "(%d, %d) CtbAddrInRs %d , slice_sao_luma_flag %d, "
+    set_ctu(sps, p, xCtb >> sps->CtbLog2SizeY, yCtb >> sps->CtbLog2SizeY, ctu);
+    p->ctu_num++;
+    VDBG(hevc, "ctu num %d", p->ctu_num);
+
+    VDBG(hevc, "(%d, %d) CtbAddrInRs %d , slice_sao_luma_flag %d, "
          "slice_sao_chroma_flag %d",
          xCtb, yCtb, CtbAddrInRs, slice->slice_sao_luma_flag,
          slice->slice_sao_chroma_flag);
@@ -6984,7 +6987,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                                          struct sps *sps, struct picture *p, int16_t *rec, int stride,
                                          struct ctu *ctu, int cIdx, int rx, int ry,
                                          int nCtbSw, int nCtbSh) {
-    int bitDepth = cIdx == 0 ? sps->BitDepthC : sps->BitDepthC;
+    int bitDepth = ((cIdx == 0) ? sps->BitDepthC : sps->BitDepthC);
     //see 8-406
     int xCtb = rx * nCtbSw;
     int yCtb = ry * nCtbSh;
@@ -6996,7 +6999,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
             int ySj = yCtb + j;
             int xYi = cIdx == 0 ? xSi : xSi * sps->SubWidthC;
             int yYj = cIdx == 0 ? ySj : ySj * sps->SubHeightC;
-            if ((sps->pcm->pcm_loop_filter_disabled_flag == 1 &&
+            if ((sps->pcm &&sps->pcm->pcm_loop_filter_disabled_flag == 1 &&
                  get_pcm_flag(sps, p, xYi, yYj) == 1) ||
                  get_cu_transquant_bypass_flag(sps, p, xYi, yYj) == 1 || ctu->sao->SaoTypeIdx[cIdx] == 0) {
                 
@@ -7025,7 +7028,8 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                         cond = true;
                         break;
                     }
-                    if (get_ctu(sps, p, xSik, ySjk )->slice_id != get_ctu(sps, p, xSi, ySj)->slice_id &&
+                    struct ctu * ctuk = get_ctu(sps, p, xSik >> sps->CtbLog2SizeY, ySjk >> sps->CtbLog2SizeY);
+                    if (ctuk->slice_id != ctu->slice_id &&
                             ((pps->MinTbAddrZs[xYik >> sps->MinTbLog2SizeY][yYjk >> sps->MinTbLog2SizeY] <
                             pps->MinTbAddrZs[xYi >> sps->MinTbLog2SizeY][yYj >> sps->MinTbLog2SizeY] &&
                             slice->slice_loop_filter_across_slices_enabled_flag == 0) ||
@@ -7036,8 +7040,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                         break;
                     }
                     if (pps->loop_filter_across_tiles_enabled_flag == 0 &&
-                        (pps->TileId[get_ctu(sps, p, xSik, ySjk)->CtbAddrInTs] != 
-                        pps->TileId[get_ctu(sps, p, xSi, ySj)->CtbAddrInTs] )) {
+                        (pps->TileId[ctuk->CtbAddrInTs] != pps->TileId[ctu->CtbAddrInTs])) {
                         cond = true;
                         break;
                     }
@@ -7072,6 +7075,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
 // this proccess is after deblocking filter process
 void sao_filter(struct slice_segment_header *slice, struct pps *pps, struct sps *sps, struct picture *p)
 {
+    VDBG(hevc, "run sao_filter");
     struct ctu * ctu;
     for (int ry = 0; ry < sps->PicHeightInCtbsY; ry ++) {
         for (int rx = 0; rx < sps->PicWidthInCtbsY; rx ++) {
@@ -7177,7 +7181,7 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         rbsp_trailing_bits(v);
     }
 
-    // sao_filter();
+    inloop_filter(hslice.slice, hps->pps, sps, &p);
 
     YUV420_to_BGRA32_16bit(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, Y, U,
                            V, y_stride, uv_stride,

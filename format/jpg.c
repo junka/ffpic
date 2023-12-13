@@ -299,7 +299,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     uint8_t *ptr;
     int width = ((j->sof.width + 7) >> 3) << 3; //algin to 8
-    int height = ((j->sof.height + 7) >> 3) << 3;
+    int height = j->sof.height; //((j->sof.height + 7) >> 3) << 3;
     int pitch = width * 4;
     int bytes_blockline = pitch * ystride;
     int bytes_mcu = xstride * 4;
@@ -316,7 +316,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     int16_t dummy[64] = {0};
     int16_t buf[64];
 
-    for (int y = 0; y < height / ystride; y++) {
+    for (int y = 0; y <= height / ystride; y++) {
         //block start
         ptr = j->data + y * bytes_blockline;
         for (int x = 0; x < width; x += xstride) {
@@ -364,25 +364,6 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     }
 
     huffman_decode_end();
-#if 1
-    //clear padding color or to background
-    for (int i = 0; i < height; i++) {
-        for (int k = j->sof.width; k < width; k++) {
-            j->data[i *pitch + k * 4] = 0xFF;
-            j->data[i *pitch + k * 4 + 1] = 0xFF;
-            j->data[i *pitch + k * 4 + 2] = 0xFF;
-            j->data[i *pitch + k * 4 + 3] = 0xFF;
-        }
-    }
-    for (int i = j->sof.height; i < height; i++) {
-        for (int k = 0; k < j->sof.width; k++) {
-            j->data[i *pitch + k * 4] = 0xFF;
-            j->data[i *pitch + k * 4 + 1] = 0xFF;
-            j->data[i *pitch + k * 4 + 2] = 0xFF;
-            j->data[i *pitch + k * 4 + 3] = 0xFF;
-        }
-    }
-#endif
 }
 
 void 
@@ -513,7 +494,7 @@ JPG_load(const char *filename)
     JPG_decode_image(j, compressed, j->data_len);
     free(compressed);
     p->width = ((j->sof.width + 7) >> 3) << 3;
-    p->height = ((j->sof.height + 7) >> 3) << 3;
+    p->height = j->sof.height;// ((j->sof.height + 7) >> 3) << 3;
     p->depth = 32;
     p->pitch = ((p->width * 32 + 32 - 1) >> 5) << 2;
     p->format = CS_PIXELFORMAT_RGB888;

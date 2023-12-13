@@ -277,7 +277,7 @@ static void
 HEIF_free(struct pic *p)
 {
     HEIF * h = (HEIF *)p->pic;
-
+    free_hevc_param_set();
     if (h->ftyp.compatible_brands)
         free(h->ftyp.compatible_brands);
 

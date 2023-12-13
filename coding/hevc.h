@@ -1347,6 +1347,8 @@ struct hevc_slice {
 
 void parse_nalu(uint8_t *data, int len, uint8_t **pixels);
 
+void free_hevc_param_set(void);
+
 #ifdef __cplusplus
 }
 #endif

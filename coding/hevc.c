@@ -2361,6 +2361,132 @@ ref_pic_lists_modification(struct bits_vec *v, struct slice_segment_header *slic
 
 }
 
+/*see (6-10) */
+static int **init_zscan_array(struct sps *sps, int *CtbAddrRsToTs) {
+    int PicWidthInTbsY = sps->PicWidthInCtbsY
+                         << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
+    int PicHeightInTbsY = sps->PicHeightInCtbsY
+                          << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
+    VDBG(hevc, "MinTbAddrZs: PicWidthInTbsY %d PicHeightInTbsY %d",
+         PicWidthInTbsY, PicHeightInTbsY);
+    int **MinTbAddrZs;
+    MinTbAddrZs = calloc(PicWidthInTbsY, sizeof(int *));
+    for (int x = 0; x < PicWidthInTbsY; x++) {
+        MinTbAddrZs[x] = calloc(PicHeightInTbsY, sizeof(int));
+    }
+    for (int y = 0; y < PicHeightInTbsY; y++) {
+        for (int x = 0; x < PicWidthInTbsY; x++) {
+            int tbX = (x << sps->MinTbLog2SizeY) >> sps->CtbLog2SizeY;
+            int tbY = (y << sps->MinTbLog2SizeY) >> sps->CtbLog2SizeY;
+            int ctbAddrRs = sps->PicWidthInCtbsY * tbY + tbX;
+            MinTbAddrZs[x][y] =
+                CtbAddrRsToTs[ctbAddrRs]
+                << ((sps->CtbLog2SizeY - sps->MinTbLog2SizeY) * 2);
+            int m, p = 0;
+            for (int i = 0; i < (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
+                 i++) {
+                m = 1 << i;
+                p += (m & x ? m * m : 0) + (m & y ? 2 * m * m : 0);
+            }
+            MinTbAddrZs[x][y] += p;
+        }
+    }
+    return MinTbAddrZs;
+}
+
+static void calc_pps_params(struct sps *sps, struct pps *pps) {
+
+    // see para 6.5.1: CTB raster and tile scanning conversion process
+    // see (6-3)
+    uint32_t *colWidth = calloc((pps->num_tile_columns_minus1 + 1), 4);
+    if (pps->uniform_spacing_flag) {
+        for (uint32_t i = 0; i <= pps->num_tile_columns_minus1; i++)
+            colWidth[i] =
+                ((i + 1) * sps->PicWidthInCtbsY) /
+                    (pps->num_tile_columns_minus1 + 1) -
+                (i * sps->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1);
+    } else {
+        colWidth[pps->num_tile_columns_minus1] = sps->PicWidthInCtbsY;
+        for (uint32_t i = 0; i < pps->num_tile_columns_minus1; i++) {
+            colWidth[i] = pps->column_width_minus1[i] + 1;
+            colWidth[pps->num_tile_columns_minus1] -= colWidth[i];
+        }
+    }
+    // see (6-4)
+    uint32_t *rowHeight = calloc((pps->num_tile_rows_minus1 + 1), 4);
+    if (pps->uniform_spacing_flag) {
+        for (int j = 0; j <= pps->num_tile_rows_minus1; j++)
+            rowHeight[j] =
+                ((j + 1) * sps->PicHeightInCtbsY) /
+                    (pps->num_tile_rows_minus1 + 1) -
+                (j * sps->PicHeightInCtbsY) / (pps->num_tile_rows_minus1 + 1);
+    } else {
+        rowHeight[pps->num_tile_rows_minus1] = sps->PicHeightInCtbsY;
+        for (int j = 0; j < pps->num_tile_rows_minus1; j++) {
+            rowHeight[j] = pps->row_height_minus1[j] + 1;
+            rowHeight[pps->num_tile_rows_minus1] -= rowHeight[j];
+        }
+    }
+    uint32_t *colBd = calloc((pps->num_tile_columns_minus1 + 1), 4);
+    // see (6-5)
+    colBd[0] = 0;
+    for (int i = 0; i <= pps->num_tile_columns_minus1; i++) {
+        colBd[i + 1] = colBd[i] + colWidth[i];
+    }
+    // see (6-6)
+    uint32_t *rowBd = calloc((pps->num_tile_rows_minus1 + 1), 4);
+    rowBd[0] = 0;
+    for (int j = 0; j <= pps->num_tile_rows_minus1; j++) {
+        rowBd[j + 1] = rowBd[j] + rowHeight[j];
+    }
+    // see (6-7)
+    pps->CtbAddrRsToTs = calloc(sps->PicSizeInCtbsY, 4);
+    for (int ctbAddrRs = 0; ctbAddrRs < sps->PicSizeInCtbsY; ctbAddrRs++) {
+        int tbX = ctbAddrRs % sps->PicWidthInCtbsY;
+        int tbY = ctbAddrRs / sps->PicWidthInCtbsY;
+        int tileX = -1, tileY = -1;
+        for (int i = 0; i <= pps->num_tile_columns_minus1; i++) {
+            if (tbX >= colBd[i]) {
+                tileX = i;
+            }
+        }
+        for (int j = 0; j <= pps->num_tile_rows_minus1; j++) {
+            if (tbY >= rowBd[j]) {
+                tileY = j;
+            }
+        }
+        pps->CtbAddrRsToTs[ctbAddrRs] = 0;
+        for (int i = 0; i < tileX; i++) {
+            pps->CtbAddrRsToTs[ctbAddrRs] += rowHeight[tileY] * colWidth[i];
+        }
+        for (int j = 0; j < tileY; j++) {
+            pps->CtbAddrRsToTs[ctbAddrRs] +=
+                sps->PicWidthInCtbsY * rowHeight[j];
+        }
+        pps->CtbAddrRsToTs[ctbAddrRs] +=
+            ((tbY - rowBd[tileY]) * colWidth[tileX] + tbX - colBd[tileX]);
+    }
+    // see (6-8)
+    pps->CtbAddrTsToRs = calloc(sps->PicSizeInCtbsY, 4);
+    for (int ctbAddrRs = 0; ctbAddrRs < sps->PicSizeInCtbsY; ctbAddrRs++)
+        pps->CtbAddrTsToRs[pps->CtbAddrRsToTs[ctbAddrRs]] = ctbAddrRs;
+    // see (6-9)
+    pps->TileId = calloc(sps->PicSizeInCtbsY, sizeof(uint32_t));
+    for (int j = 0, tileIdx = 0; j <= pps->num_tile_rows_minus1; j++) {
+        for (int i = 0; i <= pps->num_tile_columns_minus1; i++, tileIdx++) {
+            for (int y = rowBd[j]; y < rowBd[j + 1]; y++) {
+                for (int x = colBd[i]; x < colBd[i + 1]; x++) {
+                    pps->TileId[pps->CtbAddrRsToTs[y * sps->PicWidthInCtbsY +
+                                                   x]] = tileIdx;
+                }
+            }
+        }
+    }
+
+    // see 6.5.2 z-scan order array initialization process
+    // see (6-10)
+    pps->MinTbAddrZs = init_zscan_array(sps, pps->CtbAddrRsToTs);
+}
 
 static void
 calc_sps_params(struct sps *sps)
@@ -2543,6 +2669,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     VDBG(hevc, "no_output_of_prior_pics_flag %d", slice->no_output_of_prior_pics_flag);
 
     calc_sps_params(sps);
+    calc_pps_params(sps, pps);
     //see 7-36
     slice->Log2MinCuQpDeltaSize = sps->CtbLog2SizeY - pps->diff_cu_qp_delta_depth;
     //see 7-39
@@ -2832,7 +2959,6 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         if (inCmpPredAvailFlag) {
             slice->in_comp_pred_flag = READ_BIT(v);
         }
-        sps->ChromaArrayType = (sps->separate_colour_plane_flag == 1 ? 0 : sps->chroma_format_idc);
         slice->slice_sao_luma_flag = 0;
         slice->slice_sao_chroma_flag = 0;
 
@@ -6765,35 +6891,6 @@ static struct ctu *coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
     return ctu;
 }
 
-/*see (6-10) */
-static int **
-init_zscan_array(struct slice_segment_header *slice, struct sps *sps, int *CtbAddrRsToTs)
-{
-    int PicWidthInTbsY = sps->PicWidthInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
-    int PicHeightInTbsY = sps->PicHeightInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
-    VDBG(hevc, "MinTbAddrZs: PicWidthInTbsY %d PicHeightInTbsY %d", PicWidthInTbsY, PicHeightInTbsY);
-    int **MinTbAddrZs;
-    MinTbAddrZs = calloc(PicWidthInTbsY, sizeof(int *));
-    for (int x = 0; x < PicWidthInTbsY; x ++) {
-        MinTbAddrZs[x] = calloc(PicHeightInTbsY, sizeof(int));
-    }
-    for (int y = 0; y < PicHeightInTbsY; y++ ) {
-        for (int x = 0; x < PicWidthInTbsY; x++) {
-            int tbX = (x << sps->MinTbLog2SizeY) >> sps->CtbLog2SizeY;
-            int tbY = (y << sps->MinTbLog2SizeY) >> sps->CtbLog2SizeY;
-            int ctbAddrRs = sps->PicWidthInCtbsY * tbY + tbX;
-            MinTbAddrZs[x][y] = CtbAddrRsToTs[ctbAddrRs] << ((sps->CtbLog2SizeY - sps->MinTbLog2SizeY) * 2);
-            int m, p = 0;
-            for (int i = 0; i < (sps->CtbLog2SizeY - sps->MinTbLog2SizeY); i++) {
-                m = 1 << i;
-                p += (m & x ? m * m : 0) + (m & y ? 2 * m * m : 0);
-            }
-            MinTbAddrZs[x][y] += p;
-        }
-    }
-    return MinTbAddrZs;
-}
-
 /* see 7.3.8.1 */
 static void
 parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
@@ -6806,90 +6903,6 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     struct pps *pps = hps->pps;
 
     uint8_t end_of_slice_segment_flag = 0;
-    //see para 6.5.1: CTB raster and tile scanning conversion process
-    //see (6-3)
-    uint32_t *colWidth = calloc((pps->num_tile_columns_minus1 + 1), 4);
-    if (pps->uniform_spacing_flag) {
-        for (uint32_t i = 0; i <= pps->num_tile_columns_minus1; i++)
-            colWidth[i] = ((i + 1) * sps->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1) -
-                        (i * sps->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1);
-    } else {
-        colWidth[pps->num_tile_columns_minus1] = sps->PicWidthInCtbsY;
-        for (uint32_t i = 0; i < pps->num_tile_columns_minus1; i++) {
-            colWidth[i] = pps->column_width_minus1[i] + 1;
-            colWidth[pps->num_tile_columns_minus1] -= colWidth[i];
-        }
-    }
-    //see (6-4)
-    uint32_t *rowHeight = calloc((pps->num_tile_rows_minus1 + 1), 4);
-    if (pps->uniform_spacing_flag) {
-        for (int j = 0; j <= pps->num_tile_rows_minus1; j++)
-            rowHeight[j] = ((j + 1) * sps->PicHeightInCtbsY) / (pps->num_tile_rows_minus1 + 1) -
-                            (j * sps->PicHeightInCtbsY) / (pps->num_tile_rows_minus1 + 1);
-    } else {
-        rowHeight[pps->num_tile_rows_minus1] = sps->PicHeightInCtbsY;
-        for (int j = 0; j < pps->num_tile_rows_minus1; j++ ) {
-            rowHeight[j] = pps->row_height_minus1[j] + 1;
-            rowHeight[pps->num_tile_rows_minus1] -= rowHeight[j];
-        }
-    }
-    uint32_t *colBd = calloc((pps->num_tile_columns_minus1 + 1), 4);
-    //see (6-5)
-    colBd[0] = 0;
-    for (int i = 0; i <= pps->num_tile_columns_minus1; i++) {
-        colBd[i + 1] = colBd[i] + colWidth[i];
-    }
-    //see (6-6)
-    uint32_t *rowBd = calloc((pps->num_tile_rows_minus1 + 1), 4);
-    rowBd[0] = 0;
-    for (int j = 0; j <= pps->num_tile_rows_minus1; j++) {
-        rowBd[j + 1] = rowBd[j] + rowHeight[j];
-    }
-    //see (6-7)
-    pps->CtbAddrRsToTs = calloc(sps->PicSizeInCtbsY, 4);
-    for (int ctbAddrRs = 0; ctbAddrRs < sps->PicSizeInCtbsY; ctbAddrRs++ ) {
-        int tbX = ctbAddrRs % sps->PicWidthInCtbsY;
-        int tbY = ctbAddrRs / sps->PicWidthInCtbsY;
-        int tileX = -1, tileY = -1;
-        for (int i = 0; i <= pps->num_tile_columns_minus1; i++ ) {
-            if (tbX >= colBd[i]) {
-                tileX = i;
-            }
-        }
-        for (int j = 0; j <= pps->num_tile_rows_minus1; j++ ) {
-            if( tbY >= rowBd[j]) {
-                tileY = j;
-            }
-        }
-        pps->CtbAddrRsToTs[ctbAddrRs] = 0;
-        for (int i = 0; i < tileX; i++) {
-            pps->CtbAddrRsToTs[ctbAddrRs] += rowHeight[tileY] * colWidth[i];
-        }
-        for (int j = 0; j < tileY; j++) {
-            pps->CtbAddrRsToTs[ctbAddrRs] += sps->PicWidthInCtbsY * rowHeight[j];
-        }
-        pps->CtbAddrRsToTs[ctbAddrRs] += ((tbY - rowBd[tileY]) * colWidth[tileX] + tbX - colBd[tileX]);
-
-    }
-    //see (6-8)
-    pps->CtbAddrTsToRs = calloc(sps->PicSizeInCtbsY, 4);
-    for (int ctbAddrRs = 0; ctbAddrRs < sps->PicSizeInCtbsY; ctbAddrRs++ )
-        pps->CtbAddrTsToRs[pps->CtbAddrRsToTs[ctbAddrRs]] = ctbAddrRs;
-    //see (6-9)
-    pps->TileId = calloc(sps->PicSizeInCtbsY, sizeof(uint32_t));
-    for (int j = 0, tileIdx = 0; j <= pps->num_tile_rows_minus1; j++) {
-        for (int i = 0; i <= pps->num_tile_columns_minus1; i++, tileIdx++) {
-            for (int y = rowBd[j]; y < rowBd[j + 1]; y++) {
-                for(int x = colBd[i]; x < colBd[i + 1]; x++) {
-                    pps->TileId[pps->CtbAddrRsToTs[y * sps->PicWidthInCtbsY+ x]] = tileIdx;
-                }
-            }
-        }
-    }
-
-    //see 6.5.2 z-scan order array initialization process
-    //see (6-10)
-    pps->MinTbAddrZs = init_zscan_array(slice, sps, pps->CtbAddrRsToTs);
 
     int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
 
@@ -7277,4 +7290,41 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
         break;
     }
     bits_vec_free(v);
+}
+
+void free_hevc_param_set(void) {
+    if (hps.pps) {
+        if (hps.pps->pps_3d_ext)
+            free(hps.pps->pps_3d_ext);
+        if (hps.pps->pps_multilayer_ext)
+            free(hps.pps->pps_multilayer_ext);
+        free(hps.pps->column_width_minus1);
+        free(hps.pps->row_height_minus1);
+        free(hps.pps->CtbAddrTsToRs);
+        free(hps.pps->CtbAddrRsToTs);
+        free(hps.pps->TileId);
+        free(hps.pps);
+    }
+    if (hps.sps) {
+        if (hps.sps->list_data)
+            free(hps.sps->list_data);
+        if (hps.sps->pcm)
+            free(hps.sps->pcm);
+        if (hps.sps->sps_st_ref)
+            free(hps.sps->sps_st_ref);
+        if (hps.sps->sps_lt_ref)
+            free(hps.sps->sps_lt_ref);
+        if (hps.sps->vui)
+            free(hps.sps->vui);
+        free(hps.sps);
+    }
+    if (hps.vps) {
+        if (hps.vps->vps_timing_info)
+            free(hps.vps->vps_timing_info);
+        if (hps.vps->vps_ext)
+            free(hps.vps->vps_ext);
+        if (hps.vps->vps_3d_ext)
+            free(hps.vps->vps_3d_ext);
+        free(hps.vps);
+    }
 }

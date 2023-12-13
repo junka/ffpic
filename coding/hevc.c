@@ -7165,10 +7165,8 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
                         hps->sps->PicHeightInMinCbsY,
                     sizeof(struct cu_info));
 
-    int PicWidthInTbsY = sps->PicWidthInCtbsY
-        << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
-    int PicHeightInTbsY = sps->PicHeightInCtbsY
-        << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
+    int PicWidthInTbsY = sps->PicWidthInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
+    int PicHeightInTbsY = sps->PicHeightInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
 
     p.split_transform_flag = calloc(PicWidthInTbsY * PicHeightInTbsY, sizeof(uint8_t));
     p.ctus = malloc(sizeof(struct ctu *) * sps->PicHeightInCtbsY * sps->PicWidthInCtbsY);

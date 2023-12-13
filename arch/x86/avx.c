@@ -76,7 +76,6 @@ __m256i x86_idct_1dx4_avx2(const __m256i left, __m256i right, int shift) {
 static void x86_idct_4x4_avx2(int16_t *in, int16_t *out, int bitdepth)
 {
     int bdShift = 20 - bitdepth;
-
     const int16_t transMatrix[4][4] = {{29, 55, 74, 84},
                                         {74, 74, 0, -74},
                                         {84, -29, -74, 55},
@@ -85,14 +84,13 @@ static void x86_idct_4x4_avx2(int16_t *in, int16_t *out, int bitdepth)
                                         {55, 74, -29, -84},
                                         {74, 0, -74, 74},
                                         {84, -74, 55, -29}};
-
-    __m256i tran =
-        _mm256_load_si256((const __m256i *)transMatrix); // 16 * 16 = 256 bit size
+    // 16 * 16 = 256 bit size
+    __m256i tran = _mm256_load_si256((const __m256i *)transMatrix);
     __m256i tranT = _mm256_load_si256((const __m256i *)transMatrixT);
-    __m256i input = _mm256_load_si256((const __m256i *)in);
+    __m256i input = _mm256_loadu_si256((const __m256i *)in);
     __m256i tmp = x86_idct_1dx4_avx2(tranT, input, 7);
     __m256i ret = x86_idct_1dx4_avx2(tmp, tran, bdShift);
-    _mm256_store_si256((__m256i *)out, ret);
+    _mm256_storeu_si256((__m256i *)out, ret);
 }
 
 struct accl_ops avx_accl = {

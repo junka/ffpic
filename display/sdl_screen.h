@@ -12,6 +12,7 @@ typedef struct {
     SDL_Window *w;
     SDL_Renderer *r;
     SDL_Texture *t;
+    SDL_Rect rect;
     // SDL_Thread *tid;
 } sdl_screen;
 

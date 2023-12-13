@@ -10,8 +10,8 @@ VLOG_REGISTER(clr, DEBUG)
 #define ONE_HALF (1UL << (SCALEBITS - 1))
 #define FIX(x) ((int)((x) * (1UL << SCALEBITS) + 0.5))
 
-void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *Cb,
-                     int16_t *Cr, int v, int h) {
+void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
+                     int16_t *V, int v, int h) {
 #if 0
     VDBG(clr, "YCbCr :");
     for (int i = 0; i < 16; i++) {
@@ -36,8 +36,8 @@ void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *Cb,
             int r, g, b;
 
             // all YCbCr have been added by 128 in idct
-            cb = *Cb++ - 128;
-            cr = *Cr++ - 128;
+            cb = *U++ - 128;
+            cr = *V++ - 128;
             add_r = FIX(1.40200) * cr + ONE_HALF;
             add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr + ONE_HALF;
             add_b = FIX(1.77200) * cb + ONE_HALF;
@@ -346,5 +346,36 @@ const char *CS_GetPixelFormatName(uint32_t format) {
 #undef CASE
     default:
         return "CS_PIXELFORMAT_UNKNOWN";
+    }
+}
+
+
+// Hue/Saturation/Value
+void BGRA32_TO_HSV(uint8_t *ptr, int pitch, int height, uint16_t* h, uint8_t *s, uint8_t *v)
+{
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < pitch; x += 4) {
+            uint8_t b = ptr[x + y * pitch];
+            uint8_t g = ptr[x + 1 + y * pitch];
+            uint8_t r = ptr[x + 2 + y * pitch];
+            uint8_t cmax = MAX(MAX(b, g), r);
+            uint8_t cmin = MIN(MIN(b, g), r);
+            if (cmax == cmin) {
+                *h = 0;
+            } else if (cmax == r) {
+                if (g >= b) {
+                    *h = 60 * (g - b)/(cmax - cmin);
+                } else {
+                    *h = 60 * (g - b) / (cmax - cmin) + 360;
+                }
+            } else if (cmax == g) {
+                *h = 60 * (b - r) / (cmax - cmin) + 120;
+            } else if (cmax == b) {
+                *h = 60 * (r - g) / (cmax - cmin) + 240;
+            }
+            h++;
+            *s++ = (cmax == 0) ? 0 : 255 - 255 * cmin/cmax;
+            *v++ = cmax;
+        }
     }
 }

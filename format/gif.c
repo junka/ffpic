@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 
+#include "colorspace.h"
 #include "gif.h"
 #include "file.h"
 #include "lzw.h"
@@ -238,10 +239,7 @@ struct pic* GIF_load(const char* filename) {
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = gif->graphics->image->data;
-    // p->amask = 0;
-    // p->rmask = 0;
-    // p->gmask = 0;
-    // p->bmask = 0;
+    p->format = CS_PIXELFORMAT_RGB888;
     return p;
 }
 
@@ -261,7 +259,7 @@ GIF_probe(const char* filename)
     }
     fclose(f);
     if (!memcmp(&head, "GIF89a", GIF_FILE_HEADER_LEN) || 
-            !memcmp(&head, "GIF87a", GIF_FILE_HEADER_LEN)) {
+        !memcmp(&head, "GIF87a", GIF_FILE_HEADER_LEN)) {
         return 0;
     }
     return -EINVAL;

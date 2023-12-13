@@ -53,8 +53,8 @@ main(int argc, const char *argv[])
     top = p->top;
     left = p->left;
     if (p->width < 180 || p->height < 60) {
-        top = top ? top : 360/2 - p->height/2;
-        left = left ? left : 480 /2 - p->width/2;
+        top = top ? top : 360/2 - p->height / 2;
+        left = left ? left : 480 /2 - p->width / 2;
     }
     ret = display_show(d, p->pixels, left, top, p->width, p->height, p->depth, p->pitch, p->format);
     if (ret) {

@@ -1321,7 +1321,7 @@ struct ctu {
     int slice_id;
 
     int cu_num;
-    struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu
+    // struct cu *cu[64]; // MAX is 64*64 CTU divided into 64 numbers of 8*8 cu
     int CtbAddrInTs;
 };
 

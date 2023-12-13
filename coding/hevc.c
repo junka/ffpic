@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, DEBUG)
+VLOG_REGISTER(hevc, INFO)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -172,7 +172,7 @@ const uint8_t ScalingList[4][6][64] = {
 static void
 parse_scaling_list_data(struct bits_vec *v, struct scaling_list_data *sld)
 {
-    VINFO(hevc, "parse_scaling_list_data");
+    VDBG(hevc, "parse_scaling_list_data");
 
     int refMatrixId;
     // table 7-3, sizeid 0 means 4X4, 1 means 8X8, 2 means 16X16, 3 means 32X32
@@ -1081,7 +1081,6 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     }
     sps->amp_enabled_flag = READ_BIT(v);
     sps->sample_adaptive_offset_enabled_flag = READ_BIT(v);
-    VINFO(hevc, "sample_adaptive_offset_enabled_flag %d", sps->sample_adaptive_offset_enabled_flag);
     sps->pcm_enabled_flag = READ_BIT(v);
     if (sps->pcm_enabled_flag) {
         sps->pcm = calloc(1, sizeof(struct pcm));
@@ -2639,7 +2638,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
 
     static int slice_idx = 0;
     slice->idx = slice_idx++;
-    VINFO(hevc, "parse_slice_segment_header");
+
     //init ScanOrder table
     for (int log2blocksize = 0; log2blocksize < 6; log2blocksize++) {
         if (log2blocksize >= 0 && log2blocksize < 6) {
@@ -5989,7 +5988,6 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         }
     }
 
-    VINFO(hevc, "end of residual coding");
 }
 
 /* see 7.3.8.10 */
@@ -6146,7 +6144,7 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
                                  int trafoDepth, int blkIdx, struct picture *p,
                                  int parent_cbf_cb, int parent_cbf_cr) {
     struct sps *sps = hps->sps;
-    VINFO(hevc, "parse_transform_tree %d (%d, %d) (%d, %d) parent %d, %d",
+    VDBG(hevc, "parse_transform_tree %d (%d, %d) (%d, %d) parent %d, %d",
           1 << log2TrafoSize, x0, y0, xBase, yBase, parent_cbf_cb,
           parent_cbf_cr);
     struct trans_tree *tt = &cu->tt;
@@ -6426,13 +6424,15 @@ int get_cu_skip_flag_ctxInc(struct slice_segment_header *slice, struct picture *
 
 
 //see I.7.3.8.5
-static struct cu *parse_coding_unit(cabac_dec *d, struct ctu *ctu,
+static void parse_coding_unit(cabac_dec *d, struct ctu *ctu,
                                     struct hevc_slice *hslice,
                                     struct hevc_param_set *hps, int x0, int y0,
                                     int log2CbSize, int cqtDepth, struct picture *p)
 {
-    struct cu *cu = calloc(1, sizeof(struct cu));
-    ctu->cu[ctu->cu_num++] = cu;
+    struct cu cum;
+    struct cu *cu = &cum;
+    memset(cu, 0, sizeof(struct cu));
+    // ctu->cu[ctu->cu_num++] = cu;
     struct slice_segment_header *slice = hslice->slice;
     struct hevc_nalu_header *headr = hslice->nalu;
     struct vps *vps = hps->vps;
@@ -6595,7 +6595,7 @@ static struct cu *parse_coding_unit(cabac_dec *d, struct ctu *ctu,
                 cu->IntraSplitFlag = 0;
             }
             // for a picture, make sure it is MODE_INTRA
-            VINFO(hevc, "CuPredMode (%d, %d) %d, cu->PartMode %d", x0, y0,
+            VDBG(hevc, "CuPredMode (%d, %d) %d, cu->PartMode %d", x0, y0,
                   cu->CuPredMode, cu->PartMode);
 
             assert(cu->CuPredMode == MODE_INTRA);
@@ -6794,7 +6794,7 @@ static struct cu *parse_coding_unit(cabac_dec *d, struct ctu *ctu,
 #endif
                 cu->rqt_root_cbf = 1;
             }
-            VINFO(hevc, "rqt_root_cbf %d", cu->rqt_root_cbf);
+            VDBG(hevc, "rqt_root_cbf %d", cu->rqt_root_cbf);
             if (cu->rqt_root_cbf) {
                 cu->MaxTrafoDepth = (cu->CuPredMode == MODE_INTRA ?
                     (sps->max_transform_hierarchy_depth_intra + cu->IntraSplitFlag) :
@@ -6809,7 +6809,6 @@ static struct cu *parse_coding_unit(cabac_dec *d, struct ctu *ctu,
 
             }
     }
-    return cu;
 }
 
 static void
@@ -7210,9 +7209,9 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     for (int i = 0; i < p.ctu_num; i++) {
         if (p.ctus[i]->sao) {
             free(p.ctus[i]->sao);
-            for (int j = 0; j < p.ctus[i]->cu_num; j++) {
-                free(p.ctus[i]->cu[j]);
-            }
+            // for (int j = 0; j < p.ctus[i]->cu_num; j++) {
+            //     free(p.ctus[i]->cu[j]);
+            // }
         }
         free(p.ctus[i]);
     }

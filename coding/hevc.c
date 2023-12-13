@@ -7009,6 +7009,12 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
         for (int i = 0; i < nCtbSw; i++) {
             int xSi = xCtb + i;
             int ySj = yCtb + j;
+            if ((rx == (sps->PicWidthInCtbsY - 1) && xSi >= sps->pic_width_in_luma_samples) ||
+                (ry == (sps->PicWidthInCtbsY - 1) && ySj >= sps->pic_height_in_luma_samples)) {
+                // outside of the picture boundaries
+                // in case the pic_height_in_luma_samples % 64 != 0
+                continue;
+            }
             int xYi = cIdx == 0 ? xSi : xSi * sps->SubWidthC;
             int yYj = cIdx == 0 ? ySj : ySj * sps->SubHeightC;
             if ((sps->pcm &&sps->pcm->pcm_loop_filter_disabled_flag == 1 &&
@@ -7067,7 +7073,8 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                         edgeIdx = (edgeIdx == 2) ? 0 : edgeIdx + 1;
                     }
                 }
-                rec[xSi + ySj * stride] = clip3(0, (1<<bitDepth)-1, rec[xSi + ySj *stride] + sao->saoOffsetVal[cIdx][edgeIdx]);
+                if (sao->saoOffsetVal[cIdx][edgeIdx] != 0)
+                    rec[xSi + ySj * stride] = clip3(0, (1<<bitDepth)-1, rec[xSi + ySj *stride] + sao->saoOffsetVal[cIdx][edgeIdx]);
             } else if (ctu->sao->SaoTypeIdx[cIdx] == 1) {
                 int bandShift = bitDepth - 5;
                 int saoLeftClass = ctu->sao->sao_band_position[cIdx];
@@ -7077,7 +7084,8 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                     bandTable[(k + saoLeftClass) & 31] = k + 1;
                 }
                 int bandIdx = bandTable[rec[xSi + ySj * stride] >> bandShift];
-                rec[xSi + ySj * stride] = clip3(0, (1 << bitDepth)-1, rec[xSi + ySj * stride] + sao->saoOffsetVal[cIdx][bandIdx]);
+                if (sao->saoOffsetVal[cIdx][bandIdx])
+                    rec[xSi + ySj * stride] = clip3(0, (1 << bitDepth)-1, rec[xSi + ySj * stride] + sao->saoOffsetVal[cIdx][bandIdx]);
             }
         }
     }
@@ -7153,9 +7161,9 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     int height = ((sps->pic_height_in_luma_samples + 3 )>>2)<<2;
     int y_stride = ((width + 3) >> 2) << 2;
     int uv_stride = y_stride >> 1;
-    int16_t *Y = malloc(height * y_stride * 2);
-    int16_t *U = malloc(height * uv_stride * 2);
-    int16_t *V = malloc(height * uv_stride * 2);
+    int16_t *Y = malloc(height * y_stride * sizeof(int16_t));
+    int16_t *U = malloc(height * uv_stride * sizeof(int16_t));
+    int16_t *V = malloc(height * uv_stride * sizeof(int16_t));
     struct picture p = {
         .Y = Y,
         .U = U,

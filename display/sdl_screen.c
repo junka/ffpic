@@ -1,6 +1,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "SDL_events.h"
 #include "display.h"
@@ -60,9 +61,7 @@ void pic_poll_block(bool q)
     SDL_Event e;
     bool quit = false;
     int mx, my;
-    // int fx, fy;
-    // int sx, sy;
-    // int delta = 0;
+    SDL_FingerID fingerId = 0;
     while (!quit) {
         quit = q;
         while (SDL_PollEvent(&e)) {
@@ -91,24 +90,29 @@ void pic_poll_block(bool q)
                     my = e.motion.y;
                 }
                 break;
-            // case SDL_FINGERMOTION:
-            //     if (e.tfinger.fingerId == 0) {
-            //         fx = e.tfinger.x;
-            //         fy = e.tfinger.y;
-            //     } else if (e.tfinger.fingerId == 1) {
-            //         sx = e.tfinger.x;
-            //         sy = e.tfinger.y;
-            //     }
-            //     if (delta == 0) {
-            //         delta = (fx - sx) * (fx - sx) + (fy - sy) * (fy - sy);
-            //     } else if (delta > (fx - sx) * (fx - sx) + (fy - sy) * (fy - sy)) {
-            //         scrn.rect.h *= 1.01;
-            //         scrn.rect.w *= 1.01;
-            //     } else if (delta < (fx - sx) * (fx - sx) + (fy - sy) * (fy - sy)) {
-            //         scrn.rect.h *= 1.01;
-            //         scrn.rect.w *= 1.01;
-            //     }
-            //     break;
+            case SDL_MULTIGESTURE:
+                break;
+            case SDL_FINGERDOWN:
+                if (fingerId == 0) {
+                    mx = e.tfinger.x * scrn.rect.w;
+                    my = e.tfinger.y * scrn.rect.w;
+                    fingerId = e.tfinger.fingerId;
+                }
+                break;
+            case SDL_FINGERUP:
+                if (e.tfinger.fingerId == fingerId) {
+                    fingerId = 0;
+                }
+                break;
+            case SDL_FINGERMOTION:
+                if (e.tfinger.fingerId == fingerId) {
+                    scrn.rect.x += e.tfinger.x * scrn.rect.w - mx;
+                    scrn.rect.y += e.tfinger.y * scrn.rect.w - my;
+                    mx = e.tfinger.x * scrn.rect.w;
+                    my = e.tfinger.y * scrn.rect.w;
+                }
+
+                break;
             }
         }
         SDL_RenderClear(scrn.r);
@@ -183,5 +187,6 @@ display_t sdl_display = {
 
 void
 sdl_screen_register(void) {
+    setenv("SDL_MOUSE_TOUCH_EVENTS", "1", 1);
     display_register(&sdl_display);
 }

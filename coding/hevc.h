@@ -1175,7 +1175,7 @@ struct predication_unit {
                           the current prediction unit. see  @enum inter_pred_mpde*/
     int ref_idx_l0;     /* list 0 reference picture index for the current prediction unit */
     int ref_idx_l1;     /* list 1 reference picture index for the current prediction unit */
-    struct mvd_coding *mvd;
+    struct mvd_coding mvd;
     int MvdL1[64][64][2];
 };
 
@@ -1209,6 +1209,7 @@ struct trans_tree {
     uint8_t tu_residual_act_flag[32][32];
     int16_t TransCoeffLevel[3][32][32]; // 3 for color index, 0 for Y, 1 for Cb,
                                         // 2 for Cr
+    int numSigCoeff[3];
     int tu_num;
 };
 

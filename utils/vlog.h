@@ -69,10 +69,14 @@ int vlog(uint32_t level, uint32_t logtype, const char *format, ...)
 
 int vlog_register_type_and_pick_level(const char *name, uint32_t level_def);
 
+#ifndef NDEBUG
 #define VLOG(l, t, ...)                        \
     do { vlog(VLOG_## l, vlog_## t, # t "(%d): ", __LINE__); \
     vlog(VLOG_## l, vlog_## t, __VA_ARGS__);   \
     vlog(VLOG_## l, vlog_## t, "%s", "\n"); } while(0)
+#else
+#define VLOG(l, t, ...)
+#endif
 
 #define VDBG(t, ...)   VLOG(DEBUG, t, __VA_ARGS__)
 #define VINFO(t, ...)   VLOG(INFO, t, __VA_ARGS__)

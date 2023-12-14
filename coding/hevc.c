@@ -3760,8 +3760,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
         for (int y = 0; y < nTbS; y++) {
             for (int x = 0; x < nTbS; x++) {
                 m = slice->ScalingFactor[sizeid][mid][x][y];
-                d[x + y * nTbS] =
-                    clip3(coeffMin, coeffMax,
+                d[x + y * nTbS] = clip3(coeffMin, coeffMax,
                           ((tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0] *
                           m * levelScale[qP % 6]<< (qP / 6)) + (1 << (bdShift - 1))) >> bdShift);
             }
@@ -4029,7 +4028,10 @@ quatization_parameters(int xCb, int yCb,
     // int CtbAddrInRs = 
     // (xQg >> sps->CtbLog2SizeY) + (yQg >> sps->CtbLog2SizeY) * sps->PicWidthInCtbsY;
     // int CtbAddrInTs = pps->CtbAddrRsToTs[CtbAddrInRs];
-    int CtbAddrInTs = p->ctus[p->ctu_num - 1]->CtbAddrInTs;
+    // int CtbAddrInTs = p->ctus[p->ctu_num - 1]->CtbAddrInTs;
+    int CtbAddrInTs =
+        get_ctu(sps, p, xQg >> sps->CtbLog2SizeY, yQg >> sps->CtbLog2SizeY)
+            ->CtbAddrInTs;
 
     int xTmp = (xQg - 1) >> sps->MinTbLog2SizeY;
     int yTmp = yQg >> sps->MinTbLog2SizeY;
@@ -4664,7 +4666,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
             int yTbOffsetY = yTbOffset * sps->SubHeightC;
             int residualDpcm = 0;
             int16_t predSamples[64 * 64];
-            int16_t resSamples[32*32];
+            int16_t resSamples[32*32] = {0};
             struct trans_tree *tt = &cu->tt;
             int transform_skip_flag =
                 tt->transform_skip_flag[cIdx][xTbY-tt->xT0][yTbY + yTbOffsetY- tt->yT0];
@@ -4687,25 +4689,27 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                                         p);
             }
             if (controlParaAct != 2) {
-                // step 6,  8.6.2
-                scale_and_transform(cu, transform_skip_flag,
-                                hps, slice, &cu->tt, xTbY, yTbY + yTbOffsetY,
-                                trafoDepth, cIdx, nTbS, resSamples, p);
-                
-                //step 7
-                VDBG(hevc, "residualDpcm %d", residualDpcm);
-                if (residualDpcm == 1) {
-                    // 8.6.5 directional residual modification
-                    residual_modification_transform_bypass(predModeIntra / 26, nTbS,
-                                                        resSamples);
-                }
-                //step 8
-                if (hps->pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
-                    sps->ChromaArrayType == 3 && cIdx != 0) {
-                    //  8.6.6 residual modification process
-                    residual_modification_transform_cross_prediction(
-                        hps->sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
-                        resSamples);
+                if (tt->numSigCoeff[cIdx] != 0) {
+                    // step 6,  8.6.2
+                    scale_and_transform(cu, transform_skip_flag,
+                                    hps, slice, &cu->tt, xTbY, yTbY + yTbOffsetY,
+                                    trafoDepth, cIdx, nTbS, resSamples, p);
+                    
+                    //step 7
+                    VDBG(hevc, "residualDpcm %d", residualDpcm);
+                    if (residualDpcm == 1) {
+                        // 8.6.5 directional residual modification
+                        residual_modification_transform_bypass(predModeIntra / 26, nTbS,
+                                                            resSamples);
+                    }
+                    //step 8
+                    if (hps->pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
+                        sps->ChromaArrayType == 3 && cIdx != 0) {
+                        //  8.6.6 residual modification process
+                        residual_modification_transform_cross_prediction(
+                            hps->sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
+                            resSamples);
+                    }
                 }
             }
             // step 9
@@ -5813,7 +5817,6 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         // sig_coeff_flag specifies for coeff at (xC, yC) in current block whether
         // the coeff is zero or not
         int ctxInc_greater2;
-        // VDBG(hevc, "nz %d", nz);
 
         // since we put sig_coeff_flag in a array, and all calculated scan pos
         // from ScanOrder[2][scanIdx][n], just use the index and ignore the pos
@@ -5864,7 +5867,6 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         } else {
             signHidden = lastSigScanPos - firstSigScanPos > 3;
         }
-        // VDBG(hevc, "signHidden %d", signHidden);
 
         if (lastGreater1ScanPos != -1) {
             coeff_abs_level_greater2_flag[lastGreater1ScanPos] =
@@ -5873,9 +5875,6 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
             if (coeff_abs_level_greater2_flag[lastGreater1ScanPos]) {
                 escapeDataPresent = 1;
             }
-            // VDBG(hevc,
-            //      "(%d, %d) lastGreater1ScanPos %d, coeff_abs_level_greater2_flag %d",
-            //      lastGreater1ScanPos, x0, y0, coeff_abs_level_greater2_flag[lastGreater1ScanPos]);
         }
         // see 9-20, 9-21, 9-22
         int sbType = 0;
@@ -5889,17 +5888,10 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         for (int n = 15; n >= 0; n--) {
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
-            // VDBG(hevc,
-            //      "(%d, %d) sig_coeff_flag %d, sign_data_hiding_enabled_flag "
-            //      "%d, firstSigScanPos %d",
-            //      xC, yC, sig_coeff_flag[n],
-            //      pps->sign_data_hiding_enabled_flag, firstSigScanPos);
             if (sig_coeff_flag[n] &&
                 (!pps->sign_data_hiding_enabled_flag || !signHidden ||
                  (n != firstSigScanPos))) {
                 coeff_sign_flag[n] = CABAC_BP(d);
-                // VDBG(hevc, "xC, yC (%d, %d) coeff_sign_flag[%d] %d", xC, yC, n,
-                //      coeff_sign_flag[n]);
             }
         }
         int numSigCoeff = 0;
@@ -5914,13 +5906,9 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
         for (int n = 15; n >= 0; n--) {
             xC = (xS << 2) + slice->ScanOrder[2][scanIdx][n].x;
             yC = (yS << 2) + slice->ScanOrder[2][scanIdx][n].y;
-            // VDBG(hevc, "(%d %d)sig_coeff_flag %d, coeff_abs_level_greater1_flag %d, n %d",
-            //     xC, yC, sig_coeff_flag[n],
-            //     coeff_abs_level_greater1_flag[n], n);
             if (sig_coeff_flag[n]) {
-                int baseLevel = 1 + coeff_abs_level_greater1_flag[n] +
-                                coeff_abs_level_greater2_flag[n];
-                if (baseLevel == (( numSigCoeff < 8) ? ( (n == lastGreater1ScanPos) ? 3 : 2) : 1)) {
+                int baseLevel = 1 + coeff_abs_level_greater1_flag[n] + coeff_abs_level_greater2_flag[n];
+                if (baseLevel == ((numSigCoeff < 8) ? ((n == lastGreater1ScanPos) ? 3 : 2) : 1)) {
                     //see 9.3.3.11 binarization process for coeff_abs_level_remaining
                     int prefix = -1;
                     int code = 0;
@@ -5969,8 +5957,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
                     (coeff_abs_level_remaining[n] + baseLevel) *
                     (1 - 2 * coeff_sign_flag[n]);
                 if (pps->sign_data_hiding_enabled_flag && signHidden) {
-                    sumAbsLevel +=
-                        (coeff_abs_level_remaining[n] + baseLevel);
+                    sumAbsLevel += (coeff_abs_level_remaining[n] + baseLevel);
                     if ((n == firstSigScanPos) && ((sumAbsLevel % 2) == 1)) {
                         tt->TransCoeffLevel[cIdx][x0 + xC - cu->x0]
                                            [y0 + yC - cu->y0] =
@@ -5978,14 +5965,10 @@ parse_residual_coding(cabac_dec *d, struct cu *cu, struct trans_tree *tt,
                                                 [y0 + yC - cu->y0];
                     }
                 }
-                // VINFO(hevc, "predModeIntra %d TU (%d, %d) %d log2TrafoSize %d",
-                //       predModeIntra, x0 + xC, y0 + yC,
-                //       tt->TransCoeffLevel[cIdx][x0 + xC - cu->x0]
-                //                          [y0 + yC - cu->y0],
-                //       log2TrafoSize);
                 numSigCoeff++;
             }
         }
+        tt->numSigCoeff[cIdx] += numSigCoeff;
     }
 
 }
@@ -6312,7 +6295,6 @@ static void parse_prediction_unit(cabac_dec *d,
     /*MaxNumMergeCand should be range of 1 to 5 + NumExtraMergeCand */
     //see I-36
     int MaxNumMergeCand = 5 + NumExtraMergeCand - slice->five_minus_max_num_merge_cand;
-    pu->mvd = calloc(1, sizeof(struct mvd_coding));
     if (cu->CuPredMode==MODE_SKIP) {
         if (MaxNumMergeCand > 1) {
             pu->merge_idx = CABAC(d, CTX_TYPE_PU_MERGE_IDX);
@@ -6335,10 +6317,7 @@ static void parse_prediction_unit(cabac_dec *d,
                 if (slice->num_ref_idx_l0_active_minus1 > 0) {
                     pu->ref_idx_l0 = CABAC(d, CTX_TYPE_PU_REF_IDX);
                 }
-                if (pu->mvd == NULL) {
-                    pu->mvd = calloc(1, sizeof(struct mvd_coding));
-                }
-                parse_mvd_coding(d, pu->mvd, x0, y0, 0);
+                parse_mvd_coding(d, &pu->mvd, x0, y0, 0);
                 pu->mvp_l0_flag = CABAC(d, CTX_TYPE_PU_MVP_FLAG);
             }
             if (pu->inter_pred_idc != PRED_L0) {
@@ -6349,10 +6328,7 @@ static void parse_prediction_unit(cabac_dec *d,
                     pu->MvdL1[x0][y0][0] = 0;
                     pu->MvdL1[x0][y0][1] = 0;
                 } else {
-                    if (pu->mvd == NULL) {
-                        pu->mvd = calloc(1, sizeof(struct mvd_coding));
-                    }
-                    parse_mvd_coding(d, pu->mvd, x0, y0, 1);
+                    parse_mvd_coding(d, &pu->mvd, x0, y0, 1);
                 }
                 pu->mvp_l1_flag = CABAC(d, CTX_TYPE_PU_MVP_FLAG);
             }
@@ -6429,10 +6405,8 @@ static void parse_coding_unit(cabac_dec *d, struct ctu *ctu,
                                     struct hevc_param_set *hps, int x0, int y0,
                                     int log2CbSize, int cqtDepth, struct picture *p)
 {
-    struct cu cum;
+    struct cu cum = {.log2CbSize = log2CbSize,};
     struct cu *cu = &cum;
-    memset(cu, 0, sizeof(struct cu));
-    // ctu->cu[ctu->cu_num++] = cu;
     struct slice_segment_header *slice = hslice->slice;
     struct hevc_nalu_header *headr = hslice->nalu;
     struct vps *vps = hps->vps;

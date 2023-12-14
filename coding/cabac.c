@@ -481,13 +481,17 @@ cabac_dec_bypass(cabac_dec *dec)
     }
     // we have the last 7 bits for buffer TBD
     uint32_t scaledRange = dec->range << 7;
+#ifndef NDEBUG
     VDBG(cabac, "scaledRange %d, value %d", scaledRange, dec->value);
+#endif
     if (dec->value >= scaledRange) {
         binVal = 1;
         dec->value -= scaledRange;
     }
+#ifndef NDEBUG
     VDBG(cabac, "bypass v %x r %x c %d: binVal %d", dec->value, dec->range,
          dec->count, binVal);
+#endif
     return binVal;
 }
 
@@ -550,12 +554,16 @@ cabac_dec_decision(cabac_dec *dec, int ctx_tid)
     int binVal;
     uint8_t state = m->state;
     uint32_t rangelps = LPSTable[state][(dec->range >> 6) & 3];
+#ifndef NDEBUG
     VDBG(cabac, "decision tid %d, state %d,%d ", ctx_tid, state,
          (dec->range >> 6) - 4);
+#endif
     dec->range -= rangelps;
     uint32_t scaledRange = dec->range << 7;
+#ifndef NDEBUG
     VDBG(cabac, "decision state %d,%d, rlps %d, v %x scr %x, count %d", state,
          (dec->range >> 6) & 3, rangelps, dec->value, scaledRange, dec->count);
+#endif
     if (dec->value < scaledRange) {
         //MPS (Most Probable Symbol)
         binVal = m->mpsbit;
@@ -575,9 +583,10 @@ cabac_dec_decision(cabac_dec *dec, int ctx_tid)
         }
     }
     renormD(dec);
+#ifndef NDEBUG
     VDBG(cabac, "decision v %x r %x state %d: binVal %d", dec->value, dec->range,
          m->state, binVal);
-
+#endif
     return binVal;
 }
 
@@ -624,17 +633,20 @@ int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
     int t = cMax >> cRiceParam;
     int prefix = 0, suffix = 0, i = 0;
     int binIdx = 0;
+#ifndef NDEBUG
     VDBG(cabac, "tid %d, (binIdx %d)flag %d, range %x, value %x", tid,
          binIdx, ctx_bypass_flags(cb(tid, binIdx), binIdx),
          dec->range, dec->value);
+#endif
     while (prefix < t && ctx_bypass_flags(cb(tid, binIdx), binIdx) >= 0 &&
            cabac_dec_bin(dec, cb(tid, binIdx),
                          ctx_bypass_flags(cb(tid, binIdx), binIdx)) == 1) {
         binIdx++;
         prefix++;
     }
-    VDBG(cabac, "prefix %d, t %d, binIdx %d(%d)", prefix, t, binIdx,
-         cb(tid, binIdx) - tid);
+#ifndef NDEBUG
+    VDBG(cabac, "prefix %d, t %d, binIdx %d(%d)", prefix, t, binIdx, cb(tid, binIdx) - tid);
+#endif
     if (prefix >= t) {
         // the bin string length cMax >> cRiceParam with all bins equal to 1
         return cMax;
@@ -650,9 +662,10 @@ int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
             //      m->bypass, binIdx, ctx_bypass_flags(tid, binIdx), m->state, dec->range,
             //      dec->value);
             suffix = cabac_dec_bypass_fl(dec, (1 << cRiceParam) - 1);
-
+#ifndef NDEBUG
             VDBG(cabac, "suffix %d, t %d, binIdx %d(%d)", suffix, t, binIdx,
                  cb(tid, binIdx) - tid);
+#endif
         }
         //see 9-11, reverse the equation
         return  (prefix << cRiceParam) + suffix;

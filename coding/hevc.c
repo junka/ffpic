@@ -28,9 +28,11 @@ struct cu_info {
 #pragma pack(pop)
 
 struct picture {
-    int16_t *Y;
-    int16_t *U;
-    int16_t *V;
+    // int16_t *Y;
+    // int16_t *U;
+    // int16_t *V;
+    int16_t *pixel;
+    int size;
     int y_stride;
     int uv_stride;
 
@@ -2399,8 +2401,7 @@ static void calc_pps_params(struct sps *sps, struct pps *pps) {
     uint32_t *colWidth = calloc((pps->num_tile_columns_minus1 + 1), 4);
     if (pps->uniform_spacing_flag) {
         for (uint32_t i = 0; i <= pps->num_tile_columns_minus1; i++)
-            colWidth[i] =
-                ((i + 1) * sps->PicWidthInCtbsY) /
+            colWidth[i] = ((i + 1) * sps->PicWidthInCtbsY) /
                     (pps->num_tile_columns_minus1 + 1) -
                 (i * sps->PicWidthInCtbsY) / (pps->num_tile_columns_minus1 + 1);
     } else {
@@ -2480,7 +2481,10 @@ static void calc_pps_params(struct sps *sps, struct pps *pps) {
             }
         }
     }
-
+    free(colWidth);
+    free(rowHeight);
+    free(colBd);
+    free(rowBd);
     // see 6.5.2 z-scan order array initialization process
     // see (6-10)
     pps->MinTbAddrZs = init_zscan_array(sps, pps->CtbAddrRsToTs);
@@ -4511,7 +4515,8 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
     int16_t top_default[65] = {0};
     int16_t *top = top_default + 1;
     int16_t *left = left_default;
-    int16_t *dst = (cIdx == 0) ? p->Y: ((cIdx == 1) ? p->U : p->V);
+    // int16_t *dst = (cIdx == 0) ? p->Y: ((cIdx == 1) ? p->U : p->V);
+    int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->size : p->pixel + p->size * 3/2);
     int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
 
     int xTbY = (cIdx == 0) ? xTbCmp : xTbCmp * sps->SubWidthC;
@@ -4709,7 +4714,8 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                 }
             }
             // step 9
-            int16_t *dst = (cIdx == 0) ? p->Y : (cIdx == 1 ? p->U : p->V);
+            // int16_t *dst = (cIdx == 0) ? p->Y : (cIdx == 1 ? p->U : p->V);
+            int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->size : p->pixel + p->size * 3/2);
             int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
             int xTbInCb, yTbInCb;
             if (controlParaAct != 0) {
@@ -4975,7 +4981,7 @@ static void decode_cu_coded_intra_prediction_mode(
         int PcmBitDepthY = sps->pcm->pcm_sample_bit_depth_luma_minus1 + 1;
         for (int j = 0; j < nCbS; j ++) {
             for (int i = 0; i < nCbS; i++) {
-                p->Y[xCb + i + (yCb + j) * p->y_stride] = cu->pcm->pcm_sample_luma[(nCbS*j)+i] << (sps->BitDepthY - PcmBitDepthY);
+                p->pixel[xCb + i + (yCb + j) * p->y_stride] = cu->pcm->pcm_sample_luma[(nCbS*j)+i] << (sps->BitDepthY - PcmBitDepthY);
             }
         }
     } else if (!get_pcm_flag(sps, p, xCb, yCb) &&
@@ -4985,9 +4991,9 @@ static void decode_cu_coded_intra_prediction_mode(
         for (int j = 0; j < nCbS; j++) {
             for (int i = 0; i < nCbS; i++) {
                 if (cu->pc[xCb][yCb]->palette_transpose_flag == 1) {
-                    p->Y[xCb + i+(yCb + j)*p->y_stride] = recSamples[j + i*nCbS];
+                    p->pixel[xCb + i+(yCb + j)*p->y_stride] = recSamples[j + i*nCbS];
                 } else {
-                    p->Y[xCb + i+(yCb + j)*p->y_stride] = recSamples[i + j*nCbS];
+                    p->pixel[xCb + i+(yCb + j)*p->y_stride] = recSamples[i + j*nCbS];
                 }
             }
         }
@@ -5053,9 +5059,9 @@ static void decode_cu_coded_intra_prediction_mode(
             int PcmBitDepthC = sps->pcm->pcm_sample_bit_depth_chroma_minus1 + 1;
             for (int i = 0; i < nCbS / sps->SubWidthC - 1; i++) {
                 for (int j = 0; j < nCbS / sps->SubHeightC - 1; j++) {
-                    p->U[xCb / sps->SubWidthC + i+ (yCb / sps->SubHeightC + j)*p->uv_stride] =
+                    p->pixel[p->size + xCb / sps->SubWidthC + i+ (yCb / sps->SubHeightC + j)*p->uv_stride] =
                         cu->pcm->pcm_sample_chroma[(nCbS / sps->SubWidthC * j) +i] << (sps->BitDepthC - PcmBitDepthC);
-                    p->V[xCb / sps->SubWidthC + i+(yCb / sps->SubHeightC + j)*p->uv_stride] =
+                    p->pixel[p->size * 3/2 + xCb / sps->SubWidthC + i+(yCb / sps->SubHeightC + j)*p->uv_stride] =
                         cu->pcm->pcm_sample_chroma[(nCbS / sps->SubWidthC * ( j + nCbS / sps->SubHeightC)) +i] << (sps->BitDepthC - PcmBitDepthC);
                 }
             }
@@ -5071,14 +5077,14 @@ static void decode_cu_coded_intra_prediction_mode(
             if (cu->pc[xCb][yCb]->palette_transpose_flag == 1) {
                 for (int y = 0; y < nCbS / sps->SubHeightC; y++) {
                     for (int x = 0; x < nCbS / sps->SubWidthC; x++) {
-                        p->V[xCb / sps->SubWidthC + x+(yCb / sps->SubHeightC + y)*p->uv_stride] =
+                        p->pixel[p->size * 3/2 + xCb / sps->SubWidthC + x+(yCb / sps->SubHeightC + y)*p->uv_stride] =
                                recSamples[y + x * nCbS];
                     }
                 }
             } else {
                 for (int y = 0; y < nCbS / sps->SubHeightC; y++) {
                     for (int x = 0; x < nCbS / sps->SubWidthC; x++) {
-                        p->V[xCb / sps->SubWidthC + x+ (yCb / sps->SubHeightC + y)*p->uv_stride] =
+                        p->pixel[p->size*3/2 + xCb / sps->SubWidthC + x+ (yCb / sps->SubHeightC + y)*p->uv_stride] =
                             recSamples[x + nCbS * y];
                     }
                 }
@@ -5288,8 +5294,9 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     if (pc->palette_escape_val_present_flag) {
         parse_delta_qp(d, slice, pps);
         if (!cu->cu_transquant_bypass_flag) {
-            struct chroma_qp_offset *qpoff = calloc(1, sizeof(*qpoff));
-            parse_chroma_qp_offset(d, slice, pps, cu, qpoff);
+            // struct chroma_qp_offset *qpoff = calloc(1, sizeof(*qpoff));
+            struct chroma_qp_offset qpoff;
+            parse_chroma_qp_offset(d, slice, pps, cu, &qpoff);
         }
     }
     int remainingNumIndices = pc->num_palette_indices_minus1 + 1;
@@ -6046,8 +6053,9 @@ static void parse_transform_unit(cabac_dec *d, struct cu *cu,
         parse_delta_qp(d, slice, pps);
         if (cbfChroma && !cu->cu_transquant_bypass_flag &&
             !slice->IsCuChromaQpOffsetCoded) {
-            struct chroma_qp_offset *qpoff = calloc(1, sizeof(*qpoff));
-            parse_chroma_qp_offset(d, slice, pps, cu, qpoff);
+            // struct chroma_qp_offset *qpoff = calloc(1, sizeof(*qpoff));
+            struct chroma_qp_offset qpoff;
+            parse_chroma_qp_offset(d, slice, pps, cu, &qpoff);
         }
         if (cbfLuma) {
             // VDBG(hevc, "luma");
@@ -7067,12 +7075,12 @@ void sao_filter(struct slice_segment_header *slice, struct pps *pps, struct sps 
             ctu = get_ctu(sps, p, rx, ry);
             if (slice->slice_sao_luma_flag) {
                 //invoke 8.7.3.2 for luma
-                sao_ctb_modification_process(slice, pps, sps, p, p->Y, p->y_stride, ctu, 0, rx, ry, sps->CtbSizeY, sps->CtbSizeY);
+                sao_ctb_modification_process(slice, pps, sps, p, p->pixel, p->y_stride, ctu, 0, rx, ry, sps->CtbSizeY, sps->CtbSizeY);
             }
             if (sps->ChromaArrayType != 0 && slice->slice_sao_chroma_flag) {
                 //invoke 8.7.3.2 for Cb and Cr
-                sao_ctb_modification_process(slice, pps, sps, p, p->U, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
-                sao_ctb_modification_process(slice, pps, sps, p, p->V, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
+                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->size, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
+                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->size * 3/2, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
             }
         }
     }
@@ -7123,16 +7131,12 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     bits_vec_reinit_cur(v);
     // bits_vec_dump(v);
     int width = sps->pic_width_in_luma_samples;
-    int height = ((sps->pic_height_in_luma_samples + 3 )>>2)<<2;
+    int height = ((sps->pic_height_in_luma_samples + 3)>>2)<<2;
     int y_stride = ((width + 3) >> 2) << 2;
     int uv_stride = y_stride >> 1;
-    int16_t *Y = malloc(height * y_stride * sizeof(int16_t));
-    int16_t *U = malloc(height * uv_stride * sizeof(int16_t));
-    int16_t *V = malloc(height * uv_stride * sizeof(int16_t));
     struct picture p = {
-        .Y = Y,
-        .U = U,
-        .V = V,
+        .size = height * y_stride,
+        .pixel = malloc(height * y_stride * sizeof(int16_t) * 2),
         .y_stride = y_stride,
         .uv_stride = uv_stride,
     };
@@ -7166,15 +7170,12 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     inloop_filter(hslice.slice, hps->pps, sps, &p);
 
-    YUV420_to_BGRA32_16bit(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, Y, U,
-                           V, y_stride, uv_stride,
-                           divceil(height, (1 << sps->CtbLog2SizeY)),
-                           divceil(width, (1 << sps->CtbLog2SizeY)),
-                           1 << sps->CtbLog2SizeY);
+    YUV420_to_BGRA32_16bit(
+        *pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel, p.pixel+p.size, p.pixel+p.size * 3/2,
+        y_stride, uv_stride, divceil(height, (1 << sps->CtbLog2SizeY)),
+        divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
 
-    free(Y);
-    free(U);
-    free(V);
+    free(p.pixel);
     free(p.info);
     free(p.split_transform_flag);
     free(p.IntraPredModeC);
@@ -7183,9 +7184,6 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         if (p.ctus[i]) {
             if (p.ctus[i]->sao) {
                 free(p.ctus[i]->sao);
-                // for (int j = 0; j < p.ctus[i]->cu_num; j++) {
-                //     free(p.ctus[i]->cu[j]);
-                // }
             }
             free(p.ctus[i]);
         }

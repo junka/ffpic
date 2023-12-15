@@ -40,7 +40,6 @@ HEIF_probe(const char *filename)
     }
     fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
-        
         if (len > 12 && h.minor_version == TYPE2UINT("mif1")) {
             for (int j = 0; j < (len -12)>>2; j ++) {
                 for (int i = 0; i < sizeof(heif_types)/sizeof(heif_types[0]); i ++) {
@@ -49,6 +48,7 @@ HEIF_probe(const char *filename)
                     }
                 }
             }
+            free(h.compatible_brands);
         } else {
             for (int i = 0; i < sizeof(heif_types)/sizeof(heif_types[0]); i ++) {
                 if (h.minor_version == TYPE2UINT(heif_types[i])) {
@@ -262,9 +262,9 @@ HEIF_load(const char *filename)
     // process mdata
     VINFO(heif, "mdat_num %d", h->mdat_num);
     p->width = ((p->width + 3) >> 2) << 2;
-    p->pixels = malloc(p->width * p->height * 32);
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    p->pixels = malloc(p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGB888;
     decode_items(h, f, (uint8_t **)&p->pixels);
 

@@ -3872,8 +3872,8 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
     int trType = 0;
     if (get_CuPredMode(sps, p, xTbY, yTbY) == MODE_INTRA && nTbS == 4 && cIdx == 0) {
         trType = 1;
-        struct accl_ops *ops = accl_first_available();
-        // struct accl_ops *ops = accl_find(GPU_TYPE_OPENCL);
+        // struct accl_ops *ops = accl_first_available();
+        struct accl_ops *ops = accl_find(GPU_TYPE_OPENCL);
         if (ops) {
             ops->idct_4x4(d, r, sps->BitDepthY);
         } else {

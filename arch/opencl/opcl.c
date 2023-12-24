@@ -9,13 +9,16 @@
 
 #include "opcl.cl_xx.h"
 
-//const size_t source_size = sizeof(source_str);
+struct opcl_priv {
+    cl_device_id device_id; // device ID
+    cl_context context;     // context
+    cl_command_queue queue; // command queue
+    cl_program program;     // program
+    cl_kernel kernel4;      // kernel
+};
 
-static cl_device_id device_id; // device ID
-static cl_context context;     // context
-static cl_command_queue queue; // command queue
-static cl_program program;     // program
-static cl_kernel kernel4;       // kernel
+static struct opcl_priv priv;
+
 void opcl_idct_4x4_amd(int16_t *in, int16_t *out, int bitdepth)
 {
     const char transMatrix[16] = {
@@ -27,72 +30,66 @@ void opcl_idct_4x4_amd(int16_t *in, int16_t *out, int bitdepth)
     int size = 16 * sizeof(int16_t);
     cl_int ret;
 
-    cl_mem dct = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 16, (void *)transMatrix, &ret);
+    cl_mem dct = clCreateBuffer(priv.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 16, (void *)transMatrix, &ret);
     assert(ret == CL_SUCCESS);
-    cl_mem block_data = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, size, in, &ret);
+    cl_mem block_in = clCreateBuffer(priv.context, CL_MEM_READ_ONLY, size, NULL, &ret);
     assert(ret == CL_SUCCESS);
-    cl_mem block_out = clCreateBuffer(context, CL_MEM_WRITE_ONLY, size, NULL, &ret);
+    cl_mem block_out = clCreateBuffer(priv.context, CL_MEM_WRITE_ONLY, size, NULL, &ret);
     assert(ret == CL_SUCCESS);
 
-    // cl_event evt;
-    // clEnqueueWriteBuffer(queue, block_data, CL_FALSE, 0, size, in, 0, NULL, &evt);
+    ret = clEnqueueWriteBuffer(priv.queue, block_in, CL_TRUE, 0, size, in, 0, NULL, NULL);
+    assert(ret == CL_SUCCESS);
 
-    // ret = clFlush(queue);
-    // ret = clWaitForEvents(1, &evt);
+    ret = clSetKernelArg(priv.kernel4, 0, sizeof(cl_mem), (void *)&block_in);
+    ret |= clSetKernelArg(priv.kernel4, 1, sizeof(cl_mem), (void *)&block_out);
+    ret |= clSetKernelArg(priv.kernel4, 2, sizeof(cl_mem), (void *)&dct);
+    ret |= clSetKernelArg(priv.kernel4, 3, 16 * 2, NULL); // local memory
+    ret |= clSetKernelArg(priv.kernel4, 4, sizeof(cl_uint), (void *)&bitdepth);
 
-    ret = clSetKernelArg(kernel4, 0, sizeof(cl_mem), (void *)&block_data);
-    ret |= clSetKernelArg(kernel4, 1, sizeof(cl_mem), (void *)&block_out);
-    ret |= clSetKernelArg(kernel4, 2, sizeof(cl_mem), (void *)&dct);
-    ret |= clSetKernelArg(kernel4, 4, sizeof(cl_uint), (void *)&bitdepth);
     if (ret != CL_SUCCESS) {
-      clReleaseMemObject(block_data);
+      clReleaseMemObject(block_in);
       clReleaseMemObject(block_out);
-      clReleaseKernel(kernel4);
-      clReleaseProgram(program);
-      clReleaseCommandQueue(queue);
-      clReleaseContext(context);
       assert(ret == CL_SUCCESS);
     }
     size_t global_size[2] = {4, 4};
-    size_t local_size[2] = {4, 1};
-    ret = clEnqueueNDRangeKernel(queue, kernel4, 2, NULL, global_size,
+    size_t local_size[2] = {4, 1}; //1d as work group
+    ret = clEnqueueNDRangeKernel(priv.queue, priv.kernel4, 2, NULL, global_size,
                                  local_size, 0, NULL, NULL);
 
     if (ret != CL_SUCCESS) {
         printf("Error enqueueing kernel: %d\n", ret);
-        clReleaseMemObject(block_data);
+        clReleaseMemObject(block_in);
         clReleaseMemObject(block_out);
-        clReleaseKernel(kernel4);
-        clReleaseProgram(program);
-        clReleaseCommandQueue(queue);
-        clReleaseContext(context);
+        clReleaseMemObject(dct);
         return;
     }
-    ret = clEnqueueReadBuffer(queue, block_out, CL_TRUE, 0, size,
-                              out, 0, NULL, NULL);
+
+    ret = clEnqueueReadBuffer(priv.queue, block_out, CL_TRUE, 0, size, out, 0,
+                              NULL, NULL);
     if (ret != CL_SUCCESS) {
         printf("Error reading output buffer: %d\n", ret);
-        clReleaseMemObject(block_data);
+        clReleaseMemObject(block_in);
         clReleaseMemObject(block_out);
-        clReleaseKernel(kernel4);
-        clReleaseProgram(program);
-        clReleaseCommandQueue(queue);
-        clReleaseContext(context);
+        clReleaseMemObject(dct);
         return ;
     }
 
-    clReleaseMemObject(block_data);
+    clReleaseMemObject(block_in);
     clReleaseMemObject(block_out);
-    clReleaseKernel(kernel4);
-    clReleaseProgram(program);
-    clReleaseCommandQueue(queue);
-    clReleaseContext(context);
+    clReleaseMemObject(dct);
 }
 
 struct accl_ops opcl_accl = {
     .idct_4x4 = opcl_idct_4x4_amd,
     .type = GPU_TYPE_OPENCL,
 };
+
+void opcl_amd_uninit(void) {
+    clReleaseKernel(priv.kernel4);
+    clReleaseProgram(priv.program);
+    clReleaseCommandQueue(priv.queue);
+    clReleaseContext(priv.context);
+}
 
 // on Macos we would have AMD Radeon Pro 560X 4 GB
 void opcl_amd_init(void) {
@@ -130,7 +127,7 @@ void opcl_amd_init(void) {
                 if (strstr(dname, "AMD")) {
                     // choose high-performace gpu automatically
                     printf("Device #%u: Name: %s\n", j + 1, dname);
-                    device_id = did;
+                    priv.device_id = did;
                     break;
                 }
             }
@@ -154,49 +151,51 @@ void opcl_amd_init(void) {
     clGetDeviceInfo(did, CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE,
                     sizeof(cl_ulong), &const_mem_size, 0);
     printf("\tConstant Memory Size: %"PRIu64"\n", const_mem_size);
-    context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &ret);
+    priv.context = clCreateContext(NULL, 1, &priv.device_id, NULL, NULL, &ret);
     if (ret != CL_SUCCESS) {
         fprintf(stderr, "clCreateContext failed (error %d)\n", err);
         return ;
     }
 
-    queue = clCreateCommandQueue(context, device_id, 0, &ret);
+    priv.queue = clCreateCommandQueue(priv.context, priv.device_id, 0, &ret);
     if (ret != CL_SUCCESS) {
-        clReleaseContext(context);
+        clReleaseContext(priv.context);
         fprintf(stderr, "clCreateCommandQueue failed (error %d)\n", ret);
         return;
     }
     size_t len = srcstr_len;
     printf("%d: %s\n", srcstr_len, prog_src);
-    program = clCreateProgramWithSource(context, 1, &prog_src,
-                                        (const size_t *)&len, &ret);
+    priv.program = clCreateProgramWithSource(priv.context, 1, &prog_src,
+                                             (const size_t *)&len, &ret);
     if (ret != CL_SUCCESS) {
         printf("clCreateProgramWithSource failed err %d\n", ret);
-        clReleaseCommandQueue(queue);
-        clReleaseContext(context);
+        clReleaseCommandQueue(priv.queue);
+        clReleaseContext(priv.context);
         assert(ret == CL_SUCCESS);
         return;
     }
-    ret = clBuildProgram(program, 1, &device_id, NULL, NULL, NULL);
+    ret = clBuildProgram(priv.program, 1, &priv.device_id, NULL, NULL, NULL);
     if (ret != CL_SUCCESS) {
         size_t len;
-        clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, 0, NULL, &len);
+        clGetProgramBuildInfo(priv.program, priv.device_id,
+                              CL_PROGRAM_BUILD_LOG, 0, NULL, &len);
         char *buffer = (char *)malloc(sizeof(char) * (len + 1));
-        clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, len, buffer, &len);
+        clGetProgramBuildInfo(priv.program, priv.device_id,
+                              CL_PROGRAM_BUILD_LOG, len, buffer, &len);
         printf("Build log is %s\n", buffer);
         free(buffer);
-        clReleaseProgram(program);
-        clReleaseCommandQueue(queue);
-        clReleaseContext(context);
+        clReleaseProgram(priv.program);
+        clReleaseCommandQueue(priv.queue);
+        clReleaseContext(priv.context);
         assert(ret == CL_SUCCESS);
         return;
     }
 
-    kernel4 = clCreateKernel(program, "idct_4x4", &ret);
+    priv.kernel4 = clCreateKernel(priv.program, "idct_4x4", &ret);
     if (ret != CL_SUCCESS) {
-        clReleaseProgram(program);
-        clReleaseCommandQueue(queue);
-        clReleaseContext(context);
+        clReleaseProgram(priv.program);
+        clReleaseCommandQueue(priv.queue);
+        clReleaseContext(priv.context);
         assert(ret == CL_SUCCESS);
         return;
     }

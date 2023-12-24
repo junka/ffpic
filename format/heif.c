@@ -15,7 +15,7 @@
 #include "bitstream.h"
 #include "colorspace.h"
 
-VLOG_REGISTER(heif, DEBUG);
+VLOG_REGISTER(heif, DEBUG)
 
 static int
 HEIF_probe(const char *filename)
@@ -42,7 +42,7 @@ HEIF_probe(const char *filename)
     if (h.major_brand == TYPE2UINT("ftyp")) {
         if (len > 12 && h.minor_version == TYPE2UINT("mif1")) {
             for (int j = 0; j < (len -12)>>2; j ++) {
-                for (int i = 0; i < sizeof(heif_types)/sizeof(heif_types[0]); i ++) {
+                for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
                     if (h.compatible_brands[j] == TYPE2UINT(heif_types[i])) {
                         return 0;
                     }
@@ -50,7 +50,7 @@ HEIF_probe(const char *filename)
             }
             free(h.compatible_brands);
         } else {
-            for (int i = 0; i < sizeof(heif_types)/sizeof(heif_types[0]); i ++) {
+            for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
                 if (h.minor_version == TYPE2UINT(heif_types[i])) {
                     return 0;
                 }
@@ -197,7 +197,7 @@ decode_items(HEIF *h, FILE *f, uint8_t **pixels)
             VDBG(heif, "exif %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
-            VINFO(heif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
+            // VINFO(heif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
             decode_hvc1(h, h->items[i].data, h->items[i].length, pixels);
         }
     }
@@ -245,7 +245,7 @@ HEIF_load(const char *filename)
     h->items = malloc(h->meta.iloc.item_count * sizeof(struct heif_item));
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         h->items[i].item = &h->meta.iloc.items[i];
-        for (int j = 0; j < h->meta.iinf.entry_count; j++) {
+        for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
             if (h->meta.iinf.item_infos[j].item_id == h->items[i].item->item_id) {
                 h->items[i].type = h->meta.iinf.item_infos[j].item_type;
             }
@@ -253,7 +253,7 @@ HEIF_load(const char *filename)
     }
     uint16_t primary_id = h->meta.pitm.item_id;
     VINFO(heif, "primary id %d", h->meta.pitm.item_id);
-    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+    for (int i = 0; i < (int)h->meta.iloc.item_count; i++) {
         if (h->meta.iloc.items[i].item_id == primary_id) {
             VINFO(heif, "primary loc at %" PRIu64, h->meta.iloc.items[i].base_offset);
             break;
@@ -289,7 +289,7 @@ HEIF_free(struct pic *p)
     }
     free(m->iloc.items);
 
-    for (int i = 0; i < m->iinf.entry_count; i ++) {
+    for (int i = 0; i < (int)m->iinf.entry_count; i++) {
         if (m->iinf.item_infos[i].content_encoding)
             free(m->iinf.item_infos[i].content_encoding);
     }
@@ -309,7 +309,7 @@ HEIF_free(struct pic *p)
         free(m->iprp.ipco.property[i]);
     }
 
-    for (int i = 0; i < m->iprp.ipma.entry_count; i ++) {
+    for (int i = 0; i < (int)m->iprp.ipma.entry_count; i++) {
         free(m->iprp.ipma.entries[i].association);
     }
     free(m->iprp.ipma.entries);
@@ -386,7 +386,7 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iinf);
     fprintf(f, "\n");
-    for (int i = 0; i < h->meta.iinf.entry_count; i ++) {
+    for (int i = 0; i < (int)h->meta.iinf.entry_count; i++) {
         fprintf(f, "\t\t");
         print_box(f, &h->meta.iinf.item_infos[i]);
         s1 = UINT2TYPE(h->meta.iinf.item_infos[i].item_type);
@@ -443,7 +443,7 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iprp.ipma);
     fprintf(f, "\n");
-    for (int i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
+    for (int i = 0; i < (int)h->meta.iprp.ipma.entry_count; i++) {
         struct ipma_item *ipma = &h->meta.iprp.ipma.entries[i];
         fprintf(f, "\t\titem %d: association_count %d\n", ipma->item_id, ipma->association_count);
         for (int j = 0; j < ipma->association_count; j ++) {

@@ -11,7 +11,7 @@
 #include "file.h"
 #include "avif.h"
 
-VLOG_REGISTER(avif, DEBUG);
+VLOG_REGISTER(avif, DEBUG)
 
 static int
 AVIF_probe(const char *filename)
@@ -119,7 +119,7 @@ parse_color_config(struct color_config *cc, struct sequence_header_obu *obu, str
     return 0;
 }
 
-int choose_operating_point()
+int choose_operating_point(void)
 {
     return 0;
 }
@@ -428,6 +428,10 @@ int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx)
     static struct sequence_header_obu *seqobu = NULL;
     static int SeenFrameHeader = -1;
     int obu_size = 0;
+    /* The above code is declaring a variable `OperatingPointIdc` and assigning it a value based on a
+    conditional statement. If `seqobu` is not null, it will access the `operating_point_idc`
+    property of `seqobu->points[op]` and assign it to `OperatingPointIdc`. Otherwise, it will assign
+    0 to `OperatingPointIdc`. */
     if (h.obu_has_size_field) {
         obu_size = read_leb128(v);
     } else {
@@ -705,7 +709,7 @@ AVIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iinf);
     fprintf(f, "\n");
-    for (int i = 0; i < h->meta.iinf.entry_count; i ++) {
+    for (int i = 0; i < (int)h->meta.iinf.entry_count; i++) {
         fprintf(f, "\t\t");
         print_box(f, &h->meta.iinf.item_infos[i]);
         s1 = UINT2TYPE(h->meta.iinf.item_infos[i].item_type);
@@ -753,7 +757,7 @@ AVIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iprp.ipma);
     fprintf(f, "\n");
-    for (int i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
+    for (int i = 0; i < (int)h->meta.iprp.ipma.entry_count; i++) {
         struct ipma_item *ipma = &h->meta.iprp.ipma.entries[i];
         fprintf(f, "\t\titem %d: association_count %d\n", ipma->item_id, ipma->association_count);
         for (int j = 0; j < ipma->association_count; j ++) {

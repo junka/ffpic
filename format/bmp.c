@@ -242,7 +242,7 @@ BMP_load(const char* filename)
     int upper = b->dib.height > 0 ? b->dib.height -1 : 0;
     int bottom = b->dib.height > 0 ? 0 : 1 - b->dib.height;
     int delta = b->dib.height > 0 ? -1 : 1;
-    int bytes_perline = b->dib.width * b->dib.bit_count / 8;
+    // int bytes_perline = b->dib.width * b->dib.bit_count / 8;
 
     // uint8_t *image_data = malloc((upper - bottom + 1) * bytes_perline);
     // fread(image_data, (upper - bottom + 1) * bytes_perline, 1, f);
@@ -324,7 +324,7 @@ BMP_load(const char* filename)
             VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
             for (int i = upper; i >= bottom; i += delta) {
                 for(int j = 0; j < p->width; j ++) {
-                    uint8_t px, pxlo;
+                    uint8_t px = 0, pxlo;
                     if (b->dib.bit_count == 8) {
                         px = fgetc(f);
                     } else if (b->dib.bit_count == 4) {

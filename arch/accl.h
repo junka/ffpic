@@ -13,10 +13,12 @@ typedef void (*accl_idct)(int16_t *in, int16_t *out, int bitdepth);
 enum simd_type {
     SIMD_TYPE_SSE2 = 1,
     SIMD_TYPE_AVX2 = 2,
+    GPU_TYPE_OPENCL = 25,
 };
 
 struct accl_ops {
-    accl_idct idct_4x4;
+    void (*idct_4x4)(int16_t *in, int16_t *out, int bitdepth);
+    void (*idct_8x8)(int16_t *in, int16_t *out, int bitdepth);
     enum simd_type type;
     TAILQ_ENTRY(accl_ops) next;
 };

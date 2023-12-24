@@ -10,7 +10,7 @@ extern "C" {
 #include <stdio.h>
 
 
-#define TYPE2UINT(x) (x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
+#define TYPE2UINT(x) (uint32_t)(x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
 
 static inline char *
 type2name(uint32_t type)

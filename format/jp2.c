@@ -369,11 +369,10 @@ void read_packet_header(JP2 *j, struct bits_vec *v, int tile_id) {
     int layers_num = j->main_h.cod.layers_num;
     int zl = READ_BIT(v);
     int inclusion;
-    int bitplane;
-    int pass;
-    VDBG(jp2, "zero length packet %d", zl);
+    // int bitplane;
+    // int pass = 0;
+    VDBG(jp2, "layers_num %d zero length packet %d", layers_num, zl);
     if (zl) {
-        // tagtree
         inclusion = tag_tree_decode(v, 0, 0);
     } else {
         inclusion = READ_BIT(v);
@@ -387,7 +386,7 @@ int
 read_sod(JP2 *j, FILE *f) {
     /* read till eoc */
     struct sop sop;
-    uint8_t *p = j->data;
+    // uint8_t *p = j->data;
     int start = ftell(f);
     int tile_id = j->tiles[j->tile_nums - 1].sot.tile_id;
     int len = j->tiles[j->tile_nums-1].sot.tile_size -
@@ -396,7 +395,7 @@ read_sod(JP2 *j, FILE *f) {
     fread(data, len, 1, f);
     struct bits_vec *v =
         bits_vec_alloc(data, len, BITS_MSB);
-    VDBG(jp2, "tile id %d, total tile len %d, at %p", tile_id, len, data);
+    VDBG(jp2, "tile id %d, total tile len %d, at %p", tile_id, len, (void *)data);
     if (j->main_h.cod.sop) {
         //if SOP enabled, start with a SOP
         assert((data[1]<<8|data[0]) == SOP);
@@ -555,7 +554,6 @@ void
 read_next_box(JP2 *j, FILE *f, int len)
 {
     struct box b;
-    char* s;
     uint32_t type = read_box(f, &b, len);
     VDBG(jp2, "box type %s", type2name(type));
     switch (type) {
@@ -737,7 +735,7 @@ JP2_info(FILE *f, struct pic* p)
     }
     fprintf(f, "\tQCD len %d, guard_num %d quant_type %d\n", j->main_h.qcd.length,
             j->main_h.qcd.guard_num, j->main_h.qcd.quant_type);
-    int table_len;
+    int table_len = 0;
     if (j->main_h.qcd.guard_num == 0) {
         table_len = 3 * j->main_h.cod.p.decomp_level_num + 1;
     } else if (j->main_h.qcd.guard_num == 1) {

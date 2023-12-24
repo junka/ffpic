@@ -25,6 +25,7 @@ static struct vlogs {
 } vlogs = {
     .type = ~0,
     .level = VLOG_DEBUG,
+    .file = NULL,
 };
 
 static struct log_cur_msg {
@@ -108,6 +109,9 @@ static int
 _vlog(uint32_t level, uint32_t logtype, const char *format, va_list ap)
 {
     FILE *f = vlog_get_stream();
+    if (f == NULL) {
+        return -1;
+    }
     int ret;
 
     if (logtype >= vlogs.dynamic_types_len)

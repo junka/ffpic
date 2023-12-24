@@ -34,7 +34,8 @@ list(APPEND FFPIC_DIRS
   "${FFPIC_ROOT}/coding"
   "${FFPIC_ROOT}/utils"
   "${FFPIC_ROOT}/arch"
-  "${FFPIC_ROOT}/arch/x86")
+  "${FFPIC_ROOT}/arch/x86"
+  "${FFPIC_ROOT}/arch/opencl")
 
 list(APPEND FFPIC_DISPLAY
   "${FFPIC_ROOT}/display/bmpwriter.c"
@@ -82,22 +83,43 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/bpg.c"
   "${FFPIC_ROOT}/format/predict.c")
 
-list(APPEND FFPIC_SIMD
+find_package(SDL2)
+find_package(OpenCL)
+find_library(MATH_LIBRARY m)
+
+list(APPEND FFPIC_ACCL
   "${FFPIC_ROOT}/arch/accl.c"
   "${FFPIC_ROOT}/arch/x86/sse2.c"
   "${FFPIC_ROOT}/arch/x86/avx.c")
+if(OpenCL_FOUND)
+  SET(CLSOURCE_COMPILER xxd)
+  FILE(GLOB_RECURSE OPENCL_SOURCES "${FFPIC_ROOT}/arch/opencl/*.cl")
+  FOREACH(INPUT_FILE ${OPENCL_SOURCES})
+      SET(OUTPUT_FILE ${INPUT_FILE}_xx.h)
+      ADD_CUSTOM_COMMAND(
+          OUTPUT ${OUTPUT_FILE}
+          COMMAND ${CLSOURCE_COMPILER} -n srcstr -i ${INPUT_FILE} ${OUTPUT_FILE}
+          COMMENT "Compiling ${INPUT_FILE} to binary")
+      LIST(APPEND FFPIC_ACCL ${OUTPUT_FILE})
+  ENDFOREACH()
 
-find_package(SDL2)
-find_library(MATH_LIBRARY m)
+  list(APPEND FFPIC_ACCL
+    "${FFPIC_ROOT}/arch/opencl/opcl.c")
+endif()
 
-add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING} ${FFPIC_SIMD})
+
+add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_SDL} ${FFPIC_CODING} ${FFPIC_ACCL})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
-# target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function)
+
+if(OpenCL_FOUND)
+  target_compile_options(ffpic PRIVATE -DENABLE_OPENCL)
+endif()
 
 add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c")
-add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_SIMD})
+add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c" ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_ACCL})
 
-add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_SIMD})
+add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c" ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_ACCL})
 
 target_link_libraries(sdlshow ffpic m)
 target_link_libraries(picinfo m)
@@ -114,3 +136,11 @@ if(SDL2_FOUND)
 else(SDL2_FOUND)
   message(FATAL_ERROR "SDL2 library not found")
 endif(SDL2_FOUND)
+
+if(OpenCL_FOUND)
+  target_include_directories(ffpic PRIVATE ${OpenCL_INCLUDE_DIRS})
+  target_link_libraries(ffpic OpenCL::OpenCL)
+  target_link_libraries(sdlshow OpenCL::OpenCL)
+  target_link_libraries(picinfo OpenCL::OpenCL)
+  target_link_libraries(transbmp OpenCL::OpenCL)
+endif()

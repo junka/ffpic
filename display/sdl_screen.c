@@ -163,7 +163,7 @@ sdl_screen_init(const char* title, int w, int h)
 }
 
 static int 
-sdl_screen_uninit()
+sdl_screen_uninit(void)
 {
     SDL_Surface * ws = SDL_GetWindowSurface(scrn.w);
     SDL_FreeSurface(ws);

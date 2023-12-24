@@ -1880,7 +1880,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 
 int WEBP_read_frame(WEBP *w, FILE *f)
 {
-    unsigned char b[3]; // code for I frame 10byte， P frame 3byte.
+    // unsigned char b[3]; // code for I frame 10byte， P frame 3byte.
     fread(&w->fh, sizeof(w->fh), 1, f);
 
     if (w->fh.frame_type != KEY_FRAME) {
@@ -1939,24 +1939,28 @@ static void webpl_predicator_transform(WEBP *w, struct bits_vec *v) {
     int block_width = (1 << size_bits);
     int block_height = (1 << size_bits);
     int block_xsize = DIV_ROUND_UP(w->fi.width, 1 << size_bits);
-    printf("block width %d, xsize %d\n", block_width, block_xsize);
+    printf("block width %d, height %d, xsize %d\n", block_width, block_height, block_xsize);
 
     for (int y = 0; y < w->fi.height; y++) {
         for (int x = 0; x < w->fi.width; x ++) {
-            int block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+            // int block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
 
         }
     }
 }
 
 static void webpl_color_transform(WEBP *w, struct bits_vec *v) {
-    int size_bits = READ_BITS(v, 3) + 2;
-    int block_width = 1 << size_bits;
-    int block_height = 1 << size_bits;
+    // int size_bits = READ_BITS(v, 3) + 2;
+    // int block_width = 1 << size_bits;
+    // int block_height = 1 << size_bits;
 }
-static void webpl_sub_green_transform(WEBP *w, struct bits_vec *v) {}
+static void webpl_sub_green_transform(WEBP *w, struct bits_vec *v) {
+    bits_vec_dump(v);
+}
 
-static void webpl_color_index_transform(WEBP *w, struct bits_vec *v) {}
+static void webpl_color_index_transform(WEBP *w, struct bits_vec *v) {
+    bits_vec_dump(v);
+}
 
 static void webpl_read_transform(WEBP *w, struct bits_vec *v) {
     while(READ_BIT(v)) {

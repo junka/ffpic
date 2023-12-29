@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 
 #include "file.h"
 #include "bmp.h"
@@ -57,6 +58,18 @@ void
 file_ops_register(struct file_ops* ops)
 {
     TAILQ_INSERT_TAIL(&ops_list, ops, next);
+}
+
+struct file_ops *
+file_find_codec(const char *name)
+{
+    struct file_ops *ops;
+    TAILQ_FOREACH(ops, &ops_list, next) {
+        if (strcmp(ops->name, name) == 0) {
+            return ops;
+        }
+    }
+    return NULL;
 }
 
 void

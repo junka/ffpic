@@ -19,7 +19,6 @@ struct jpg_decoder {
     huffman_tree *dc;
     huffman_tree *ac;
     uint16_t *quant;
-    // int16_t buf[64];
     uint8_t last_rst_marker_seen;
 };
 
@@ -150,23 +149,23 @@ get_vlc(int code, int bitlen)
 
 
 //decode vec to decoder buf
-bool 
-decode_data_unit(struct jpg_decoder *d, int16_t buf[64])
+bool
+decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf[64])
 {
     int dc, ac;
     int16_t *p = buf;
     huffman_tree *dc_tree = d->dc;
     huffman_tree *ac_tree = d->ac;
 
-    dc = huffman_decode_symbol(dc_tree);
-    dc = get_vlc(huffman_read_symbol(dc), dc);
+    dc = huffman_decode_symbol(hdec, dc_tree);
+    dc = get_vlc(huffman_read_symbol(hdec, dc), dc);
     dc += d->prev_dc;
     d->prev_dc = dc;
     p[0] = dc;
 
     // read AC coff
     for (int i = 1; i < 64;) {
-        ac = huffman_decode_symbol(ac_tree);
+        ac = huffman_decode_symbol(hdec, ac_tree);
         if (ac == -1) {
             VERR(jpg, "invalid ac value");
             return false;
@@ -189,7 +188,7 @@ decode_data_unit(struct jpg_decoder *d, int16_t buf[64])
         }
 
         if (ac) {
-            ac = get_vlc(huffman_read_symbol(ac), ac);
+            ac = get_vlc(huffman_read_symbol(hdec, ac), ac);
             p[zigzag[i++]] = ac;
         }
     }
@@ -210,8 +209,10 @@ init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
     huffman_tree * ac_tree = huffman_tree_init();
     int dc_ht_id = j->sos.comps[comp_id].DC_entropy;
     int ac_ht_id = j->sos.comps[comp_id].AC_entropy;
-    huffman_build_lookup_table(dc_tree, 0, dc_ht_id, j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
-    huffman_build_lookup_table(ac_tree, 1, ac_ht_id, j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
+    struct huffman_symbol *dcsym = huffman_symbol_alloc(j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
+    struct huffman_symbol *acsym = huffman_symbol_alloc(j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
+    huffman_build_lookup_table(dc_tree, dc_ht_id, dcsym);
+    huffman_build_lookup_table(ac_tree, ac_ht_id, acsym);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -310,7 +311,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 #if 0
     hexdump(stdout, "jpg raw data", data, 166);
 #endif
-    huffman_decode_start(data, len);
+    struct huffman_codec * hdec = huffman_codec_init(data, len);
 
     int16_t Y[3][64*4], *Cr, *Cb;
     int16_t dummy[64] = {0};
@@ -325,7 +326,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                 int h = j->sof.colors[i].horizontal;
                 for (int vi = 0; vi < v; vi ++) {
                     for (int hi = 0; hi < h; hi ++) {
-                        decode_data_unit(d[i], buf);
+                        decode_data_unit(hdec, d[i], buf);
                         // idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
                         idct_8x8(buf, &Y[i][64 * vi * h + 8 * hi], h * 8);
                     }
@@ -350,7 +351,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                     for (int i = 0; i < j->sof.components_num; i ++) {
                         reset_decoder(d[i]);
                     }
-                    huffman_reset_stream();
+                    huffman_reset_stream(hdec);
                     // read_next_rst_marker(d[0]);
                 }
             }
@@ -363,7 +364,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
         destroy_decoder(d[i]);
     }
 
-    huffman_decode_end();
+    huffman_codec_free(hdec);
 }
 
 void 
@@ -492,7 +493,7 @@ JPG_load(const char *filename)
     uint8_t *compressed = j->data;
     j->data = NULL;
     JPG_decode_image(j, compressed, j->data_len);
-    free(compressed);
+    // free(compressed);
     p->width = ((j->sof.width + 7) >> 3) << 3;
     p->height = j->sof.height;// ((j->sof.height + 7) >> 3) << 3;
     p->depth = 32;
@@ -593,7 +594,7 @@ JPG_info(FILE *f, struct pic* p)
         fprintf(f, "-----------------------\n");
         fprintf(f, "\tDRI interval %d\n", j->dri.interval);
     }
-    
+
     if (j->comment.data) {
         fprintf(f, "-----------------------\n");
         fprintf(f, "\tComment: %s\n", j->comment.data);
@@ -601,12 +602,93 @@ JPG_info(FILE *f, struct pic* p)
 }
 
 
+static int init_encoder(JPG *j, struct jpg_decoder *d, uint8_t comp_id) {
+    if (comp_id >= j->sof.components_num)
+        return -1;
+    huffman_tree *dc_tree = huffman_tree_init();
+    huffman_tree *ac_tree = huffman_tree_init();
+    int dc_ht_id = j->sos.comps[comp_id].DC_entropy;
+    int ac_ht_id = j->sos.comps[comp_id].AC_entropy;
+    // huffman_build_lookup_table(dc_tree, dc_ht_id,
+    //                            j->dht[0][dc_ht_id].num_codecs,
+    //                            j->dht[0][dc_ht_id].data);
+    // huffman_build_lookup_table(ac_tree, ac_ht_id,
+    //                            j->dht[1][ac_ht_id].num_codecs,
+    //                            j->dht[1][ac_ht_id].data);
+
+    d->prev_dc = 0;
+    d->dc = dc_tree;
+    d->ac = ac_tree;
+    // d->quant = j->dqt[j->sof.colors[comp_id].qt_id].tdata;
+    d->last_rst_marker_seen = 0;
+
+    return 0;
+}
+
+void JPG_encode(struct pic *p)
+{
+    // see ITU-T81 Table K.1 and K.2, for Y:UV 2:1
+    const uint8_t y_quant[8][8] = {
+        {16, 11, 10, 16, 24,  40,  51,  61},
+        {12, 12, 14, 19, 26,  58,  60,  55},
+        {14, 13, 16, 24, 40,  57,  69,  56},
+        {14, 17, 22, 29, 51,  87,  80,  62},
+        {18, 22, 37, 56, 68,  109, 103, 77},
+        {24, 35, 55, 64, 81,  104, 113, 92},
+        {49, 64, 78, 87, 103, 121, 120, 101},
+        {72, 92, 95, 98, 112, 100, 103, 99}
+    };
+    const uint8_t uv_quant[8][8] = {
+        {17, 18, 24, 47, 99, 99, 99, 99},
+        {18, 21, 26, 66, 99, 99, 99, 99},
+        {24, 26, 56, 99, 99, 99, 99, 99},
+        {47, 66, 99, 99, 99, 99, 99, 99},
+        {99, 99, 99, 99, 99, 99, 99, 99},
+        {99, 99, 99, 99, 99, 99, 99, 99},
+        {99, 99, 99, 99, 99, 99, 99, 99},
+        {99, 99, 99, 99, 99, 99, 99, 99},
+    };
+
+    int16_t *Y = malloc(p->height * p->pitch * 2);
+    int16_t *U = malloc(p->height * p->pitch / 2);
+    int16_t *V = malloc(p->height * p->pitch / 2);
+    // including down sample
+    BGRA32_to_YUV420(p->pixels, Y, U, V);
+    int16_t coeff[64];
+    int y_stride = 16;
+    int x_stride = 16;
+    //divide and transform in block size, 420
+    for (int y = 0; y < p->height / y_stride; y++) {
+        for (int x = 0; x < p->width / x_stride; x ++) {
+            dct_8x8(Y + y * p->pitch + x * 8, coeff, 16);
+            dct_8x8(Y + y * p->pitch + x * 8 + 8, coeff, 16);
+            dct_8x8(Y + (y+8) * p->pitch + x * 8, coeff, 16);
+            dct_8x8(Y + (y+8) * p->pitch + x * 8 + 8, coeff, 16);
+
+            dct_8x8(U + y * p->pitch + x * 8, coeff, 8);
+            dct_8x8(V + y * p->pitch + x * 8, coeff, 8);
+        }
+    }
+    for (int y = 0; y < p->height / 8; y++) {
+        for (int x = 0; x < p->width / 8; x++) {
+            for (int i = 0; i < 8; i++) {
+                for (int j = 0; j < 8; j++) {
+                    Y[y * p->pitch + x + i * p->pitch + j] /= y_quant[i][j];
+                    U[y * p->pitch + x + i * p->pitch + j] /= uv_quant[i][j];
+                    V[y * p->pitch + x + i * p->pitch + j] /= uv_quant[i][j];
+                }
+            }
+        }
+    }
+}
+
 static struct file_ops jpg_ops = {
     .name = "JPG",
     .probe = JPG_probe,
     .load = JPG_load,
     .free = JPG_free,
     .info = JPG_info,
+    .encode = JPG_encode,
 };
 
 void 

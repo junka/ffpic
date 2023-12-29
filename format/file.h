@@ -16,6 +16,7 @@ struct file_ops {
     struct pic* (*load)(const char *filename);
     void (*free)(struct pic *p);
     void (*info)(FILE *f, struct pic* p);
+    void (*encode)(struct pic *p);
     TAILQ_ENTRY(file_ops) next;
 };
 
@@ -39,7 +40,8 @@ void file_ops_register(struct file_ops* ops);
 struct file_ops* file_probe(const char *filename);
 struct pic *file_load(struct file_ops* ops, const char *filename);
 void file_free(struct file_ops* ops, struct pic *p);
-void file_info(struct file_ops* ops, struct pic *p);
+void file_info(struct file_ops *ops, struct pic *p);
+struct file_ops *file_find_codec(const char *name);
 
 void file_ops_init(void);
 

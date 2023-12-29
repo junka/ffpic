@@ -38,9 +38,10 @@ void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
             // all YCbCr have been added by 128 in idct
             cb = *U++ - 128;
             cr = *V++ - 128;
+            //see JFIF3
             add_r = FIX(1.40200) * cr + ONE_HALF;
             add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr + ONE_HALF;
-            add_b = FIX(1.77200) * cb + ONE_HALF;
+            add_b = FIX(1.772) * cb + ONE_HALF;
             for (int i = 0; i < h; i++) {
                 y = (*Y++) << SCALEBITS;
                 b = (y + add_b) >> SCALEBITS;
@@ -69,6 +70,21 @@ void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
         p += offset_to_next_row;
         if (v == 2)
             p2 += offset_to_next_row;
+    }
+}
+
+void BGRA32_to_YUV420(uint8_t *ptr, int16_t *Y, int16_t *U, int16_t *V)
+{
+    int r, g, b;
+    for (int i = 0; ; i += 4) {
+        b = *(ptr + i);
+        g = *(ptr + i + 1);
+        r = *(ptr + i + 2);
+        Y[i/4] = 0.299 * r + 0.587* g + 0.114 * b;
+        if (i % 16 == 0) {
+            U[i/16] = - 0.1687 * r - 0.3313 * g + 0.5 * b + 128;
+            V[i/16] = 0.5 * r - 0.4187 * g - 0.0813 *b + 128;
+        }
     }
 }
 

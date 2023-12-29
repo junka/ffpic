@@ -29,9 +29,9 @@ bits_vec_free(struct bits_vec *v)
 int
 bits_vec_eof_bits(struct bits_vec *v, int n)
 {
-    if (v->ptr + n/8 - v->start > (long)v->len) {
+    if (v->ptr + (v->offset + n) / 8 - v->start > (long)v->len) {
         return 1;
-    } else if (v->ptr + n/8 - v->start == (long)v->len) {
+    } else if (v->ptr + (v->offset + n) / 8 - v->start == (long)v->len) {
         if (v->offset + n % 8 > 8) {
             return 1;
         }
@@ -112,7 +112,7 @@ bits_vec_read_bit(struct bits_vec *v)
     return ret;
 }
 
-int 
+int
 bits_vec_read_bits(struct bits_vec *v, int n)
 {
     int ret = 0;
@@ -198,4 +198,50 @@ void bits_vec_reinit_cur(struct bits_vec *v)
     assert(v->offset == 0);
     v->len -= (v->ptr - v->start);
     v->start = v->ptr;
+}
+
+//--- below is for bitstream writer ---
+#define DELTA_PART (1024)
+struct bits_vec *bits_writer_reserve(uint8_t msb)
+{
+    struct bits_vec *vec = (struct bits_vec *)malloc(sizeof(struct bits_vec));
+    vec->buff = vec->start = vec->ptr = malloc(2048);
+    vec->offset = 0;
+    vec->len = 0;
+    vec->msb = msb;
+    return vec;
+}
+
+void bits_vec_write_bit(struct bits_vec *v, int8_t a)
+{
+    int shift;
+    if (v->msb)
+        shift = 7 - v->offset;
+    else
+        shift = v->offset;
+    *(v->ptr) |= ((a & 0x1) << shift);
+    v->offset++;
+    if (v->offset == 8) {
+        if (v->len % DELTA_PART == 0) {
+            v->start = v->buff = realloc(v->buff, v->len + DELTA_PART);
+            v->ptr = v->buff + v->len;
+        }
+        v->offset = 0;
+        v->len++;
+        v->ptr++;
+    }
+}
+
+void bits_vec_write_bits(struct bits_vec *v, int8_t a, int n)
+{
+    int8_t val = a;
+    for (int i = 0; i < n; i++) {
+        int8_t b;
+        if (v->msb) {
+            b = (val >> (n - 1 - i)) & 0x1;
+        } else {
+            b = (val >> i) & 0x1;
+        }
+        bits_vec_write_bit(v, b);
+    }
 }

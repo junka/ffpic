@@ -18,6 +18,7 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                             int uv_stride, int mbrows, int mbcols, int ctbsize);
 
 
+void BGRA32_to_YUV420(uint8_t *ptr, int16_t *Y, int16_t *U, int16_t *V);
 // from sdl, but for compile reason, put it here
 
 /** Pixel type. */

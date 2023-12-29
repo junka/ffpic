@@ -50,6 +50,11 @@ void bits_vec_reset_border(struct bits_vec *v);
 /* read bits and add the value with base */
 int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 
+struct bits_vec * bits_writer_reserve(uint8_t msb);
+
+void bits_vec_write_bit(struct bits_vec *v, int8_t a);
+void bits_vec_write_bits(struct bits_vec *v, int8_t a, int n);
+
 /* debug function for stream info */
 void bits_vec_dump(struct bits_vec *v);
 
@@ -72,6 +77,9 @@ void bits_vec_reinit_cur(struct bits_vec *v);
 #define READ_BITS_BASE(v, n, b) bits_vec_read_bits_base(v, n, b)
 #define BYTE_ALIGNED(v) bits_vec_aligned(v)
 #define TEST_BIT(v) bits_vec_test_bit(v)
+
+#define WRITE_BIT(v, a) bits_vec_write_bit(v, a)
+#define WRITE_BITS(v, a, n) bits_vec_write_bits(v, a, n)
 
 #ifdef __cplusplus
 }

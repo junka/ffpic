@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -42,149 +43,103 @@ BMP_probe(const char* filename)
     return -EINVAL;
 }
 
-int RLE8_decode(uint8_t *data)
-{
-    static int buffer_len = 0;
-    static uint8_t buffer[256];
-    static int n = 0;
-    if (data)
-        buffer[buffer_len++] = *data;
-
-    if (buffer_len < 2) {
-        return -1; /* buffering*/
-    }
-    uint8_t first = buffer[0];
-    uint8_t second = buffer[1];
-    if (first == 0) {
-        if (second > 2 && buffer_len < second + 4 - second % 4 + 2) {
-            return -1; /* buffering */
-        } else if (second == 2 && buffer_len < 4) {
-            return -1;
-        }
-    }
-
-    if (first > 0) {
-        /* Encoded Mode */
-        if (n == 0) {
-            n = first;
-        }
-        n --;
-        if (n == 0) {
-            buffer_len = 0;
-        }
-        return second;
-    }
-
-    /* Absolute Mode */
-    if (second > 2) {
-        if (n == 0) {
-            n = second;
-        }
-        n --;
-        if (n == 0) {
-            buffer_len = 0;
-        }
-        return buffer[1 + second - n];
-    }
-
-    /* escape */
-    switch (second) {
-        case 0:
-            /* end of line */
-            buffer_len = 0;
-            return -257;
-        case 1:
-            /* end of bitmap */
-            buffer_len = 0;
-            return -258;
-        case 2:
-            if (n == 0)
-                n = 2;
-            /*  delta */
-            n --;
-            if (n == 0) {
-                buffer_len = 0;
+int RLE8_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
+                struct bmp_color_entry *ct) {
+    int p = 0;
+    int y = (height > 0) ? height - 1 : 0;
+    int delta = (height > 0) ? -1 : 1;
+    int x = 0;
+    while (p < len) {
+        uint8_t first = data[p++];
+        if (first > 0) {
+            uint8_t pixel = data[p++];
+            for (int i = 0; i < first; i++) {
+                memcpy(out + y * pitch + x * depth/8, ct + pixel, depth/8);
+                x ++;
+                if (x * depth / 8 >= pitch) {
+                    x = 0;
+                    y += delta;
+                }
             }
-            return - buffer[1+ 2 - n];
-        default:
-            break;
+        } else {
+            uint8_t c = data[p++];
+            if (c == 0) {
+                y += delta;
+                x = 0;
+            } else if (c == 1) {
+                return 0;
+            } else if (c == 2) {
+                x += data[p++];
+                y += data[p++] * delta;
+            } else {
+                for (int i = 0; i < c; i++) {
+                    uint8_t pixel = data[p++];
+                    memcpy(out + y * pitch + x * depth/8, ct+pixel, depth/8);
+                    x++;
+                    if (x * depth / 8 >= pitch) {
+                        x = 0;
+                        y += delta;
+                    }
+                }
+                for (int i = 0; i < (4 - c % 4) % 4; i++) {
+                    p++;
+                }
+            }
+        }
     }
     return -1;
 }
 
-
-int RLE4_decode(uint8_t *data)
+int RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
+                struct bmp_color_entry *ct)
 {
-    static int buffer_len = 0;
-    static uint8_t buffer[256];
-    static int n = 0;
-    if (data)
-        buffer[buffer_len++] = *data;
-
-    if (buffer_len < 2) {
-        return -1; /* buffering*/
-    }
-
-    uint8_t first = buffer[0];
-    uint8_t second = buffer[1];
-    uint8_t second_h = buffer[1] >> 4;
-    uint8_t second_l = buffer[1] & 0xf;
-
-    if (first == 0) {
-        if (second > 2 && buffer_len < second/2 + 4 - (second/2) % 4 + 2) {
-            return -1; /* buffering */
-        } else if (second == 2 && buffer_len < 4) {
-            return -1;
-        }
-    }
-
-    if (first > 0) {
-        /* Encoded Mode */
-        if (n == 0) {
-            n = first;
-        }
-        n --;
-        if (n == 0) {
-            buffer_len = 0;
-        }
-        return (first - n) % 2 ? second_h : second_l;
-    }
-
-    /* Absolute Mode */
-    if (second > 2) {
-        if (n == 0) {
-            n = second;
-        }
-        n --;
-        if (n == 0) {
-            buffer_len = 0;
-        }
-        return (buffer[1 + (second - n)/2 + (second - n) % 2] >> 4 * ((second - n) % 2))& 0xF;
-    }
-
-    /* escape */
-    switch (second) {
-        case 0:
-            /* end of line */
-            buffer_len = 0;
-            return -257;
-        case 1:
-            /* end of bitmap */
-            buffer_len = 0;
-            return -258;
-        case 2:
-            if (n == 0)
-                n = 2;
-            /*  delta */
-            n --;
-            if (n == 0) {
-                buffer_len = 0;
+    int p = 0;
+    uint8_t lo, hi, px;
+    int y = height > 0 ? height - 1 : 0;
+    int delta = (height > 0) ? -1 : 1;
+    int x = 0;
+    while (p < len) {
+        uint8_t first = data[p++];
+        if (first > 0) {
+            px = data[p++];
+            for (int i = 0; i < first; i++) {
+                memcpy(out + y * pitch + x * depth/8, ct + (px >> 4), depth/8);
+                x++;
+                px = (px << 4 | px >> 4);
+                if (x * depth / 8 >= pitch) {
+                    x = 0;
+                    y += delta;
+                }
             }
-            return - buffer[1+ 2 - n];
-        default:
-            break;
+        } else {
+            uint8_t c = data[p++];
+            if (c == 0) {
+                y += delta;
+                x = 0;
+            } else if (c == 1) {
+                return 0;
+            } else if (c == 2) {
+                x += data[p++];
+                y += data[p++] * delta;
+            } else {
+                for (int i = 0; i < c; i++) {
+                    if (i % 2 == 0) {
+                        px = data[p++];
+                    }
+                    memcpy(out + y * pitch + x * depth/8, ct + (px >> 4), depth / 8);
+                    x ++;
+                    px = (px << 4 | px >> 4);
+                    if (x * depth / 8 >= pitch) {
+                        x = 0;
+                        y += delta;
+                    }
+                }
+                for (int i = 0; i < (4 - ((c + 1) / 2) % 4) % 4; i++) {
+                    p ++;
+                }
+            }
+        }
     }
-
     return -1;
 }
 
@@ -213,9 +168,8 @@ BMP_load(const char* filename)
         }
     }
     if (b->dib.bit_count <= 8) {
-        p->depth = 32;
-        int color_num =
-            b->dib.colors_used ? b->dib.colors_used : (1 << b->dib.bit_count);
+        p->depth = 24;
+        int color_num = b->dib.colors_used ? b->dib.colors_used : (1 << b->dib.bit_count);
         b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
         fread(b->palette, 4, color_num, f);
         VDBG(bmp, "palette");
@@ -227,102 +181,45 @@ BMP_load(const char* filename)
     if (p->depth == 24) {
         p->format = CS_PIXELFORMAT_BGR24;
     } else if (p->depth == 32) {
-        p->format = CS_PIXELFORMAT_RGB888;
+        p->format = CS_PIXELFORMAT_BGRX8888;
     }
     VINFO(bmp, "bitcount %d pixel format %s", b->dib.bit_count, CS_GetPixelFormatName(p->format));
 
     fseek(f, b->file_header.offset_data, SEEK_SET);
 
-    /* width must be multiple of four bytes */
-    p->width = ((b->dib.width + 3) >> 2) << 2;
+    /* pitch must be multiple of four bytes */
+    p->width = b->dib.width;
     p->height = b->dib.height;
-    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
+    p->pitch = ((p->width + 3) >> 2 << 2) * p->depth / 8;
     b->data = malloc(p->height * p->pitch);
+    memset(b->data, 0, p->height * p->pitch);
 
-    int upper = b->dib.height > 0 ? b->dib.height -1 : 0;
+    int top = b->dib.height > 0 ? b->dib.height - 1 : 0;
     int bottom = b->dib.height > 0 ? 0 : 1 - b->dib.height;
     int delta = b->dib.height > 0 ? -1 : 1;
     // int bytes_perline = b->dib.width * b->dib.bit_count / 8;
 
-    // uint8_t *image_data = malloc((upper - bottom + 1) * bytes_perline);
-    // fread(image_data, (upper - bottom + 1) * bytes_perline, 1, f);
     if (b->dib.bit_count > 8) {
         /* For read bmp pic data from bottom to up */
-        for (int i = upper, j = 0; i >= bottom; i += delta, j++) {
-            fread(b->data + p->pitch * i, p->pitch, 1, f);
-            // memcpy(b->data + p->pitch * i, image_data + bytes_perline * j, bytes_perline);
+        for (int i = top, j = 0; i >= bottom; i += delta, j++) {
+            fread(b->data + p->pitch * i, b->dib.width * p->depth / 8, 1, f);
         }
     } else {
         if (b->dib.compression == BI_RLE8) {
-            int i = upper, j = 0;
-            int px;
-            uint8_t ret = fgetc(f);
-            px = RLE8_decode(&ret);
-            while (!feof(f)) {
-                while (px == -1) {
-                    ret = fgetc(f);
-                    px = RLE8_decode(&ret);
-                }
-                if (px < -1) {
-                    if (px == -257) {
-                        i += delta;
-                        j = 0;
-                    } else if (px == -258) {
-                        break;
-                    } else {
-                        j -= px;
-                        px = RLE8_decode(NULL);
-                        i -= delta * (px);
-                    }
-                    ret = fgetc(f);
-                    px = RLE8_decode(&ret);
-                }
-
-                while (px >= 0) {
-                    b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
-                    b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
-                    b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
-                    b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
-                    j ++;
-                    px = RLE8_decode(NULL);
-                }
-            }
+            uint8_t *compressed = malloc(b->dib.size_image);
+            fread(compressed, b->dib.size_image, 1, f);
+            RLE8_decode(compressed, b->dib.size_image, b->data, p->pitch, p->height, p->depth,
+                        b->palette);
+            free(compressed);
         } else if (b->dib.compression == BI_RLE4) {
-            int i = upper, j = 0;
-            int px;
-            uint8_t ret = fgetc(f);
-            px = RLE4_decode(&ret);
-            while (!feof(f)) {
-                while (px == -1) {
-                    ret = fgetc(f);
-                    px = RLE4_decode(&ret);
-                }
-                if (px < -1) {
-                    if (px == -257) {
-                        i += delta;
-                        j = 0;
-                    } else if (px == -258) {
-                        break;
-                    } else {
-                        j -= px;
-                        px = RLE4_decode(NULL);
-                        i -= delta * (px);
-                    }
-                    ret = fgetc(f);
-                    px = RLE4_decode(&ret);
-                }
-                while (px >= 0) {
-                    b->data[p->pitch * i + j*p->depth/8] = b->palette[px].blue;
-                    b->data[p->pitch * i + j*p->depth/8 + 1] = b->palette[px].green;
-                    b->data[p->pitch * i + j*p->depth/8 + 2] = b->palette[px].red;
-                    b->data[p->pitch * i + j*p->depth/8 + 3] = b->palette[px].alpha;
-                    j ++;
-                    px = RLE4_decode(NULL);
-                }
-            }
+            uint8_t *compressed = malloc(b->dib.size_image);
+            fread(compressed, b->dib.size_image, 1, f);
+            RLE4_decode(compressed, b->dib.size_image, b->data, p->pitch, p->height, p->depth,
+                             b->palette);
+            free(compressed);
         } else {
             VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
-            for (int i = upper; i >= bottom; i += delta) {
+            for (int i = top; i >= bottom; i += delta) {
                 for(int j = 0; j < p->width; j ++) {
                     uint8_t px = 0, pxlo;
                     if (b->dib.bit_count == 8) {
@@ -389,6 +286,11 @@ BMP_info(FILE* f, struct pic* p)
             break;
         }
     }
+    const char *compression_str[] = {
+        "RGB", "RLE8",           "RLE4",     "BITFIELDS", "JPEG",
+        "PNG", "ALPHABITFIELDS", "",         "",          "",
+        "",   "CMYK",          "CMYKRLE8","CMYKRLE4",
+    };
     fprintf(f, "\tfile size: %d\n", b->file_header.file_size);
     fprintf(f, "\tpixels starting address: %d\n", b->file_header.offset_data);
     fprintf(f, "-------------------------------------\n");
@@ -397,7 +299,7 @@ BMP_info(FILE* f, struct pic* p)
     fprintf(f, "\timage height: %d\n", b->dib.height);
     fprintf(f, "\timage planes: %d\n", b->dib.planes);
     fprintf(f, "\tbits per pixel: %d\n", b->dib.bit_count);
-    fprintf(f, "\tcompression: %d\n", b->dib.compression);
+    fprintf(f, "\tcompression: %s\n", compression_str[b->dib.compression]);
     fprintf(f, "\tsize_image: %d\n", b->dib.size_image);
     fprintf(f, "\tx resolution: %d\n", b->dib.x_pixels_per_meter);
     fprintf(f, "\ty resolution: %d\n", b->dib.y_pixels_per_meter);

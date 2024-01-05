@@ -669,14 +669,31 @@ void JPG_encode(struct pic *p)
             dct_8x8(V + y * p->pitch + x * 8, coeff, 8);
         }
     }
+    struct huffman_codec *hdec = huffman_codec_init(NULL, 0);
     for (int y = 0; y < p->height / 8; y++) {
         for (int x = 0; x < p->width / 8; x++) {
             for (int i = 0; i < 8; i++) {
                 for (int j = 0; j < 8; j++) {
+                    // TODO, do scale in DCT and do ROUND here
                     Y[y * p->pitch + x + i * p->pitch + j] /= y_quant[i][j];
                     U[y * p->pitch + x + i * p->pitch + j] /= uv_quant[i][j];
                     V[y * p->pitch + x + i * p->pitch + j] /= uv_quant[i][j];
                 }
+            }
+        }
+    }
+    struct jpg_decoder *d[3];
+    //prepare huffman code table
+    // huffman_scan_buff(Y, p->height * p->pitch * 2, 0);
+
+    for (int y = 0; y < 0; y++) {
+        for (int x = 0; x < 0; x++) {
+
+            // store as zigzag and encode YUV420
+            for (int i = 0; i < 64; i++) {
+                // Y[y * p->pitch + x + zigzag[i] / 8 * p->pitch + zigzag[i] % 8];
+                // U[y * p->pitch + x + zigzag[i] / 8 * p->pitch + zigzag[i] % 8];
+                // V[y * p->pitch + x + zigzag[i] / 8 * p->pitch + zigzag[i] % 8];
             }
         }
     }

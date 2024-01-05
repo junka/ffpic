@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "SDL_events.h"
+#include "SDL_render.h"
 #include "display.h"
 #include "exr.h"
 #include "sdl_screen.h"
@@ -26,30 +27,21 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
     scrn.rect.x = left;
     scrn.rect.y = top;
 
-    //SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, width, height, depth, format);
     SDL_Surface * s = SDL_CreateRGBSurfaceWithFormatFrom(pixels, width, height, depth, pitch, format);
     if (!s) {
         return -1;
     }
-    // SDL_memcpy(s->pixels, pixels, height * pitch);
 
     SDL_Texture * texture = SDL_CreateTextureFromSurface(scrn.r, s);
     // printf("width %d, height %d, left %d, top %d, pitch %d, depth %d\n", width, height, left, top, pitch, depth);
 
-    if (!scrn.t) {
-        scrn.t = texture;
-        SDL_SetRenderTarget(scrn.r, scrn.t);
-    } else {
-        SDL_RenderCopy(scrn.r, scrn.t, NULL, &scrn.rect);
-        // SDL_RenderClear(scrn.r);
-        // SDL_RenderPresent(scrn.r);
-    }
-    SDL_RenderCopy(scrn.r, texture, NULL, &scrn.rect);
-    SDL_RenderPresent(scrn.r);
-    if (scrn.t != texture) {
+    if (scrn.t) {
         SDL_DestroyTexture(scrn.t);
-        scrn.t = texture;
     }
+    scrn.t = texture;
+    SDL_SetRenderTarget(scrn.r, scrn.t);
+    SDL_RenderCopy(scrn.r, scrn.t, NULL, &scrn.rect);
+    SDL_RenderPresent(scrn.r);
     SDL_FreeSurface(s);
     return 0;
 }
@@ -57,7 +49,6 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
 
 void pic_poll_block(bool q)
 {
-    SDL_RenderClear(scrn.r);
     SDL_Event e;
     bool quit = false;
     int mx, my;
@@ -67,6 +58,7 @@ void pic_poll_block(bool q)
         while (SDL_PollEvent(&e)) {
             switch (e.type) {
             case SDL_QUIT:
+            case SDL_KEYDOWN:
                 quit = true;
                 break;
             case SDL_MOUSEBUTTONDOWN:
@@ -143,21 +135,8 @@ sdl_screen_init(const char* title, int w, int h)
         return -1;
     }
 
-    scrn.t = SDL_CreateTexture(scrn.r, SDL_PIXELFORMAT_YV12, SDL_TEXTUREACCESS_STATIC, w, h);
-    if (scrn.t == NULL) {
-        SDL_DestroyRenderer(scrn.r);
-        SDL_DestroyWindow(scrn.w);
-        return -1;
-    }
-
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-
-    SDL_SetRenderTarget(scrn.r, scrn.t);
     SDL_SetRenderDrawBlendMode(scrn.r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(scrn.r, 0xFF, 0xFF, 0xFF, 0xFF);
     SDL_RenderClear(scrn.r);
-    SDL_RenderPresent(scrn.r);
-    pic_poll_block(true);
 
     return 0;
 }

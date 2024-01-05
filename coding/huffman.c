@@ -8,7 +8,7 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(huffman, DEBUG)
+VLOG_REGISTER(huffman, INFO)
 
 #define MAX_BIT_LENGTH 16 /* largest bitlen used by any tree type */
 #define MAX_SYMBOLS 256   /* largest number of symbols used by any tree type */
@@ -209,12 +209,16 @@ huffman_reset_stream(struct huffman_codec *codec)
     RESET_BORDER(codec->v);
 }
 
-void huffman_codec_free(struct huffman_codec *codec) {
+void
+huffman_codec_free(struct huffman_codec *codec)
+{
     bits_vec_free(codec->v);
     free(codec);
 }
 
-int sort_symbol_descrease(int freq[256], uint8_t symbols[256]) {
+static int
+sort_symbol_descrease(int freq[256], uint8_t symbols[256])
+{
     int f[256];
     int j = 0;
     memcpy(f, freq, sizeof(int) * 256);
@@ -247,7 +251,6 @@ typedef struct hnode {
 } hnode;
 
 static void free_hnode(hnode *parent) {
-
     hnode *left = parent->left;
     hnode *right = parent->right;
     if (left) {
@@ -259,7 +262,8 @@ static void free_hnode(hnode *parent) {
     free(parent);
 }
 
-void calc_huffman_codelen(hnode *parent, uint8_t count[16])
+static void
+calc_huffman_codelen(hnode *parent, uint8_t count[16])
 {
     hnode *left = parent->left;
     hnode *right = parent->right;
@@ -319,16 +323,11 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     calc_huffman_codelen(p, count);
     free_hnode(p);
 
-    // struct codes {
-    //     int8_t bitlen;
-    //     uint8_t code;
-    // };
-
     struct huffman_symbol *sym = huffman_symbol_alloc(count, symbols);
-    for (int i = 0; i < 16; i++) {
-        printf("%d ", sym->count[i]);
-    }
-    printf("\n");
+    // for (int i = 0; i < 16; i++) {
+    //     printf("%d ", sym->count[i]);
+    // }
+    // printf("\n");
     struct huffman_tree *tree = huffman_tree_init();
 
     huffman_build_lookup_table(tree, id, sym);

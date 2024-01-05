@@ -35,7 +35,7 @@ struct huffman_codec {
     struct bits_vec *v;
 };
 
-struct huffman_codec* huffman_codec_init(uint8_t *in, int inbytelen);
+struct huffman_codec* huffman_codec_init(uint8_t *in, int len);
 
 /* init huffman tree */
 huffman_tree* huffman_tree_init(void);

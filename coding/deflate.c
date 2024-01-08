@@ -491,7 +491,7 @@ deflate_decode(uint8_t* compressed, int compressed_length, uint8_t* decompressed
     }
     compressed += 2;
 
-    // /* Initialise data */
+    /* Initialise data */
     struct deflate_decoder d = {
         .dest = decompressed,
         .dest_start = decompressed,

@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+#include <stdint.h>
 /* according to https://www.w3.org/TR/2003/REC-PNG-20031110/#7Integers-and-byte-order
  *   All png integers are in network byte orders
  */
@@ -100,6 +100,16 @@ struct chromaticities_white_point {
     uint32_t blue_y;
 };
 
+union background_color {
+    uint16_t greyscale;
+    struct {
+      uint16_t red;
+      uint16_t green;
+      uint16_t blue;
+    } rgb;
+    uint8_t palette;
+};
+
 struct suggested_palette {
     char * name;
     uint8_t sample_depth;
@@ -125,7 +135,7 @@ enum filter_type {
 };
 
 
-typedef struct {
+typedef struct PNG {
     struct png_file_header sig;
     struct png_ihdr ihdr;
     
@@ -134,15 +144,16 @@ typedef struct {
     int size;
     uint8_t *data;
 
+    union background_color bcolor;
     struct chromaticities_white_point cwp;
     uint32_t gamma;
     struct icc_profile icc;
 
-    uint32_t n_text;
+    int n_text;
     struct textual_data *textual;
-    uint32_t n_ctext;
+    int n_ctext;
     struct compressed_textual_data *ctextual;
-    uint32_t n_itext;
+    int n_itext;
     struct international_textual_data *itextual;
 
     uint16_t* freqs;

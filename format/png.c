@@ -7,10 +7,11 @@
 #include <arpa/inet.h>
 
 #include "colorspace.h"
-#include "png.h"
-#include "file.h"
-#include "deflate.h"
 #include "crc.h"
+#include "deflate.h"
+#include "file.h"
+#include "png.h"
+#include "utils.h"
 #include "vlog.h"
 
 VLOG_REGISTER(png, INFO)
@@ -56,34 +57,37 @@ read_char_till_null(FILE *f, uint8_t *buff, int len)
 static int 
 calc_png_bits_per_pixel(PNG *p)
 {
-    int color_len;
-    switch(p->ihdr.color_type) {
-        case GREYSCALE:
-            color_len = 1;
-            break;
-        case TRUECOLOR:
-            color_len = 3;
-            break;
-        case GREYSCALE_ALPHA:
-            color_len = 2;
-            break;
-        case TRUECOLOR_ALPHA:
-            color_len = 4;
-            break;
-        case INDEXEDCOLOR:
-            color_len = 1;
-            break;
-        default:
-            color_len = 0;
-            break;
-    }
-    return p->ihdr.bit_depth * color_len;
+    int color_len [] = {
+        1, 0, 3, 1, 2, 0, 4
+    };
+    
+    // switch(p->ihdr.color_type) {
+    //     case GREYSCALE:
+    //         color_len = 1;
+    //         break;
+    //     case TRUECOLOR:
+    //         color_len = 3;
+    //         break;
+    //     case GREYSCALE_ALPHA:
+    //         color_len = 2;
+    //         break;
+    //     case TRUECOLOR_ALPHA:
+    //         color_len = 4;
+    //         break;
+    //     case INDEXEDCOLOR:
+    //         color_len = 1;
+    //         break;
+    //     default:
+    //         color_len = 0;
+    //         break;
+    // }
+    return p->ihdr.bit_depth * color_len[p->ihdr.color_type];
 }
 
 static int 
 calc_image_raw_size(PNG *p)
 {
-    return p->ihdr.height * (p->ihdr.width * calc_png_bits_per_pixel(p) + 7)/8 + p->ihdr.height;
+    return p->ihdr.height * (((p->ihdr.width + 3)>>2)<<2) * calc_png_bits_per_pixel(p)/8 + p->ihdr.height;
 }
 
 /*Paeth predicter, used by PNG filter type 4*/
@@ -104,9 +108,9 @@ paeth_predictor(int a, int b, int c)
 }
 
 static void 
-unfilter_scanline(unsigned char *recon, const unsigned char *scanline, 
-        const unsigned char *precon, unsigned long bytewidth, 
-        unsigned char filterType, unsigned long length)
+unfilter_scanline(uint8_t *recon, const uint8_t *scanline, 
+        const uint8_t *precon, unsigned long bytewidth, 
+        uint8_t filterType, unsigned long length)
 {
     /*
        For PNG filter method 0
@@ -153,14 +157,14 @@ unfilter_scanline(unsigned char *recon, const unsigned char *scanline,
     case FILTER_PAETH:
         if (precon) {
             for (i = 0; i < bytewidth; i++)
-                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(0, precon[i], 0));
+                recon[i] = (uint8_t)(scanline[i] + paeth_predictor(0, precon[i], 0));
             for (i = bytewidth; i < length; i++)
-                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], precon[i], precon[i - bytewidth]));
+                recon[i] = (uint8_t)(scanline[i] + paeth_predictor(recon[i - bytewidth], precon[i], precon[i - bytewidth]));
         } else {
             for (i = 0; i < bytewidth; i++)
                 recon[i] = scanline[i];
             for (i = bytewidth; i < length; i++)
-                recon[i] = (unsigned char)(scanline[i] + paeth_predictor(recon[i - bytewidth], 0, 0));
+                recon[i] = (uint8_t)(scanline[i] + paeth_predictor(recon[i - bytewidth], 0, 0));
         }
         break;
     default:
@@ -169,7 +173,7 @@ unfilter_scanline(unsigned char *recon, const unsigned char *scanline,
 }
 
 static void 
-remove_padding_bits(unsigned char *out, const unsigned char *in, 
+remove_padding_bits(uint8_t *out, const uint8_t *in, 
             unsigned long olinebits, unsigned long ilinebits, unsigned h)
 {
     /*
@@ -184,11 +188,11 @@ remove_padding_bits(unsigned char *out, const unsigned char *in,
     for (y = 0; y < h; y++) {
         unsigned long x;
         for (x = 0; x < olinebits; x++) {
-            unsigned char bit = (unsigned char)((in[(ibp) >> 3] >> (7 - ((ibp) & 0x7))) & 1);
+            uint8_t bit = (uint8_t)((in[(ibp) >> 3] >> (7 - ((ibp) & 0x7))) & 1);
             ibp++;
 
             if (bit == 0)
-                out[(obp) >> 3] &= (unsigned char)(~(1 << (7 - ((obp) & 0x7))));
+                out[(obp) >> 3] &= (uint8_t)(~(1 << (7 - ((obp) & 0x7))));
             else
                 out[(obp) >> 3] |= (1 << (7 - ((obp) & 0x7)));
             ++obp;
@@ -202,23 +206,24 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 {
     // uint8_t type = *buf;
     int depth = calc_png_bits_per_pixel(p);
-    unsigned bytewidth = (depth + 7) / 8;    /*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
-    unsigned linebytes = (p->ihdr.width * depth + 7) / 8;
+    int bytewidth = (depth + 7) / 8;    /*bytewidth is used for filtering, is 1 when depth < 8, number of bytes per pixel otherwise */
+    int pitch = (p->ihdr.width * depth + 7) / 8;
 
-    unsigned char *prevline = 0;
-    assert((1 + linebytes) * p->ihdr.height <= (uint32_t)size);
+    uint8_t *prevline = 0;
+    assert((1 + pitch) * p->ihdr.height <= (uint32_t)size);
 
     for (uint32_t y = 0; y < p->ihdr.height; y++) {
-        unsigned long outindex = linebytes * y;
-        unsigned long pos = (1 + linebytes) * y;    /*the extra filterbyte added to each row */
-        unsigned char filterType = buf[pos];
-        unfilter_scanline(&p->data[outindex], &buf[pos + 1], prevline, bytewidth, filterType, linebytes);
+        int outindex = pitch * y;
+        int pos = (1 + pitch) * y;    /*the extra filterbyte added to each row */
+        uint8_t filterType = buf[pos];
+        unfilter_scanline(&p->data[outindex], &buf[pos + 1], prevline, bytewidth, filterType, pitch);
         prevline = &p->data[outindex];
     }
 
-    if (bytewidth == 1 && p->ihdr.width * depth != (linebytes * 8)) {
+    if (bytewidth == 1 && (int)p->ihdr.width * depth != (pitch * 8)) {
         //means get padding per line
-        remove_padding_bits(p->data, buf, p->ihdr.width * depth, linebytes * 8, p->ihdr.height);
+        remove_padding_bits(p->data, buf, p->ihdr.width * depth, pitch * 8,
+                            p->ihdr.height);
     }
 }
 
@@ -246,7 +251,7 @@ PNG_load(const char* filename)
     //     "gIFx",
     //     "IEND"
     // };
-    struct pic *p = pic_alloc(sizeof(struct pic));
+    struct pic *p = pic_alloc(sizeof(struct PNG));
     PNG * b = p->pic;
 
     FILE *f = fopen(filename, "rb");
@@ -267,6 +272,7 @@ PNG_load(const char* filename)
     length = ntohl(length);
 
     while(length && chunk_type != CHARS2UINT("IEND")) {
+        assert(length > 0);
         crc32 = init_crc32((uint8_t*)&chunk_type, sizeof(uint32_t));
         switch (chunk_type) {
             case CHARS2UINT("IHDR"):
@@ -284,17 +290,18 @@ PNG_load(const char* filename)
                 compressed_size += length;
                 if ((uint32_t)compressed_size == length) {
                     compressed = malloc(compressed_size);
-                    fread(compressed, 1, length, f);
+                    fread(compressed, length, 1, f);
                     crc32 = update_crc(crc32, (uint8_t *)compressed, length);
                 } else {
                     compressed = realloc(compressed, compressed_size);
-                    fread(compressed + compressed_size - length , 1, length, f);
+                    fread(compressed + compressed_size - length , length, 1, f);
                     crc32 = update_crc(crc32, (uint8_t *)compressed + compressed_size - length, length);
                 }
                 break;
             case CHARS2UINT("gAMA"):
                 fread(&b->gamma, sizeof(uint32_t), 1, f);
                 crc32 = update_crc(crc32, (uint8_t *)&b->gamma, length);
+                b->gamma = ntohl(b->gamma);
                 break;
             case CHARS2UINT("iCCP"):
                 i = read_char_till_null(f, keybuff, 80);
@@ -304,7 +311,7 @@ PNG_load(const char* filename)
                 b->icc.compression_method = fgetc(f);
                 crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_method, 1);
                 b->icc.compression_profile = malloc(length - i - 1);
-                fread(&b->icc.compression_profile, 1, length - i - 1, f);
+                fread(&b->icc.compression_profile, length - i - 1, 1, f);
                 crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_profile, length - i - 1);
                 break;
             case CHARS2UINT("cHRM"):
@@ -412,7 +419,8 @@ PNG_load(const char* filename)
             case CHARS2UINT("zTXt"):
                 i = read_char_till_null(f, keybuff, 80);
                 crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
-                if (b->n_itext ++) {
+                if (b->n_ctext) {
+                    b->n_ctext ++;
                     b->ctextual = realloc(b->ctextual, b->n_ctext * sizeof(struct compressed_textual_data));
                     (b->ctextual+b->n_ctext-1)->keyword = malloc(i);
                     memcpy((b->ctextual+b->n_ctext-1)->keyword, keybuff, i);
@@ -438,6 +446,7 @@ PNG_load(const char* filename)
                     } else {
                         b->ctextual->compressed_text = NULL;
                     }
+                    b->n_ctext = 1;
                 }
                 break;
             case CHARS2UINT("hIST"):
@@ -445,17 +454,35 @@ PNG_load(const char* filename)
                 fread(b->freqs, 2, length/2, f);
                 crc32 = update_crc(crc32, (uint8_t*)b->freqs, length);
                 break;
-            // case CHARS2UINT("sPLT"):
-
-            //     break;
+            case CHARS2UINT("bKGD"):
+                VDBG(png, "color %d, length %d", b->ihdr.color_type, length);
+                if (b->ihdr.color_type == GREYSCALE ||
+                    b->ihdr.color_type == GREYSCALE_ALPHA) {
+                    fread(&b->bcolor, 2, 1, f);
+                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+                    b->bcolor.greyscale = ntohs(b->bcolor.greyscale);
+                } else if (b->ihdr.color_type == TRUECOLOR ||
+                           b->ihdr.color_type == TRUECOLOR_ALPHA) {
+                    fread(&b->bcolor, 6, 1, f);
+                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+                    b->bcolor.rgb.red = ntohs(b->bcolor.rgb.red);
+                    b->bcolor.rgb.green = ntohs(b->bcolor.rgb.green);
+                    b->bcolor.rgb.blue = ntohs(b->bcolor.rgb.blue);
+                } else if (b->ihdr.color_type == INDEXEDCOLOR) {
+                    fread(&b->bcolor, 1, 1, f);
+                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+                }
+                break;
             case CHARS2UINT("tIME"):
-                fread(&b->last_mod, 1, sizeof(struct last_modification), f);
+                fread(&b->last_mod, sizeof(struct last_modification), 1, f);
                 crc32 = update_crc(crc32, (uint8_t*)&(b->last_mod), length);
                 break;
             default:
                 if (length) {
                     VDBG(png, "length %d", length);
-                    data = malloc(length);
+                    data = calloc(1, length);
+
+                    assert(data);
                     fread(data, length, 1, f);
                     crc32 = update_crc(crc32, (uint8_t*)data, length);
                     free(data);
@@ -482,9 +509,8 @@ PNG_load(const char* filename)
     uint8_t* udata = malloc(b->size);
     int a = deflate_decode(compressed, compressed_size, udata, &b->size);
 #if 0
-    #include "utils.h"
-    hexdump(stdout, "png raw data", compressed, 32);
-    hexdump(stdout, "png decompress data", udata, 32);
+    hexdump(stdout, "png raw data", "", compressed, 32);
+    hexdump(stdout, "png decompress data", "", udata, 32);
 #endif
     free(compressed);
     b->data = (uint8_t*)malloc(b->size);
@@ -508,11 +534,13 @@ PNG_free(struct pic* p)
     if (b->palette)
         free(b->palette);
     if (b->itextual) {
-        if (b->itextual->keyword) {
-            free(b->itextual->keyword);
-        }
-        if (b->itextual->text) {
-            free(b->itextual->text);
+        for (int i = 0; i < b->n_itext; i ++) {
+            if (b->itextual[i].keyword) {
+                free(b->itextual[i].keyword);
+            }
+            if (b->itextual[i].text) {
+                free(b->itextual[i].text);
+            }
         }
         if (b->itextual->language_tag) {
             free(b->itextual->language_tag);
@@ -523,20 +551,24 @@ PNG_free(struct pic* p)
         free(b->itextual);
     }
     if (b->textual) {
-        if (b->textual->keyword) {
-            free(b->textual->keyword);
-        }
-        if (b->textual->text) {
-            free(b->textual->text);
+        for (int i = 0; i < b->n_text; i++) {
+            if (b->textual[i].keyword) {
+                free(b->textual[i].keyword);
+            }
+            if (b->textual[i].text) {
+                free(b->textual[i].text);
+            }
         }
         free(b->textual);
     }
     if (b->ctextual) {
-        if (b->ctextual->keyword) {
-            free(b->ctextual->keyword);
-        }
-        if (b->ctextual->compressed_text) {
-            free(b->ctextual->compressed_text);
+        for (int i = 0; i < b->n_ctext; i++) {
+            if (b->ctextual[i].keyword) {
+                free(b->ctextual[i].keyword);
+            }
+            if (b->ctextual[i].compressed_text) {
+                free(b->ctextual[i].compressed_text);
+            }
         }
         free(b->ctextual);
     }
@@ -566,34 +598,47 @@ PNG_info(FILE* f, struct pic* p)
     if (b->n_text) {
         fprintf(f, "\tTextual data:\n");
     }
-    for (uint32_t i = 0; i < b->n_text; i ++) {
+    for (int i = 0; i < b->n_text; i ++) {
         struct textual_data *t = (b->textual + i);
         fprintf(f, "\t%s:%s\n", t->keyword, t->text);
     }
     if (b->n_ctext) {
         fprintf(f, "\tCompressed Textual data:\n");
     }
-    for (uint32_t i = 0; i < b->n_ctext; i ++) {
+    for (int i = 0; i < b->n_ctext; i ++) {
         struct compressed_textual_data *t = (b->ctextual + i);
         fprintf(f, "\t%s:%d:%s\n", t->keyword, t->compression_method, t->compressed_text);
     }
     if (b->n_itext) {
         fprintf(f, "\tInternatianal Textual data:\n");
     }
-    for (uint32_t i = 0; i < b->n_itext; i ++) {
+    for (int i = 0; i < b->n_itext; i ++) {
         struct international_textual_data *t = (b->itextual + i);
         if (t->compression_flag)
             fprintf(f, "\tcompression %d\n", t->compression_method);
         fprintf(f, "\t%s:%s:%s:%s\n", t->keyword, t->language_tag, t->translated_keyword, t->text);
     }
+    if (b->ihdr.color_type == GREYSCALE || b->ihdr.color_type == GREYSCALE_ALPHA) {
+        fprintf(f, "\tBackgroud color: GRESCALE %d\n", b->bcolor.greyscale);
+    } else if (b->ihdr.color_type == TRUECOLOR ||
+               b->ihdr.color_type == TRUECOLOR_ALPHA) {
+        fprintf(f, "\tBackgroud color: RGB %04x, %04x, %04x\n",
+                b->bcolor.rgb.red, b->bcolor.rgb.green, b->bcolor.rgb.blue);
+    } else if (b->ihdr.color_type == INDEXEDCOLOR) {
+        fprintf(f, "\tBackgroud color: Index %d\n", b->bcolor.palette);
+    }
+
     fprintf(f, "\tHRM data:\n");
-    fprintf(f, "\twhite x: %u, y: %u\n", b->cwp.white_x, b->cwp.white_y);
-    fprintf(f, "\tred x: %u, y: %u\n", b->cwp.red_x, b->cwp.red_y);
-    fprintf(f, "\tgreen x: %u, y: %u\n", b->cwp.green_x, b->cwp.green_y);
-    fprintf(f, "\tblue x: %u, y: %u\n", b->cwp.blue_x, b->cwp.blue_y);
-    
-    fprintf(f, "\tGAMA data:\n");
-    fprintf(f, "\t0x%x\n", b->gamma);
+    fprintf(f, "\twhite x: %f, y: %f\n", (float)b->cwp.white_x / 100000,
+            (float)b->cwp.white_y / 100000);
+    fprintf(f, "\tred x: %f, y: %f\n", (float)b->cwp.red_x / 100000,
+            (float)b->cwp.red_y / 100000);
+    fprintf(f, "\tgreen x: %f, y: %f\n", (float)b->cwp.green_x / 100000,
+            (float)b->cwp.green_y / 100000);
+    fprintf(f, "\tblue x: %f, y: %f\n", (float)b->cwp.blue_x / 100000,
+            (float)b->cwp.blue_y / 100000);
+
+    fprintf(f, "\tGAMA : %f\n", (float)b->gamma / 100000);
 
     if (b->icc.name) {
         fprintf(f, "\tICC data:\n");

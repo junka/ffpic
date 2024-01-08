@@ -5,6 +5,8 @@
 extern "C"{
 #endif
 
+#include <stdint.h>
+
 struct zlib_header {
     uint8_t compress_method : 4;
     uint8_t compression_info : 4;

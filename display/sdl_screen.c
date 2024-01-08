@@ -33,7 +33,7 @@ int sdl_draw(void *pixels, int left, int top, int width, int height, int depth, 
     }
 
     SDL_Texture * texture = SDL_CreateTextureFromSurface(scrn.r, s);
-    // printf("width %d, height %d, left %d, top %d, pitch %d, depth %d\n", width, height, left, top, pitch, depth);
+    // printf("width %d, height %d, left %d, top %d, pitch %d, depth %d, format %d\n", width, height, left, top, pitch, depth, format);
 
     if (scrn.t) {
         SDL_DestroyTexture(scrn.t);

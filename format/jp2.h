@@ -7,7 +7,6 @@ extern "C" {
 
 #include "basemedia.h"
 
-
 //following jp box and ftyp box, super box
 #define JP2H TYPE2UINT("jp2h")
 
@@ -289,7 +288,7 @@ struct coding_para {
     uint8_t decomp_level_num;
     uint8_t code_block_width;
     uint8_t code_block_height;
-#ifdef __LITTLE_ENDIAN__
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t selctive_arithmetic:1;
     uint8_t reset_on_boundary:1;
     uint8_t termination:1;
@@ -315,7 +314,7 @@ struct coding_para {
 struct cod {
     uint16_t length;
 
-#ifdef __LITTLE_ENDIAN__
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t entropy: 1;
     uint8_t sop: 1;
     uint8_t eph: 1;
@@ -352,7 +351,7 @@ struct rgn {
 //Quantization default
 struct qcd {
     uint16_t length;
-#if __LITTLE_ENDIAN__
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t guard_num:3;
     uint8_t quant_type:5;
 #else

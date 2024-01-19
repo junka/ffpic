@@ -4,7 +4,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <assert.h>
-#include <arpa/inet.h>
 
 #include "colorspace.h"
 #include "crc.h"
@@ -460,14 +459,14 @@ PNG_load(const char* filename)
                     b->ihdr.color_type == GREYSCALE_ALPHA) {
                     fread(&b->bcolor, 2, 1, f);
                     crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-                    b->bcolor.greyscale = ntohs(b->bcolor.greyscale);
+                    b->bcolor.greyscale = SWAP(b->bcolor.greyscale);
                 } else if (b->ihdr.color_type == TRUECOLOR ||
                            b->ihdr.color_type == TRUECOLOR_ALPHA) {
                     fread(&b->bcolor, 6, 1, f);
                     crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-                    b->bcolor.rgb.red = ntohs(b->bcolor.rgb.red);
-                    b->bcolor.rgb.green = ntohs(b->bcolor.rgb.green);
-                    b->bcolor.rgb.blue = ntohs(b->bcolor.rgb.blue);
+                    b->bcolor.rgb.red = SWAP(b->bcolor.rgb.red);
+                    b->bcolor.rgb.green = SWAP(b->bcolor.rgb.green);
+                    b->bcolor.rgb.blue = SWAP(b->bcolor.rgb.blue);
                 } else if (b->ihdr.color_type == INDEXEDCOLOR) {
                     fread(&b->bcolor, 1, 1, f);
                     crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);

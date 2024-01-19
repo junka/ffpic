@@ -8,6 +8,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "byteorder.h"
 
 
 #define TYPE2UINT(x) (uint32_t)(x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
@@ -117,7 +118,7 @@ struct item_location {
 /* item location */
 struct iloc_box {
     FULL_BOX_ST;
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t length_size:4;   /* 0, 4, 8 */
     uint8_t offset_size:4;   /* 0, 4, 8 */
     uint8_t index_size:4; /* 0, 4, 8 */
@@ -242,7 +243,7 @@ struct colr_box {
     uint16_t color_primaries;
     uint16_t transfer_characteristics;
     uint16_t matrix_coefficients;
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t reserved:7;
     uint8_t full_range_flag:1;
 #else

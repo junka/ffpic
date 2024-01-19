@@ -12,7 +12,7 @@ extern "C" {
 struct bpg_file {
     uint32_t file_magic;
 
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t bit_depth_minus_8 : 4;
     uint8_t alpha1_flag : 1;
     uint8_t pixel_format : 3;
@@ -22,7 +22,7 @@ struct bpg_file {
     uint8_t bit_depth_minus_8 : 4;
 #endif
 
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t animation_flag : 1;
     uint8_t limited_range_flag : 1;
     uint8_t alpha2_flag : 1;

@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <arpa/inet.h>
 #include <string.h>
 #include <stdbool.h>
 #include <math.h>

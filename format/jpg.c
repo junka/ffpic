@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <arpa/inet.h>
+#include <assert.h>
 
 #include "file.h"
 #include "jpg.h"
@@ -81,7 +81,7 @@ read_dqt(JPG *j, FILE *f)
     uint8_t c;
     uint16_t tlen;
     fread(&tlen, 2, 1, f);
-    tlen = ntohs(tlen);
+    tlen = SWAP(tlen);
     tlen -= 2;
     while (tlen) {
         c = fgetc(f);
@@ -96,7 +96,7 @@ read_dqt(JPG *j, FILE *f)
         for (int i = 0; i < 64; i ++) {
             fread(&j->dqt[id].tdata[zigzag[i]], precision + 1, 1, f);
             if (precision == 1) {
-                j->dqt[id].tdata[zigzag[i]] = ntohs(j->dqt[id].tdata[zigzag[i]]);
+              j->dqt[id].tdata[zigzag[i]] = SWAP(j->dqt[id].tdata[zigzag[i]]);
             }
         }
         tlen -= ((precision + 1) << 6);
@@ -108,7 +108,7 @@ read_dht(JPG* j, FILE *f)
 {
     uint16_t tlen;
     fread(&tlen, 2, 1, f);
-    tlen = ntohs(tlen);
+    tlen = SWAP(tlen);
     tlen -= 2;
     while (tlen)
     {
@@ -317,11 +317,16 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     int16_t dummy[64] = {0};
     int16_t buf[64];
 
+    for (uint8_t i = 0; i < j->sof.components_num; ++i) {
+        int v = j->sof.colors[i].vertical;
+        int h = j->sof.colors[i].horizontal;
+        assert(h * v <= 4);
+    }
     for (int y = 0; y <= height / ystride; y++) {
         //block start
         ptr = j->data + y * bytes_blockline;
         for (int x = 0; x < width; x += xstride) {
-            for (uint i = 0; i < j->sof.components_num; ++i) {
+            for (uint8_t i = 0; i < j->sof.components_num; ++i) {
                 int v = j->sof.colors[i].vertical;
                 int h = j->sof.colors[i].horizontal;
                 for (int vi = 0; vi < v; vi ++) {
@@ -374,7 +379,7 @@ read_compressed_image(JPG* j, FILE *f)
     // int height = ((j->sof.height + 7) >> 3) << 3;
     size_t pos = ftell(f);
     fseek(f, 0, SEEK_END);
-    size_t last = ftell(f);
+    size_t last = ftell(f) - 2; //remove EOI length, still enough long
     fseek(f, pos, SEEK_SET);
     uint8_t* compressed = malloc(last - pos);
     uint8_t prev , c = fgetc(f);
@@ -403,7 +408,7 @@ read_compressed_image(JPG* j, FILE *f)
             VERR(jpg, "invalid %x %x", prev, c);
         }
     } while(!feof(f));
-
+    printf("%d vs %ld\n", l, last-pos);
     j->data = compressed;
     j->data_len = l;
     fseek(f, -2, SEEK_CUR);
@@ -444,9 +449,9 @@ JPG_load(const char *filename)
         switch(m) {
             case SOF0:
                 fread(&j->sof, 8, 1, f);
-                j->sof.len = ntohs(j->sof.len);
-                j->sof.height = ntohs(j->sof.height);
-                j->sof.width = ntohs(j->sof.width);
+                j->sof.len = SWAP(j->sof.len);
+                j->sof.height = SWAP(j->sof.height);
+                j->sof.width = SWAP(j->sof.width);
                 j->sof.colors = malloc(j->sof.components_num * sizeof(struct jpg_component));
                 fread(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num, f);
                 break;
@@ -469,20 +474,20 @@ JPG_load(const char *filename)
                 break;
             case COM:
                 fread(&j->comment, 2, 1, f);
-                j->comment.len = ntohs(j->comment.len);
+                j->comment.len = SWAP(j->comment.len);
                 j->comment.data = malloc(j->comment.len-2);
                 fread(j->comment.data, j->comment.len-2, 1, f);
                 break;
             case DRI:
                 fread(&j->dri, sizeof(struct dri ), 1, f);
-                j->dri.interval = ntohs(j->dri.interval);
+                j->dri.interval = SWAP(j->dri.interval);
                 break;
             case APP1:
                 VDBG(jpg, "app1 exif");
             default:
-                VDBG(jpg, "marker %x", ntohs(m));
+                VDBG(jpg, "marker %x", SWAP(m));
                 fread(&len, 2, 1, f);
-                len = ntohs(len);
+                len = SWAP(len);
                 fseek(f, len-2, SEEK_CUR);
                 break;
         }
@@ -688,7 +693,6 @@ void JPG_encode(struct pic *p)
 
     for (int y = 0; y < 0; y++) {
         for (int x = 0; x < 0; x++) {
-
             // store as zigzag and encode YUV420
             for (int i = 0; i < 64; i++) {
                 // Y[y * p->pitch + x + zigzag[i] / 8 * p->pitch + zigzag[i] % 8];

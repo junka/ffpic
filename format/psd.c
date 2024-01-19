@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <arpa/inet.h>
 
 #include "colorspace.h"
 #include "file.h"
@@ -27,7 +26,7 @@ PSD_probe(const char *filename)
         return -EBADF;
     }
     fclose(f);
-    h.version = ntohs(h.version);
+    h.version = SWAP(h.version);
 
     if ((!strncmp((char *)&h.signature, "8BPS", 4)) && (h.version == 1)) {
         return 0;
@@ -39,7 +38,7 @@ static void
 read_color_mode_data(PSD *s, FILE *f)
 {
     fread(&s->color, 4, 1, f);
-    s->color.length = ntohl(s->color.length);
+    s->color.length = SWAP(s->color.length);
     if (s->color.length) {
         //TBD
     }
@@ -75,8 +74,8 @@ read_image_resource_block(PSD *s, FILE *f)
     uint32_t size;
     fread(&sig, 4, 1, f);
     fread(&id, 2, 1, f);
-    id = ntohs(id);
-    // s->res.block[s->res.num-1].id = ntohs(s->res.block[s->res.num-1].id);
+    id = SWAP(id);
+    // s->res.block[s->res.num-1].id = SWAP(s->res.block[s->res.num-1].id);
     int l = read_str_till_null(f, name);
     if (l % 2) {
         fgetc(f);
@@ -84,7 +83,7 @@ read_image_resource_block(PSD *s, FILE *f)
     }
     l += 6;
     fread(&size, 4, 1, f);
-    size = ntohl(size);
+    size = SWAP(size);
     l += 4;
     uint8_t *d;
 
@@ -110,7 +109,7 @@ static void
 read_image_resource(PSD *s, FILE *f)
 {
     fread(&s->res, 4, 1, f);
-    s->res.length = ntohl(s->res.length);
+    s->res.length = SWAP(s->res.length);
     int l = s->res.length;
     while (l) {
         l -= read_image_resource_block(s, f);
@@ -121,31 +120,31 @@ static void
 read_layer_record(struct channel_record *r, FILE *f)
 {
     fread(r, 16+2, 1, f);
-    r->top = ntohl(r->top);
-    r->left = ntohl(r->left);
-    r->bottom = ntohl(r->bottom);
-    r->right = ntohl(r->right);
-    r->num = ntohs(r->num);
+    r->top = SWAP(r->top);
+    r->left = SWAP(r->left);
+    r->bottom = SWAP(r->bottom);
+    r->right = SWAP(r->right);
+    r->num = SWAP(r->num);
 
     r->info = malloc(r->num * 6);
     fread(r->info, 6* r->num, 1, f);
     for (int i = 0; i < r->num; i ++) {
-        r->info[i].id = ntohs(r->info[i].id);
-        r->info[i].len = ntohl(r->info[i].len);
+        r->info[i].id = SWAP(r->info[i].id);
+        r->info[i].len = SWAP(r->info[i].len);
     }
 
     fread(&r->blend, 16, 1, f);
 
-    r->extra_len = ntohl(r->extra_len);
+    r->extra_len = SWAP(r->extra_len);
 
     fread(&r->mask_data, 4, 1, f);
-    r->mask_data.size = ntohl(r->mask_data.size);
+    r->mask_data.size = SWAP(r->mask_data.size);
     if (r->mask_data.size > 0) {
         fread(&r->mask_data.top, 18, 1, f);
-        r->mask_data.top = ntohl(r->mask_data.top);
-        r->mask_data.left = ntohl(r->mask_data.left);
-        r->mask_data.bottom = ntohl(r->mask_data.bottom);
-        r->mask_data.right = ntohl(r->mask_data.right);
+        r->mask_data.top = SWAP(r->mask_data.top);
+        r->mask_data.left = SWAP(r->mask_data.left);
+        r->mask_data.bottom = SWAP(r->mask_data.bottom);
+        r->mask_data.right = SWAP(r->mask_data.right);
         VDBG(psd, "reserv %x\n", r->mask_data.reserv);
         if (r->mask_data.applied == 1) {
             r->mask_data.mask_parameter = fgetc(f);
@@ -168,15 +167,15 @@ read_layer_record(struct channel_record *r, FILE *f)
             }
         } else {
             fread(&r->mask_data.real_flag, 18, 1, f);
-            r->mask_data.real_top = ntohl(r->mask_data.real_top);
-            r->mask_data.real_left = ntohl(r->mask_data.real_left);
-            r->mask_data.real_bottom = ntohl(r->mask_data.real_bottom);
-            r->mask_data.real_right = ntohl(r->mask_data.real_right);
+            r->mask_data.real_top = SWAP(r->mask_data.real_top);
+            r->mask_data.real_left = SWAP(r->mask_data.real_left);
+            r->mask_data.real_bottom = SWAP(r->mask_data.real_bottom);
+            r->mask_data.real_right = SWAP(r->mask_data.real_right);
         }
     }
 
     fread(&r->blend_data, 4, 1, f);
-    r->blend_data.length = ntohl(r->blend_data.length);
+    r->blend_data.length = SWAP(r->blend_data.length);
 
     VDBG(psd, "extra_len %d , %d\n", r->extra_len, r->blend_data.length);
     if (r->blend_data.length) {
@@ -194,7 +193,7 @@ static void
 read_channel_image(struct channel_record *r, struct channel_image *c, FILE *f)
 {
     fread(&c->compression, 2, 1, f);
-    c->compression = ntohs(c->compression);
+    c->compression = SWAP(c->compression);
     if (c->compression == 0) {
         int tsize = 0, offset = 0;
         for (int i = 0; i < r->num; i ++) {
@@ -202,7 +201,7 @@ read_channel_image(struct channel_record *r, struct channel_image *c, FILE *f)
         }
         c->data = malloc(tsize);
         for (int i = 0; i < r->num; i ++) {
-            VDBG(psd, "tsize %d, %d\n", tsize, ntohl(r->info[i].len));
+            VDBG(psd, "tsize %d, %d\n", tsize, SWAP(r->info[i].len));
             fread(c->data + offset, r->info[i].len, 1, f);
             offset += r->info[i].len;
             VDBG(psd, "offset %lx\n", ftell(f));
@@ -225,7 +224,7 @@ read_extra_layer_info(PSD *s, FILE *f)
             s->layer.extra = realloc(s->layer.extra, (s->layer.extra_num + 1) *sizeof(struct extra_layer_info));
         }
         fread(&s->layer.extra + s->layer.extra_num, 12, 1, f);
-        s->layer.extra[s->layer.extra_num].length = ntohl(s->layer.extra[s->layer.extra_num].length);
+        s->layer.extra[s->layer.extra_num].length = SWAP(s->layer.extra[s->layer.extra_num].length);
         VDBG(psd, "left %d", s->layer.mask.length);
         if (s->layer.extra[s->layer.extra_num].length) {
             s->layer.extra[s->layer.extra_num].data = malloc(s->layer.extra[s->layer.extra_num].length);
@@ -240,10 +239,10 @@ static void
 read_layer_and_mask(PSD *s, FILE *f)
 {
     fread(&s->layer.length, 4, 1, f);
-    s->layer.length = ntohl(s->layer.length);
+    s->layer.length = SWAP(s->layer.length);
     fread(&s->layer.info, 6, 1, f);
-    s->layer.info.length = ntohl(s->layer.info.length);
-    s->layer.info.count = ntohs(s->layer.info.count);
+    s->layer.info.length = SWAP(s->layer.info.length);
+    s->layer.info.count = SWAP(s->layer.info.count);
     s->layer.info.records = malloc(sizeof(struct channel_record) * s->layer.info.count);
     s->layer.info.chan_data = malloc(sizeof(struct channel_image) * s->layer.info.count);
 
@@ -259,7 +258,7 @@ read_layer_and_mask(PSD *s, FILE *f)
     fseek(f, -2, SEEK_CUR);
     //read mask info
     fread(&s->layer.mask, 4, 1, f);
-    s->layer.mask.length = ntohl(s->layer.mask.length);
+    s->layer.mask.length = SWAP(s->layer.mask.length);
     VDBG(psd, "left %d, offset 0x%lx", s->layer.mask.length, ftell(f));
     if (s->layer.mask.length) {
         fread(&s->layer.mask.overlay_cs, 13, 1, f);
@@ -285,7 +284,7 @@ static void
 read_image_data(PSD *s, FILE *f)
 {
     fread(&s->compression, 2, 1, f);
-    s->compression = ntohs(s->compression);
+    s->compression = SWAP(s->compression);
     if (s->compression == 0) {
         int size = 0;
         for (int i = 0; i < s->layer.info.count; i ++) {
@@ -306,12 +305,12 @@ PSD_load(const char* filename)
     PSD * s = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&s->h, sizeof(struct psd_file_header), 1, f);
-    s->h.height = ntohl(s->h.height);
-    s->h.width = ntohl(s->h.width);
-    s->h.depth = ntohs(s->h.depth);
-    s->h.chan_num = ntohs(s->h.chan_num);
-    s->h.version = ntohs(s->h.version);
-    s->h.mode = ntohs(s->h.mode);
+    s->h.height = SWAP(s->h.height);
+    s->h.width = SWAP(s->h.width);
+    s->h.depth = SWAP(s->h.depth);
+    s->h.chan_num = SWAP(s->h.chan_num);
+    s->h.version = SWAP(s->h.version);
+    s->h.mode = SWAP(s->h.mode);
 
     p->depth = 32;
     p->width = ((s->h.width + 3) >> 2) << 2;

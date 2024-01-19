@@ -5,7 +5,6 @@
 extern "C"{
 #endif
 
-#include "byteorder.h"
 #include "golomb.h"
 #include "basemedia.h"
 
@@ -955,7 +954,7 @@ struct sps {
 
 /* the nal_unit_type is restricted to VPS,SPS,PPS, prefix SEI, suffix SEI */
 struct nal_arr {
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t nal_unit_type:6;
     uint8_t reserved:1;
     uint8_t array_completeness:1;

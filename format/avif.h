@@ -4,7 +4,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include "byteorder.h"
+
 #include "basemedia.h"
 
 #pragma pack(push, 1)
@@ -339,7 +339,7 @@ struct sequence_header_obu {
 /* AV1CodecConfigurationBox */
 struct av1C_box {
     BOX_ST;
-#ifdef LITTLE_ENDIAN
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t version:7;
     uint8_t marker:1;
 

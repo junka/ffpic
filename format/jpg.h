@@ -4,10 +4,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "byteorder.h"
+#include <stdint.h>
 
-#define _LITTLE_ENDIAN_
-
-#ifdef _LITTLE_ENDIAN_
+#if BYTE_ORDER == LITTLE_ENDIAN
 #define _MARKER(x, v) (v<<8|x)
 #else
 #defien _MARKER(x, v) (x<<8|v)
@@ -83,7 +83,7 @@ struct jpg_component {
     uint8_t qt_id;  /* quantization table number */
 };
 
-struct start_frame {
+struct sof {
     uint16_t len;
     uint8_t precision;  /*This is in bits/sample, usually 8 (12 and 16 not supported by most software).*/
     uint16_t height;
@@ -92,7 +92,7 @@ struct start_frame {
     struct jpg_component *colors;
 };
 
-struct jfif {
+struct jfif_app0 {
     uint16_t len;
     uint8_t identifier[5];
     uint16_t major : 8;
@@ -164,8 +164,8 @@ struct exif {
 #pragma pack(pop)
 
 typedef struct {
-    struct start_frame sof;
-    struct jfif app0;
+    struct sof sof;
+    struct jfif_app0 app0;
     struct dqt dqt[4];
     struct dht dht[2][16];
     struct start_of_scan sos;

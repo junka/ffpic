@@ -1,4 +1,3 @@
-#include <arpa/inet.h>
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
@@ -45,9 +44,9 @@ void
 read_ihdr(JP2 *j, FILE *f)
 {
     fread(&j->jp2h.ihdr, 14, 1, f);
-    j->jp2h.ihdr.width = ntohl(j->jp2h.ihdr.width);
-    j->jp2h.ihdr.height = ntohl(j->jp2h.ihdr.height);
-    j->jp2h.ihdr.num_comp = ntohs(j->jp2h.ihdr.num_comp);
+    j->jp2h.ihdr.width = SWAP(j->jp2h.ihdr.width);
+    j->jp2h.ihdr.height = SWAP(j->jp2h.ihdr.height);
+    j->jp2h.ihdr.num_comp = SWAP(j->jp2h.ihdr.num_comp);
     // j->jp2h.ihdr.comps = malloc(sizeof(struct jp2_bpc) * j->jp2h.ihdr.num_comp);
 }
 
@@ -57,7 +56,7 @@ read_colr(JP2 *j, FILE *f, uint32_t len)
     fread(&j->jp2h.colr, 3, 1, f);
     if (j->jp2h.colr.method == ENUMERATED_COLORSPACE) {
         fread(&j->jp2h.colr.enum_cs, 4, 1, f);
-        j->jp2h.colr.enum_cs = ntohl(j->jp2h.colr.enum_cs);
+        j->jp2h.colr.enum_cs = SWAP(j->jp2h.colr.enum_cs);
         if (j->jp2h.colr.enum_cs == 16) {
             // sRGB
         } else if (j->jp2h.colr.enum_cs == 17) {
@@ -134,7 +133,7 @@ void
 read_ulst(JP2* j, FILE * f)
 {
     fread(&j->uuid_info[j->uinf_num-1].ulst.num_uuid, 2, 1, f);
-    j->uuid_info[j->uinf_num-1].ulst.num_uuid = ntohs(j->uuid_info[j->uinf_num-1].ulst.num_uuid);
+    j->uuid_info[j->uinf_num-1].ulst.num_uuid = SWAP(j->uuid_info[j->uinf_num-1].ulst.num_uuid);
     j->uuid_info[j->uinf_num-1].ulst.id = malloc(j->uuid_info[j->uinf_num-1].ulst.num_uuid * sizeof(uint128_t));
     for (int i = 0; i < j->uuid_info[j->uinf_num-1].ulst.num_uuid; i ++) {
         fread(j->uuid_info[j->uinf_num-1].ulst.id + i, sizeof(uint128_t), 1, f);
@@ -193,17 +192,17 @@ read_siz(JP2* j, FILE *f)
     int l = 0;
     struct siz *s = &j->main_h.siz;
     fread(s, 38, 1, f);
-    s->length = ntohs(s->length);
-    s->cap = ntohs(s->cap);
-    s->width = ntohl(s->width);
-    s->height = ntohl(s->height);
-    s->left = ntohl(s->left);
-    s->top = ntohl(s->top);
-    s->tile_width = ntohl(s->tile_width);
-    s->tile_height = ntohl(s->tile_height);
-    s->tile_left = ntohl(s->tile_left);
-    s->tile_top = ntohl(s->tile_top);
-    s->component_num = ntohs(s->component_num);
+    s->length = SWAP(s->length);
+    s->cap = SWAP(s->cap);
+    s->width = SWAP(s->width);
+    s->height = SWAP(s->height);
+    s->left = SWAP(s->left);
+    s->top = SWAP(s->top);
+    s->tile_width = SWAP(s->tile_width);
+    s->tile_height = SWAP(s->tile_height);
+    s->tile_left = SWAP(s->tile_left);
+    s->tile_top = SWAP(s->tile_top);
+    s->component_num = SWAP(s->component_num);
 
     l += 38;
     s->comps = malloc(sizeof(struct scomponent)*s->component_num);
@@ -221,8 +220,8 @@ read_cod(JP2 *j, FILE *f)
 {
     int l = 0;
     fread(&j->main_h.cod, 7, 1, f);
-    j->main_h.cod.length = ntohs(j->main_h.cod.length);
-    j->main_h.cod.layers_num = ntohs(j->main_h.cod.layers_num);
+    j->main_h.cod.length = SWAP(j->main_h.cod.length);
+    j->main_h.cod.layers_num = SWAP(j->main_h.cod.layers_num);
     l += 7;
     fread(&j->main_h.cod.p, 5, 1, f);
     l += 5;
@@ -241,8 +240,8 @@ read_cap(JP2 *j, FILE *f)
     int l = 0;
     fread(&j->main_h.cap, 6, 1, f);
     l += 6;
-    j->main_h.cap.length = ntohs(j->main_h.cap.length);
-    j->main_h.cap.bitmap = ntohl(j->main_h.cap.bitmap);
+    j->main_h.cap.length = SWAP(j->main_h.cap.length);
+    j->main_h.cap.bitmap = SWAP(j->main_h.cap.bitmap);
     j->main_h.cap.extensions = malloc(j->main_h.cap.length - 6);
     fread(j->main_h.cap.extensions, 2, j->main_h.cap.length - 6/2, f);
     l += j->main_h.cap.length - 6;
@@ -254,8 +253,8 @@ read_cme(JP2 *j, FILE *f)
 {
     int l = 0;
     fread(&j->main_h.cme, 4, 1, f);
-    j->main_h.cme.length = ntohs(j->main_h.cme.length);
-    j->main_h.cme.use = ntohs(j->main_h.cme.use);
+    j->main_h.cme.length = SWAP(j->main_h.cme.length);
+    j->main_h.cme.use = SWAP(j->main_h.cme.use);
     if (j->main_h.cme.length - 4) {
         j->main_h.cme.str = malloc(j->main_h.cme.length - 4 + 1);
         fread(j->main_h.cme.str, j->main_h.cme.length - 4, 1, f);
@@ -271,7 +270,7 @@ read_qcd(JP2 *j, FILE *f)
     int l = 0;
     fread(&j->main_h.qcd, 3, 1, f);
     l += 3;
-    j->main_h.qcd.length = ntohs(j->main_h.qcd.length);
+    j->main_h.qcd.length = SWAP(j->main_h.qcd.length);
     printf("guard num %d table len %d, decomp %d\n", j->main_h.qcd.guard_num,
            j->main_h.qcd.length - 3, j->main_h.cod.p.decomp_level_num);
     if (j->main_h.qcd.guard_num == 0) {
@@ -312,9 +311,9 @@ read_sot(JP2 *j, FILE *f)
     t->sot.offset_start = ftell(f) - 2;
     fread(&t->sot, 10, 1, f);
     l += 10;
-    t->sot.length = ntohs(t->sot.length);
-    t->sot.tile_id = ntohs(t->sot.tile_id);
-    t->sot.tile_size = ntohl(t->sot.tile_size);
+    t->sot.length = SWAP(t->sot.length);
+    t->sot.tile_id = SWAP(t->sot.tile_id);
+    t->sot.tile_size = SWAP(t->sot.tile_size);
     return l;
 }
 
@@ -426,7 +425,7 @@ read_sod(JP2 *j, FILE *f) {
 int read_poc(JP2 *j, FILE *f)
 {
     fread(&j->main_h.poc, 3, 1, f);
-    j->main_h.poc.length = ntohs(j->main_h.poc.length);
+    j->main_h.poc.length = SWAP(j->main_h.poc.length);
     if (j->main_h.siz.component_num < 257) {
         j->main_h.poc.comp_start_index = fgetc(f);
     } else {
@@ -508,7 +507,7 @@ read_stream(JP2 *j, FILE *f, int l)
     }
     while(1) {
         mark = read_marker(f);
-        VDBG(jp2, "marker %x, name %s", ntohs(mark), jp2_marker_name(mark));
+        VDBG(jp2, "marker %x, name %s", SWAP(mark), jp2_marker_name(mark));
         switch (mark) {
             case SOD:
                 read_sod(j, f);
@@ -542,7 +541,7 @@ read_stream(JP2 *j, FILE *f, int l)
                 VERR(jp2, "end of code stream %d, %ld\n", l, ftell(f));
                 return;
             default:
-                printf("marker %x\n", ntohs(mark));
+                printf("marker %x\n", SWAP(mark));
                 fseek(f, 0, SEEK_END);
                 fgetc(f);
                 break;

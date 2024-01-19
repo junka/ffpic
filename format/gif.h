@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include "byteorder.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -12,8 +13,6 @@ extern "C" {
 #define DISPOSE_NONE      1
 #define DISPOSE_CLEAR     2
 #define DISPOSE_RESTORE   3
-
-#define _LITTLE_ENDIAN_
 
 #pragma pack(push, 1)
 
@@ -32,7 +31,7 @@ enum dispose_method {
 
 struct graphic_control_extension {
     uint8_t block_size;
-#ifdef _LITTLE_ENDIAN_
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t transparent_color_flag : 1;
     uint8_t user_input_flag : 1;
     uint8_t disposal_method : 3;
@@ -49,7 +48,7 @@ struct image_descriptor {
     uint16_t top;
     uint16_t width;
     uint16_t height;
-#ifdef _LITTLE_ENDIAN_
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t local_color_table_size : 3;
     uint8_t reserved : 2;
     uint8_t sort_flag : 1;
@@ -128,7 +127,7 @@ struct gif_file_header
 struct logical_screen_descriptor {
     uint16_t screen_witdh;    // unit in pixel
     uint16_t screen_height;
-#ifdef _LITTLE_ENDIAN_
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t global_color_table_size : 3;
     uint8_t global_color_sort_flag : 1;
     uint8_t global_color_resolution : 3;

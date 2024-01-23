@@ -91,7 +91,7 @@ typedef struct {
 
     uint8_t type;
     Image* image;
-    PlainText* plaintext;    
+    PlainText* plaintext;
 } Graphic;
 
 struct application_extension {

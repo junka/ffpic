@@ -203,8 +203,8 @@ decode_items(HEIF *h, FILE *f, uint8_t **pixels)
     }
 }
 
-struct pic*
-HEIF_load(const char *filename) 
+static struct pic*
+HEIF_load(const char *filename)
 {
     struct pic *p = pic_alloc(sizeof(HEIF));
     HEIF *h = p->pic;

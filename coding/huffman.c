@@ -152,12 +152,12 @@ huffman_decode_symbol(struct huffman_codec *codec, huffman_tree* tree) {
     int ct = 0xFF;
     int c = -1, bl = 0;
     if (EOF_BITS(v, FAST_HF_BITS)) {
-        VERR(huffman, "end of stream %ld, %ld\n", v->ptr - v->start, v->len);
+        VERR(huffman, "end of stream %ld, %ld", v->ptr - v->start, v->len);
         return -1;
     }
     c = READ_BITS(v, FAST_HF_BITS);
     if (c == -1) {
-        VERR(huffman, "invalid bits read\n");
+        VERR(huffman, "invalid bits read");
     }
 
     /* looup fast table first */

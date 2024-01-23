@@ -70,8 +70,6 @@ typedef struct {
 
 void BPG_init(void);
 
-struct pic *BPG_load(const char *filename);
-
 #ifdef __cplusplus
 }
 #endif

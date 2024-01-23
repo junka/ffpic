@@ -78,8 +78,14 @@ extern "C" {
 
 struct jpg_component {
     uint8_t cid; /* component Id (1 = Y, 2 = Cb, 3 = Cr, 4 = I, 5 = Q)*/
-    uint8_t vertical : 4;  /* sampling factors , bit 0-3 vertical., 4-7 horizontal.*/
+    /* sampling factors , bit 0-3 vertical., 4-7 horizontal. */
+#if BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t vertical : 4;
     uint8_t horizontal : 4;
+#else
+    uint8_t horizontal : 4;
+    uint8_t vertical : 4;
+#endif
     uint8_t qt_id;  /* quantization table number */
 };
 
@@ -89,7 +95,7 @@ struct sof {
     uint16_t height;
     uint16_t width;
     uint8_t components_num; // 1 for grey scaled, 3 for YCbCr or YIQ , and 4 for CMYK
-    struct jpg_component *colors;
+    struct jpg_component colors[4];
 };
 
 struct jfif_app0 {
@@ -106,14 +112,24 @@ struct jfif_app0 {
 };
 
 struct dqt {
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t precision:4;   /* 0 means 8bits, 1 means 16bits*/
-    uint8_t id:4;       /* 0 - 3 */
+    uint8_t id : 4;        /* 0 - 3 */
+#else
+    uint8_t id : 4;          /* 0 - 3 */
+    uint8_t precision : 4;   /* 0 means 8bits, 1 means 16bits*/
+#endif
     uint16_t tdata[64]; // this should work for both precision 0, 1
 };
 
 struct dht {
+#if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t huffman_id: 4;   //low 4 bits
     uint8_t table_class : 4; //high 4 bits
+#else
+    uint8_t table_class : 4; // high 4 bits
+    uint8_t huffman_id : 4;  // low 4 bits
+#endif
     uint8_t num_codecs[16];
     uint16_t len;
     uint8_t* data;
@@ -122,8 +138,13 @@ struct dht {
 
 struct comp_sel {
     uint8_t component_selector;
-    uint8_t AC_entropy:4; //low 4 bits
-    uint8_t DC_entropy:4; //high 4 bits
+#if BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t AC_entropy : 4; // low 4 bits
+    uint8_t DC_entropy : 4; // high 4 bits
+#else
+    uint8_t DC_entropy : 4;  // high 4 bits
+    uint8_t AC_entropy : 4;  // low 4 bits
+#endif
 };
 
 struct start_of_scan {
@@ -132,9 +153,13 @@ struct start_of_scan {
     struct comp_sel comps[4];
     uint8_t predictor_start;
     uint8_t predictor_end;
+#if BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t approx_bits_l : 4;
+    uint8_t approx_bits_h : 4;
+#else
+    uint8_t approx_bits_h : 4;
     uint8_t approx_bits_l:4;
-    uint8_t approx_bits_h:4;
-
+#endif
 };
 
 struct comment_segment {

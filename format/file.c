@@ -5,6 +5,7 @@
 #include "bmp.h"
 #include "gif.h"
 #include "png.h"
+#include "queue.h"
 #include "tiff.h"
 #include "pnm.h"
 #include "jpg.h"
@@ -23,6 +24,8 @@ TAILQ_HEAD(file_ops_list, file_ops);
 
 static struct file_ops_list ops_list = TAILQ_HEAD_INITIALIZER(ops_list);
 
+static struct ring_queue *rq = NULL;
+
 struct file_ops* 
 file_probe(const char *filename)
 {
@@ -34,10 +37,20 @@ file_probe(const char *filename)
     return NULL;
 }
 
-struct pic *
-file_load(struct file_ops* ops, const char *filename)
-{
+struct pic * file_load(struct file_ops *ops, const char *filename) {
+    rq = ring_alloc(64);
     return ops->load(filename);
+}
+
+struct pic *
+file_dequeue_pic(void)
+{
+    struct pic *p = (struct pic *)ring_dequeue(rq);
+    return p;
+}
+
+bool file_enqueue_pic(struct pic *p) {
+    return ring_enqueue(rq, (void *)p);
 }
 
 void 

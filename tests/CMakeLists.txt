@@ -19,3 +19,13 @@ target_include_directories(test_bitstream PRIVATE ${FFPIC_DIRS})
 target_link_libraries(test_bitstream ffpic m)
 
 add_test(NAME test_bitstream COMMAND test_bitstream)
+
+
+set(BITSTREAM_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_queue.c)
+
+add_executable(test_queue ${BITSTREAM_TEST})
+
+target_include_directories(test_queue PRIVATE ${FFPIC_DIRS})
+target_link_libraries(test_queue ffpic m)
+
+add_test(NAME test_queue COMMAND test_queue)

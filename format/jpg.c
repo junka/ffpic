@@ -6,6 +6,7 @@
 
 #include "file.h"
 #include "jpg.h"
+#include "queue.h"
 #include "utils.h"
 #include "huffman.h"
 #include "vlog.h"
@@ -65,7 +66,7 @@ read_marker_skip_null(FILE *f)
 {
     uint8_t c = fgetc(f);
     if (c != 0xFF) {
-        VDBG(jpg, "marker 0x%x", c);
+        VDBG(jpg, "marker 0x%x at %lu", c, ftell(f));
         return 0;
     }
     while (c == 0xFF && !feof(f)) {
@@ -116,7 +117,7 @@ read_dht(JPG* j, FILE *f)
         fread(&d, 1, 1, f);
         uint8_t ac = d.table_class;
         uint8_t id = d.huffman_id;
-        VDBG(jpg, "ac %d, id %d, %02x\n", ac, id, *(uint8_t *)&d);
+        VDBG(jpg, "ac %d, id %d, %02x", ac, id, *(uint8_t *)&d);
         j->dht[ac][id].table_class = d.table_class;
         j->dht[ac][id].huffman_id = d.huffman_id;
         tlen --;
@@ -149,7 +150,7 @@ get_vlc(int code, int bitlen)
 
 
 //decode vec to decoder buf
-bool
+static bool
 decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf[64])
 {
     int dc, ac;
@@ -158,6 +159,10 @@ decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf
     huffman_tree *ac_tree = d->ac;
 
     dc = huffman_decode_symbol(hdec, dc_tree);
+    if (dc == -1) {
+        VERR(jpg, "invalid dc value");
+        return false;
+    }
     dc = get_vlc(huffman_read_symbol(hdec, dc), dc);
     dc += d->prev_dc;
     d->prev_dc = dc;
@@ -279,9 +284,15 @@ read_next_rst_marker(struct jpg_decoder *d)
 }
 #endif
 
-void
-JPG_decode_image(JPG* j, uint8_t* data, int len) {
-
+static void
+JPG_decode_image(JPG* j)
+{
+    uint8_t *data = j->data;
+    if (!data) {
+        printf("WTH");
+    }
+    int len = j->data_len;
+    j->data = NULL;
     // each component owns a decoder, could be CMYK
     struct jpg_decoder *d[4];
 
@@ -290,9 +301,8 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
         d[i] = malloc(sizeof(struct jpg_decoder));
         init_decoder(j, d[i], i);
     }
-
-    // huffman_dump_table(d[0]->dc);
-    // huffman_dump_table(d[0]->ac);
+    // huffman_dump_table(stdout, d[0]->dc);
+    // huffman_dump_table(stdout, d[0]->ac);
 
     //stride value from dc
     int ystride = j->sof.colors[0].vertical * 8;  //means lines per mcu
@@ -309,7 +319,7 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
 
     j->data = malloc(pitch * height);
 #if 0
-    hexdump(stdout, "jpg raw data", data, 166);
+    hexdump(stdout, "jpg raw data", "", data, 166);
 #endif
     struct huffman_codec * hdec = huffman_codec_init(data, len);
 
@@ -331,7 +341,9 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
                 int h = j->sof.colors[i].horizontal;
                 for (int vi = 0; vi < v; vi ++) {
                     for (int hi = 0; hi < h; hi ++) {
-                        decode_data_unit(hdec, d[i], buf);
+                        if (!decode_data_unit(hdec, d[i], buf)) {
+                            VDBG(jpg, "fail at %d %d", x, y);
+                        }
                         // idct_float(d[i], &Y[i][64 * vi * h + 8 * hi], h * 8);
                         idct_8x8(buf, &Y[i][64 * vi * h + 8 * hi], h * 8);
                     }
@@ -372,46 +384,56 @@ JPG_decode_image(JPG* j, uint8_t* data, int len) {
     huffman_codec_free(hdec);
 }
 
-void 
+static void
 read_compressed_image(JPG* j, FILE *f)
 {
-    // int width = ((j->sof.width + 7) >> 3) << 3;
-    // int height = ((j->sof.height + 7) >> 3) << 3;
     size_t pos = ftell(f);
-    fseek(f, 0, SEEK_END);
+    while (1) {
+        uint8_t c = fgetc(f);
+        if (c == 0xFF) {
+            c = fgetc(f);
+            if (c == 0xD9) {
+                break;
+            }
+        }
+    }
+
     size_t last = ftell(f) - 2; //remove EOI length, still enough long
     fseek(f, pos, SEEK_SET);
     uint8_t* compressed = malloc(last - pos);
     uint8_t prev , c = fgetc(f);
-    int l = 0;
-    VDBG(jpg, "read image from 0x%zx", pos);
-    do {
+    int l = 0, cosum = 1;
+    VDBG(jpg, "read image from 0x%zx to 0x%zx", pos, last);
+    while (cosum < (int)(last - pos)) {
         /* take 0xFF00 as 0xFF */
         /* and skip rst marker */
         prev = c;
         c = fgetc(f);
-        if (prev != 0xFF)
+        cosum ++;
+        if (prev != 0xFF) {
             compressed[l++] = prev;
-        else if (prev == 0xFF && c == 0xD9) {
-            break;
         }
+        // else if (prev == 0xFF && c == 0xD9) {
+        //     break;
+        // }
         else if (prev == 0xFF && c == 0) {
             compressed[l++] = 0xFF;
             prev = 0;
             c = fgetc(f);
+            cosum++;
         } else if (prev == 0xFF && (c >= 0xD0 && c <= 0xD7)) {
             prev = 0;
             c = fgetc(f);
+            cosum++;
         } else if (prev == 0xFF && c == 0xFF) {
 
         } else {
             VERR(jpg, "invalid %x %x", prev, c);
         }
-    } while(!feof(f));
-    printf("%d vs %ld\n", l, last-pos);
+    }
+    VDBG(jpg, "real vs alloc: %d vs %ld", l, last-pos);
     j->data = compressed;
     j->data_len = l;
-    fseek(f, -2, SEEK_CUR);
 }
 
 
@@ -419,94 +441,119 @@ void
 read_sos(JPG* j, FILE *f)
 {
     fread(&j->sos, 3, 1, f);
-    for (int i = 0; i < j->sos.nums; i ++) {
-        fread(&j->sos.comps[i], sizeof(struct comp_sel), 1, f);
-    }
-    uint8_t c = fgetc(f);
-    j->sos.predictor_start = c;
-    c = fgetc(f);
-    j->sos.predictor_end = c;
-    c = fgetc(f);
-    j->sos.approx_bits_h = c >> 4;
-    j->sos.approx_bits_l = c & 0xF;
+    // for (int i = 0; i < j->sos.nums; i ++) {
+    fread(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
+    // }
+    // uint8_t c = fgetc(f);
+    // j->sos.predictor_start = c;
+    // c = fgetc(f);
+    // j->sos.predictor_end = c;
+    // c = fgetc(f);
+    // j->sos.approx_bits_h = c >> 4;
+    // j->sos.approx_bits_l = c & 0xF;
+    fread(&j->sos.predictor_start, 3, 1, f);
     read_compressed_image(j, f);
 }
 
-static struct pic* 
-JPG_load(const char *filename)
+static struct pic *
+JPG_load_one(FILE *f)
 {
     struct pic *p = pic_alloc(sizeof(JPG));
     JPG *j = p->pic;
     j->data = NULL;
-    FILE *f = fopen(filename, "rb");
     uint16_t soi, m, len;
     fread(&soi, 2, 1, f);
+    if (soi != SOI) {
+        return NULL;
+    }
     m = read_marker_skip_null(f);
-    //0xFFFF means eof
-    while (m != EOI && m != 0 && m!= 0xFFFF) {
-
-        VDBG(jpg, "offset at 0x%zx", ftell(f));
-        switch(m) {
-            case SOF0:
-                fread(&j->sof, 8, 1, f);
-                j->sof.len = SWAP(j->sof.len);
-                j->sof.height = SWAP(j->sof.height);
-                j->sof.width = SWAP(j->sof.width);
-                j->sof.colors = malloc(j->sof.components_num * sizeof(struct jpg_component));
-                fread(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num, f);
-                break;
-            case APP0:
-                fread(&j->app0, 16, 1, f);
-                if (j->app0.xthumbnail*j->app0.ythumbnail) {
-                    j->app0.data = malloc(3*j->app0.xthumbnail*j->app0.ythumbnail);
-                    fread(j->app0.data, 3, j->app0.xthumbnail*j->app0.ythumbnail, f);
-                }
-                break;
-            case DHT:
-                read_dht(j, f);
-                break;
-            case DQT:
-                read_dqt(j, f);
-                break;
-            case SOS:
-                VDBG(jpg, "sos");
-                read_sos(j, f);
-                break;
-            case COM:
-                fread(&j->comment, 2, 1, f);
-                j->comment.len = SWAP(j->comment.len);
-                j->comment.data = malloc(j->comment.len-2);
-                fread(j->comment.data, j->comment.len-2, 1, f);
-                break;
-            case DRI:
-                fread(&j->dri, sizeof(struct dri ), 1, f);
-                j->dri.interval = SWAP(j->dri.interval);
-                break;
-            case APP1:
-                VDBG(jpg, "app1 exif");
-            default:
-                VDBG(jpg, "marker %x", SWAP(m));
-                fread(&len, 2, 1, f);
-                len = SWAP(len);
-                fseek(f, len-2, SEEK_CUR);
-                break;
+    // 0xFFFF means eof
+    while (m != EOI && m != 0 && m != 0xFFFF) {
+        switch (m) {
+        case SOF0:
+            VDBG(jpg, "SOF0");
+            fread(&j->sof, 8, 1, f);
+            j->sof.len = SWAP(j->sof.len);
+            j->sof.height = SWAP(j->sof.height);
+            j->sof.width = SWAP(j->sof.width);
+            fread(j->sof.colors, sizeof(struct jpg_component),
+                      j->sof.components_num, f);
+            break;
+        case APP0:
+            VDBG(jpg, "APP0");
+            fread(&j->app0, 16, 1, f);
+            if (j->app0.xthumbnail * j->app0.ythumbnail) {
+                j->app0.data =
+                    malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
+                fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail,
+                      f);
+            }
+            break;
+        case DHT:
+            VDBG(jpg, "DHT");
+            read_dht(j, f);
+            break;
+        case DQT:
+            VDBG(jpg, "DQT");
+            read_dqt(j, f);
+            break;
+        case SOS:
+            VDBG(jpg, "SOS");
+            read_sos(j, f);
+            break;
+        case COM:
+            VDBG(jpg, "COM");
+            fread(&j->comment, 2, 1, f);
+            j->comment.len = SWAP(j->comment.len);
+            j->comment.data = malloc(j->comment.len - 2);
+            fread(j->comment.data, j->comment.len - 2, 1, f);
+            break;
+        case DRI:
+            VDBG(jpg, "DRI");
+            fread(&j->dri, sizeof(struct dri), 1, f);
+            j->dri.interval = SWAP(j->dri.interval);
+            break;
+        case APP1:
+            VDBG(jpg, "app1 exif");
+        default:
+            VDBG(jpg, "skip marker %x", SWAP(m));
+            fread(&len, 2, 1, f);
+            len = SWAP(len);
+            fseek(f, len - 2, SEEK_CUR);
+            break;
         }
+        VDBG(jpg, "offset at 0x%zx", ftell(f));
         m = read_marker_skip_null(f);
     }
-
-    fclose(f);
-    uint8_t *compressed = j->data;
-    j->data = NULL;
-    JPG_decode_image(j, compressed, j->data_len);
-    // free(compressed);
+    printf("done one image\n");
+    JPG_decode_image(j);
     p->width = ((j->sof.width + 7) >> 3) << 3;
-    p->height = j->sof.height;// ((j->sof.height + 7) >> 3) << 3;
+    p->height = j->sof.height;
     p->depth = 32;
     p->pitch = ((p->width * 32 + 32 - 1) >> 5) << 2;
     p->format = CS_PIXELFORMAT_RGB888;
     p->pixels = j->data;
 
     return p;
+}
+
+static struct pic *JPG_load(const char *filename)
+{
+    FILE *f = fopen(filename, "rb");
+    int num = 1;
+    struct pic *p = NULL;
+    p = JPG_load_one(f);
+    while (!feof(f)) {
+        file_enqueue_pic(p);
+        p = JPG_load_one(f);
+    }
+    fclose(f);
+    if (num == 1) {
+        return p;
+    } else {
+        file_enqueue_pic(p);
+    }
+    return NULL;
 }
 
 static void 
@@ -517,8 +564,6 @@ JPG_free(struct pic *p)
         free(j->comment.data);
     if (j->app0.data)
         free(j->app0.data);
-    if (j->sof.colors)
-        free(j->sof.colors);
     for (uint8_t ac = 0; ac < 2; ac ++) {
         for (uint8_t i = 0; i < 16; i++) {
             if (j->dht[ac][i].huffman_id == i && j->dht[ac][i].table_class == ac) {

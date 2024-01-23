@@ -50,7 +50,7 @@ uint32_t read_ue7(FILE *f)
 }
 
 struct pic*
-BPG_load(const char *filename) 
+BPG_load(const char *filename)
 {
     struct pic *p = pic_alloc(sizeof(BPG));
     BPG *h = p->pic;

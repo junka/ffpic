@@ -4,12 +4,14 @@
 #include <stdio.h>
 #include <errno.h>
 #include <assert.h>
+#include <sys/cdefs.h>
 
 #include "colorspace.h"
 #include "crc.h"
 #include "deflate.h"
 #include "file.h"
 #include "png.h"
+#include "queue.h"
 #include "utils.h"
 #include "vlog.h"
 

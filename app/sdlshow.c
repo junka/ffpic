@@ -42,6 +42,9 @@ main(int argc, const char *argv[])
     }
     int left, top;
     struct pic *p = file_load(ops, filename);
+    if (!p) {
+        p = file_dequeue_pic();
+    }
     snprintf(title, 128, "%s (%d * %d)", filename, p->width, p->height);
 
     struct display *d = display_get("SDL2");
@@ -60,6 +63,17 @@ main(int argc, const char *argv[])
     if (ret) {
         printf("fail to draw\n");
         goto quit;
+    }
+    while ((p = file_dequeue_pic())) {
+        pic_poll_block(true);
+        SDL_Delay(10);
+        display_show(d, p->pixels, left, top, p->width, p->height, p->depth,
+                     p->pitch, p->format);
+        if (ret) {
+          printf("fail to draw\n");
+          goto quit;
+        }
+        file_enqueue_pic(p);
     }
     if (!strcmp(ops->name, "GIF")) {
         GIF *g = (GIF *)p->pic;

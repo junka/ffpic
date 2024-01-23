@@ -227,7 +227,9 @@ void read_gif(FILE* f, GIF *gif) {
 
 }
 
-struct pic* GIF_load(const char* filename) {
+static struct pic *
+GIF_load(const char *filename)
+{
     struct pic *p = pic_alloc(sizeof(GIF));
     FILE* file = fopen(filename, "rb");
     GIF* gif = p->pic;

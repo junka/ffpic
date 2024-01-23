@@ -13,7 +13,7 @@
 #include "idct.h"
 #include "colorspace.h"
 
-VLOG_REGISTER(jpg, DEBUG)
+VLOG_REGISTER(jpg, INFO)
 
 struct jpg_decoder {
     int prev_dc;
@@ -525,7 +525,7 @@ JPG_load_one(FILE *f)
         VDBG(jpg, "offset at 0x%zx", ftell(f));
         m = read_marker_skip_null(f);
     }
-    printf("done one image\n");
+    VDBG(jpg, "done one image");
     JPG_decode_image(j);
     p->width = ((j->sof.width + 7) >> 3) << 3;
     p->height = j->sof.height;

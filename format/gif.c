@@ -228,21 +228,41 @@ void read_gif(FILE* f, GIF *gif) {
 }
 
 static struct pic *
-GIF_load(const char *filename)
+GIF_load_one(FILE *f, Graphic *g)
 {
-    struct pic *p = pic_alloc(sizeof(GIF));
-    FILE* file = fopen(filename, "rb");
-    GIF* gif = p->pic;
-    read_gif(file, gif);
-    fclose(file);
-    p->pic = gif;
-    p->width = gif->ls_dsc.screen_witdh;
-    p->height = gif->ls_dsc.screen_height;
+    struct pic *p = pic_alloc(sizeof(GIF *));
+    p->pic = NULL;
+    p->left = g->image->image_dsc.left;
+    p->top = g->image->image_dsc.top;
+    p->width = g->image->image_dsc.width;
+    p->height = g->image->image_dsc.height;
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = gif->graphics->image->data;
+    p->pixels = g->image->data;
     p->format = CS_PIXELFORMAT_RGB888;
     return p;
+}
+
+static struct pic *
+GIF_load(const char *filename)
+{
+    GIF* g = malloc(sizeof(GIF));
+    FILE* f = fopen(filename, "rb");
+    read_gif(f, g);
+    fclose(f);
+    struct pic *p = NULL;
+    if (g->graphic_count > 1) {
+        for (int i = 0; i < g->graphic_count; i++) {
+            p = GIF_load_one(f, &g->graphics[i]);
+            file_enqueue_pic(p);
+        }
+        p->pic = g;
+        return NULL;
+    } else {
+        p = GIF_load_one(f, g->graphics);
+        p->pic = g;
+        return p;
+    }
 }
 
 static int 
@@ -382,21 +402,22 @@ void extension_free(Extension* extension) {
 
 void GIF_free(struct pic *p) {
     GIF* gif = (GIF*)(p->pic);
-    if (gif->graphic_count) {
-        while (gif->graphic_count)
-            graphic_free(gif->graphics + --gif->graphic_count);
-        free(gif->graphics);
+    if (gif) {
+        if (gif->graphic_count) {
+            while (gif->graphic_count)
+                graphic_free(gif->graphics + --gif->graphic_count);
+            free(gif->graphics);
+        }
+
+        if (gif->extension_count) {
+            while (gif->extension_count)
+                extension_free(gif->extensions + --gif->extension_count);
+            free(gif->extensions);
+        }
+
+        if (gif->ls_dsc.global_color_table_flag)
+            free(gif->global_ct);
     }
-
-    if (gif->extension_count) {
-        while (gif->extension_count)
-            extension_free(gif->extensions + --gif->extension_count);
-        free(gif->extensions);
-    }
-
-    if (gif->ls_dsc.global_color_table_flag)
-        free(gif->global_ct);
-
     pic_free(p);
 }
 static struct file_ops gif_ops = {

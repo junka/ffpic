@@ -44,6 +44,7 @@ main(int argc, const char *argv[])
     struct pic *p = file_load(ops, filename);
     if (!p) {
         p = file_dequeue_pic();
+        file_enqueue_pic(p);
     }
     snprintf(title, 128, "%s (%d * %d)", filename, p->width, p->height);
 
@@ -73,26 +74,16 @@ main(int argc, const char *argv[])
           printf("fail to draw\n");
           goto quit;
         }
-        file_enqueue_pic(p);
-    }
-    if (!strcmp(ops->name, "GIF")) {
-        GIF *g = (GIF *)p->pic;
-        if (g->graphic_count > 1) {
-            for(int i = 1; i < g->graphic_count; i ++) {
-                pic_poll_block(true);
-                SDL_Delay(g->graphics[i].control->delay_time * 10);
-                display_show(d, g->graphics[i].image->data, g->graphics[i].image->image_dsc.left, 
-                        g->graphics[i].image->image_dsc.top, g->graphics[i].image->image_dsc.width,
-                        g->graphics[i].image->image_dsc.height, p->depth,
-                        (((g->graphics[i].image->image_dsc.width * p->depth + p->depth -1)>>5)<<2), p->format);
-            }
-        }
+        file_free(ops, p);
+        // file_enqueue_pic(p);
     }
 
     pic_poll_block(false);
 
 quit:
     display_uninit(d);
-    file_free(ops, p);
+    if (p) {
+        file_free(ops, p);
+    }
     return 0;
 }

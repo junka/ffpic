@@ -26,7 +26,15 @@ int main(int argc, const char *argv[])
     }
     struct pic *p = file_load(ops, filename);
     if (!p) {
-        goto exit;
+        //for GIF, the info will be stored in the last frame
+        p = file_dequeue_pic();
+        while (p && !p->pic) {
+            file_free(ops, p);
+            p = file_dequeue_pic();
+        }
+        if (!p || !p->pic) {
+            goto exit;
+        }
     }
 
     file_info(ops, p);

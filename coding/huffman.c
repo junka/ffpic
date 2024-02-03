@@ -324,10 +324,7 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     free_hnode(p);
 
     struct huffman_symbol *sym = huffman_symbol_alloc(count, symbols);
-    // for (int i = 0; i < 16; i++) {
-    //     printf("%d ", sym->count[i]);
-    // }
-    // printf("\n");
+
     struct huffman_tree *tree = huffman_tree_init();
 
     huffman_build_lookup_table(tree, id, sym);
@@ -337,10 +334,14 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     return tree;
 }
 
-int huffman_write_symbol(void)
-{
-    return 0;
-}
+// int huffman_encode_symbol(struct huffman_codec *codec, struct huffman_tree *tree,
+//                          uint8_t ch, int bitlen) {
+//     struct bits_vec *v = codec->v;
+//     printf("write %x in %d bits\n", tree->fast_codec[ch],
+//            tree->fast_codbits[ch]);
+//     WRITE_BITS(v, tree->fast_codec[ch], tree->fast_codbits[ch]);
+//     return 0;
+// }
 
 int huffman_encode_symbol_8bit(struct huffman_codec *codec, struct huffman_tree *tree, uint8_t ch)
 {

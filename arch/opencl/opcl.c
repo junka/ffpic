@@ -19,7 +19,7 @@ struct opcl_priv {
 
 static struct opcl_priv priv;
 
-void opcl_idct_4x4_amd(int16_t *in, int16_t *out, int bitdepth)
+void opcl_idct_4x4_amd(int16_t *in, int bitdepth)
 {
     const char transMatrix[16] = {
         29, 55, 74, 84,
@@ -64,7 +64,7 @@ void opcl_idct_4x4_amd(int16_t *in, int16_t *out, int bitdepth)
         return;
     }
 
-    ret = clEnqueueReadBuffer(priv.queue, block_out, CL_TRUE, 0, size, out, 0,
+    ret = clEnqueueReadBuffer(priv.queue, block_out, CL_TRUE, 0, size, in, 0,
                               NULL, NULL);
     if (ret != CL_SUCCESS) {
         printf("Error reading output buffer: %d\n", ret);

@@ -1,13 +1,11 @@
 #ifndef _COLORSPACE_H_
 #define _COLORSPACE_H_
 
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
 #include "byteorder.h"
-
-void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *Cb,
-                     int16_t *Cr, int v, int h);
 
 void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
                       uint8_t *vout, int y_stride, int uv_stride, int mbrows,
@@ -18,7 +16,18 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                             int uv_stride, int mbrows, int mbcols, int ctbsize);
 
 
-void BGRA32_to_YUV420(uint8_t *ptr, int16_t *Y, int16_t *U, int16_t *V);
+void BGRA32_to_YUV420(uint8_t *ptr, int len, int16_t *Y, int16_t *U, int16_t *V);
+
+
+
+struct cs_ops {
+    void (*YUV_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V, int vertical, int horizontal);
+
+    void (*YUV420_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V);
+};
+
+const struct cs_ops * get_cs_ops(int component_bits);
+
 // from sdl, but for compile reason, put it here
 
 /** Pixel type. */

@@ -245,3 +245,10 @@ void bits_vec_write_bits(struct bits_vec *v, int8_t a, int n)
         bits_vec_write_bit(v, b);
     }
 }
+
+void bits_vec_align_byte(struct bits_vec *v)
+{
+    if (v->offset > 0) {
+        bits_vec_write_bits(v, 0, 8 - v->offset);
+    }
+}

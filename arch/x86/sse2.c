@@ -8,7 +8,7 @@
 
 // Transpose two 4x4 16b matrices
 static void
-x86_idct_1dx4_sse2(const __m128i *const in0,
+x86_idct_1dx4_sse2_16bit(const __m128i *const in0,
                   const __m128i *const in1,
                   const __m128i *const in2,
                   const __m128i *const in3, __m128i *const out0,
@@ -45,7 +45,7 @@ x86_idct_1dx4_sse2(const __m128i *const in0,
     // a03 a13 a23 a33   b03 b13 b23 b33
 }
 
-static void x86_idct_4x4_sse2(int16_t *in, int16_t *dst, int bitdepth) {
+static void x86_idct_4x4_sse2_16bit(int16_t *in, int bitdepth) {
     // This implementation makes use of 16-bit fixed point versions of two
     // multiply constants:
     //    K1 = sqrt(2) * cos (pi/8) ~= 85627 / 2^16
@@ -110,7 +110,7 @@ static void x86_idct_4x4_sse2(int16_t *in, int16_t *dst, int bitdepth) {
         const __m128i tmp3 = _mm_sub_epi16(a, d);
 
         // Transpose the two 4x4.
-        x86_idct_1dx4_sse2(&tmp0, &tmp1, &tmp2, &tmp3, &T0, &T1, &T2, &T3);
+        x86_idct_1dx4_sse2_16bit(&tmp0, &tmp1, &tmp2, &tmp3, &T0, &T1, &T2, &T3);
     }
 
     // Horizontal pass and subsequent transpose.
@@ -145,8 +145,8 @@ static void x86_idct_4x4_sse2(int16_t *in, int16_t *dst, int bitdepth) {
       const __m128i shifted3 = _mm_srai_epi16(tmp3, 3);
 
       // Transpose the two 4x4.
-      x86_idct_1dx4_sse2(&shifted0, &shifted1, &shifted2, &shifted3, &T0, &T1,
-                         &T2, &T3);
+      x86_idct_1dx4_sse2_16bit(&shifted0, &shifted1, &shifted2, &shifted3, &T0,
+                               &T1, &T2, &T3);
     }
 
     // Add inverse transform to 'dst' and store.
@@ -157,8 +157,8 @@ static void x86_idct_4x4_sse2(int16_t *in, int16_t *dst, int bitdepth) {
       __m128i dst_w0, dst_w1;
 
       // Load 16 * 8 = 128 which is just two lines
-      dst_w0 = _mm_loadu_si128((__m128i *)dst);
-      dst_w1 = _mm_loadu_si128((__m128i *)(dst + 8));
+      dst_w0 = _mm_loadu_si128((__m128i *)in);
+      dst_w1 = _mm_loadu_si128((__m128i *)(in + 8));
 
       // Convert to 16b.
       dst0 = _mm_unpacklo_epi16(dst_w0, zero);
@@ -172,20 +172,20 @@ static void x86_idct_4x4_sse2(int16_t *in, int16_t *dst, int bitdepth) {
       dst3 = _mm_add_epi16(dst3, T3);
 
       // Store four bytes/pixels per line.
-      _mm_storeu_si64((__m128i* )dst, dst0);
-      _mm_storel_epi64((__m128i *)(dst + 4), dst1);
-      _mm_storeu_si64((__m128i *)(dst + 8), dst2);
-      _mm_storel_epi64((__m128i *)(dst + 12), dst3);
+      _mm_storeu_si64((__m128i* )in, dst0);
+      _mm_storel_epi64((__m128i *)(in + 4), dst1);
+      _mm_storeu_si64((__m128i *)(in + 8), dst2);
+      _mm_storel_epi64((__m128i *)(in + 12), dst3);
     }
 }
 
-static struct accl_ops sse2_accl = {
-    .idct_4x4 = x86_idct_4x4_sse2,
+static struct accl_ops sse2_accl_16bit = {
+    .idct_4x4 = x86_idct_4x4_sse2_16bit,
     .type = SIMD_TYPE_SSE2,
 };
 
 void x86_sse2_init(void) { 
-    accl_ops_register(&sse2_accl); 
+    accl_ops_register(&sse2_accl_16bit); 
 }
 
 #endif

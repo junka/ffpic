@@ -54,6 +54,7 @@ struct bits_vec * bits_writer_reserve(uint8_t msb);
 
 void bits_vec_write_bit(struct bits_vec *v, int8_t a);
 void bits_vec_write_bits(struct bits_vec *v, int8_t a, int n);
+void bits_vec_align_byte(struct bits_vec *v);
 
 /* debug function for stream info */
 void bits_vec_dump(struct bits_vec *v);
@@ -80,6 +81,7 @@ void bits_vec_reinit_cur(struct bits_vec *v);
 
 #define WRITE_BIT(v, a) bits_vec_write_bit(v, a)
 #define WRITE_BITS(v, a, n) bits_vec_write_bits(v, a, n)
+#define ALIGN_BYTE(v) bits_vec_align_byte(v)
 
 #ifdef __cplusplus
 }

@@ -27,7 +27,6 @@ extern "C" {
 #define SOF6 MARKER(0xC6)
 #define SOF7 MARKER(0xC7)
 
-//for arithmetic coding, usually unsupported
 #define SOF9 MARKER(0xC9)
 #define SOF10 MARKER(0xCA)
 #define SOF11 MARKER(0xCB)
@@ -57,12 +56,14 @@ extern "C" {
 #define RST6 MARKER(0xD6)
 #define RST7 MARKER(0xD7)
 
-
 #define SOI MARKER(0xD8)
 #define EOI MARKER(0xD9)
 #define SOS MARKER(0xDA)
 #define DQT MARKER(0xDB)
+#define DNL MARKER(0xDC)
 #define DRI MARKER(0xDD)
+#define DHP MARKER(0xDE)
+#define EXP MARKER(0xDF)
 
 #define APP0 MARKER(0xE0)
 #define APP1 MARKER(0xE1)
@@ -122,6 +123,11 @@ struct dqt {
     uint16_t tdata[64]; // this should work for both precision 0, 1
 };
 
+enum dht_class {
+    DHT_CLASS_DC = 0,
+    DHT_CLASS_AC = 1,
+};
+
 struct dht {
 #if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t huffman_id: 4;   //low 4 bits
@@ -136,6 +142,12 @@ struct dht {
 
 };
 
+/* see itu-t81 B.2.5 Define number of lines syntax */
+struct dnl {
+    uint16_t len;   /* equal to 4 */
+    uint16_t num_of_lines; /* 1-63335 */
+};
+
 struct comp_sel {
     uint8_t component_selector;
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -147,7 +159,7 @@ struct comp_sel {
 #endif
 };
 
-struct start_of_scan {
+struct sos {
     uint16_t len;
     uint8_t nums; //same with start_frame components_num, 1 for grey, 3 for YCbCr, 4 for CMYK
     struct comp_sel comps[4];
@@ -193,7 +205,7 @@ typedef struct {
     struct jfif_app0 app0;
     struct dqt dqt[4];
     struct dht dht[2][16];
-    struct start_of_scan sos;
+    struct sos sos;
     struct dri dri;
     struct comment_segment comment;
 

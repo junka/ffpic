@@ -6,85 +6,122 @@
 
 VLOG_REGISTER(clr, DEBUG)
 
-#define SCALEBITS 10
-#define ONE_HALF (1UL << (SCALEBITS - 1))
-#define FIX(x) ((int)((x) * (1UL << SCALEBITS) + 0.5))
+// #define SCALEBITS 10
+// #define ONE_HALF (1UL << (SCALEBITS - 1))
+// #define FIX(x) ((int)((x) * (1UL << SCALEBITS) + 0.5))
 
-void YCbCr_to_BGRA32(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
-                     int16_t *V, int v, int h) {
-#if 0
-    VDBG(clr, "YCbCr :");
-    for (int i = 0; i < 16; i++) {
-        for (int j = 0; j < 16; j++) {
-            VDBG(clr, "%04x ", Y[i * 16 + j]);
-        }
-        VDBG(clr, "\n");
-    }
-#endif
-    uint8_t *p, *p2;
-    int offset_to_next_row;
+static void
+YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
+                    void *V, int v, int h)
+{
+    int16_t *sY = (int16_t *)Y;
+    int16_t *sU = (int16_t *)U;
+    int16_t *sV = (int16_t *)V;
+    uint8_t *p = ptr;
+    int16_t yy, uu, vv;
 
-    p = ptr;
-    if (v == 2)
-        p2 = ptr + pitch;
-    offset_to_next_row = pitch * v - 8 * h * 4;
-
-    for (int i = 0; i < 8; i++) {
-        for (int k = 0; k < 8; k++) {
+    for (int i = 0; i < 8 * v; i++) {
+        for (int k = 0; k < 8 * h; k++) {
             int y, cb, cr;
             int add_r, add_g, add_b;
             int r, g, b;
 
-            // all YCbCr have been added by 128 in idct
-            cb = *U++ - 128;
-            cr = *V++ - 128;
+            // The Y[64 * 4] store the Y componets, but not in the 16 * 16 array, just four 8 * 8 array
+            yy = sY[((i / 8) * h + (k / 8)) * 64 + (i % 8) * 8 + k % 8];
+            uu = sU[(i / v) * 8 + (k / h)] - 128;
+            vv = sV[(i / v) * 8 + (k / h)] - 128;
+
             //see JFIF3
-            add_r = FIX(1.40200) * cr + ONE_HALF;
-            add_g = -FIX(0.34414) * cb - FIX(0.71414) * cr + ONE_HALF;
-            add_b = FIX(1.772) * cb + ONE_HALF;
-            for (int i = 0; i < h; i++) {
-                y = (*Y++) << SCALEBITS;
-                b = (y + add_b) >> SCALEBITS;
-                g = (y + add_g) >> SCALEBITS;
-                r = (y + add_r) >> SCALEBITS;
-                *p++ = clamp(b, 255);
-                *p++ = clamp(g, 255);
-                *p++ = clamp(r, 255);
-                *p++ = 0xff; // alpha
-            }
-            if (v == 2) {
-                for (int j = 0; j < h; j++) {
-                    y = (Y[8 * h - 1 * h + j]) << SCALEBITS;
-                    b = (y + add_b) >> SCALEBITS;
-                    g = (y + add_g) >> SCALEBITS;
-                    r = (y + add_r) >> SCALEBITS;
-                    *p2++ = clamp(b, 255);
-                    *p2++ = clamp(g, 255);
-                    *p2++ = clamp(r, 255);
-                    *p2++ = 0xff;
-                }
-            }
+            // add_r = FIX(1.40200) * vv + ONE_HALF;
+            // add_g = -FIX(0.34414) * uu - FIX(0.71414) * vv + ONE_HALF;
+            // add_b = FIX(1.772) * uu + ONE_HALF;
+
+            // y = (yy) << SCALEBITS;
+            // b = (y + add_b) >> SCALEBITS;
+            // g = (y + add_g) >> SCALEBITS;
+            // r = (y + add_r) >> SCALEBITS;
+
+            r = clamp(yy + 1.280 * vv, 255);
+            g = clamp(yy - 0.215 * uu - 0.381 * vv, 255);
+            b = clamp(yy + 2.128 * uu, 255);
+            p[4 * k] = b;
+            p[4 * k + 1] = g;
+            p[4 * k + 2] = r;
+            p[4 * k + 3] = 0xff; // alpha
         }
-        if (v == 2)
-            Y += 8 * h;
-        p += offset_to_next_row;
-        if (v == 2)
-            p2 += offset_to_next_row;
+        p += pitch;
     }
 }
 
-void BGRA32_to_YUV420(uint8_t *ptr, int16_t *Y, int16_t *U, int16_t *V)
+static void
+YUV_to_BGRA32_8bit(uint8_t *ptr, int pitch, void *Y, void *U, void *V,
+                   int v, int h)
+{
+    uint8_t *sY = Y;
+    uint8_t *sU = U;
+    uint8_t *sV = V;
+    uint8_t *p = ptr;
+    int yy, uu, vv;
+    int add_r, add_g, add_b;
+    int r, g, b;
+
+    for (int i = 0; i < 8 * v; i++) {
+        for (int k = 0; k < 8 * h; k++) {
+
+            // The Y[64 * 4] store the Y componets, but not in the 16 * 16
+            // array, just four 8 * 8 array
+            yy = sY[((i / 8) * h + (k / 8)) * 64 + (i % 8) * 8 + k % 8];
+            uu = sU[(i / v) * 8 + (k / h)] - 128;
+            vv = sV[(i / v) * 8 + (k / h)] - 128;
+
+            // see JFIF3 page 3
+            // add_r = FIX(1.40200) * vv + ONE_HALF;
+            // add_g = -FIX(0.34414) * uu - FIX(0.71414) * vv + ONE_HALF;
+            // add_b = FIX(1.772) * uu + ONE_HALF;
+
+            // y = (yy) << SCALEBITS;
+            // b = (y + add_b) >> SCALEBITS;
+            // g = (y + add_g) >> SCALEBITS;
+            // r = (y + add_r) >> SCALEBITS;
+
+            r = clamp(yy + 1.280 * vv, 255);
+            g = clamp(yy - 0.215 * uu - 0.381 * vv, 255);
+            b = clamp(yy + 2.128 * uu, 255);
+            p[4 * k] = b;
+            p[4 * k + 1] = g;
+            p[4 * k + 2] = r;
+            p[4 * k + 3] = 0xff; // alpha
+        }
+        p += pitch;
+    }
+}
+
+void BGRA32_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U, int16_t *V)
 {
     int r, g, b;
-    for (int i = 0; ; i += 4) {
-        b = *(ptr + i);
-        g = *(ptr + i + 1);
-        r = *(ptr + i + 2);
-        Y[i/4] = 0.299 * r + 0.587* g + 0.114 * b;
-        if (i % 16 == 0) {
-            U[i/16] = - 0.1687 * r - 0.3313 * g + 0.5 * b + 128;
-            V[i/16] = 0.5 * r - 0.4187 * g - 0.0813 *b + 128;
+    uint8_t *p = ptr;
+    uint8_t *p2 = ptr;
+    for (int k = 0; k < 4; k ++) {
+        p = p2;
+        if (k == 1) {
+            p2 = ptr + pitch * 8;
+        } else {
+            p2 = p + 8 * 4;
         }
+        for (int j = 0; j < 8; j ++) {
+            for (int i = 0; i < 8; i ++) {
+                b = *(p + 4 * i);
+                g = *(p + 4 * i + 1);
+                r = *(p + 4 * i + 2);
+                Y[j *8 + i] = 0.299 * r + 0.587 * g + 0.114 * b;
+                if (k == 0) {
+                    U[j * 8 + i] = -0.1687 * r - 0.3313 * g + 0.5 * b + 128;
+                    V[j * 8 + i] = 0.5 * r - 0.4187 * g - 0.0813 * b + 128;
+                }
+            }
+            p += pitch;
+        }
+        Y += 64;
     }
 }
 
@@ -166,6 +203,27 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uou
         }
         p2 = p - pitch + ctbsize * 4 + right_space;
     }
+}
+
+enum cs_bits_type {
+  CS_BITLEN_8 = 0,
+  CS_BITLEN_16 = 1,
+
+  CS_BITLEN_MAX,
+};
+
+static const struct cs_ops cops[CS_BITLEN_MAX] = {
+    {
+        .YUV_to_BGRA32 = YUV_to_BGRA32_8bit,
+    },
+    {
+        .YUV_to_BGRA32 = YUV_to_BGRA32_16bit,
+    },
+};
+
+const struct cs_ops *get_cs_ops(int component_bits)
+{
+    return &cops[(component_bits - 1) / 8];
 }
 
 uint32_t CS_MasksToPixelFormatEnum(int bpp, uint32_t rmask, uint32_t gmask,

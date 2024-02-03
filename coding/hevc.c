@@ -3875,7 +3875,8 @@ static int transform_scaled_coeffients(struct sps *sps, struct slice_segment_hea
         // struct accl_ops *ops = accl_first_available();
         struct accl_ops *ops = accl_find(GPU_TYPE_OPENCL);
         if (ops) {
-            ops->idct_4x4(d, r, sps->BitDepthY);
+            ops->idct_4x4(d, sps->BitDepthY);
+            memcpy(r, d, sizeof(uint16_t) * 16);
         } else {
             idct_4x4_hevc(d, r, sps->BitDepthY,
                           sre->extended_precision_processing_flag);

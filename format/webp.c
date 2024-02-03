@@ -1139,6 +1139,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
     struct WEBP_decoder *d = &w->d[block->segment_id];
 
     struct accl_ops* ops = accl_find(SIMD_TYPE_SSE2);
+    const struct dct_ops *dct = get_dct_ops(16);
 
     int firstCoeff;
     const VP8BandProbas* const * ac_proba;
@@ -1154,11 +1155,6 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
         int ctx = top[block->x].ctx[0] + left->ctx[0];
         const int nz = vp8_get_coefficients(bt, dc, bands[1], 0, ctx, d->y2_dc, d->y2_ac);
         top[block->x].ctx[0] = left->ctx[0] = ((nz > 0) ? 1 : 0);
-
-        // VDBG(webp, "Y2 coeff: %d:", nz);
-        // VDBG(webp, "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d ", dc[0],
-        //      dc[1], dc[2], dc[3], dc[4], dc[5], dc[6], dc[7], dc[8], dc[9],
-        //      dc[10], dc[11], dc[12], dc[13], dc[14], dc[15]);
 
         if (nz > 1) {   // more than just the DC
             IWHT_long(dc, dst);
@@ -1179,7 +1175,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
             int ctx = top[block->x].ctx[x + 1] + l;
             const int nz = vp8_get_coefficients(bt, dst, ac_proba, firstCoeff, ctx, d->y1_dc, d->y1_ac);
             if (nz > 1 || dst[0] != 0) {
-                ops ? ops->idct_4x4(dst, dst, 8) : idct_4x4(dst, dst);
+                ops ? ops->idct_4x4(dst, 8) : dct->idct_4x4(dst, 8);
             }
             dst += 16;
             l = top[block->x].ctx[x+1] = (nz > 0 ? 1 : 0);
@@ -1195,7 +1191,7 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
                 int ctx = l + top[block->x].ctx[x + ch];
                 const int nz = vp8_get_coefficients(bt, dst, bands[2], 0, ctx, d->uv_dc, d->uv_ac);
                 if (nz > 1 || dst[0] != 0) {
-                    ops ? ops->idct_4x4(dst, dst, 8) : idct_4x4(dst, dst);
+                    ops ? ops->idct_4x4(dst, 8) : dct->idct_4x4(dst, 8);
                 }
                 dst += 16;
                 l = top[block->x].ctx[x+ch] = (nz > 0) ? 1: 0;

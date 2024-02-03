@@ -17,8 +17,8 @@ enum simd_type {
 };
 
 struct accl_ops {
-    void (*idct_4x4)(int16_t *in, int16_t *out, int bitdepth);
-    void (*idct_8x8)(int16_t *in, int16_t *out, int bitdepth);
+    void (*idct_4x4)(int16_t *in, int bitdepth);
+    void (*idct_8x8)(int16_t *in, int bitdepth);
     enum simd_type type;
     TAILQ_ENTRY(accl_ops) next;
 };

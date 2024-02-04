@@ -30,20 +30,50 @@ enum compression_type {
     BI_CMYKRLE4 = 13,
 };
 
+struct bmp_info_header1 {
+    uint32_t size; // Size of this header (in bytes), 12
+    uint16_t  width; // width of bitmap in pixels
+    uint16_t  height; // height of bitmap in pixels
+    uint16_t planes;    // No. of planes for the target device, this is always 1
+    uint16_t bit_count; // No. of bits per pixel, 1, 4, 8, 24
+};
+
 struct bmp_info_header {
-    uint32_t size;                  // Size of this header (in bytes)
+    uint32_t size;                  // Size of this header (in bytes), 40
     int32_t width;                  // width of bitmap in pixels
-    int32_t height;                 // width of bitmap in pixels
+    int32_t height;                 // height of bitmap in pixels
                                     //   (if positive, bottom-up, with origin in lower left corner)
                                     //   (if negative, top-down, with origin in upper left corner)
     uint16_t planes;                // No. of planes for the target device, this is always 1
-    uint16_t bit_count;             // No. of bits per pixel
+    uint16_t bit_count;             // No. of bits per pixel, 1, 4, 8, 24
     uint32_t compression;           // 0 or 3 - uncompressed. 
     uint32_t size_image;
     int32_t x_pixels_per_meter;
     int32_t y_pixels_per_meter;
     uint32_t colors_used;
     uint32_t colors_important;
+};
+
+struct bmp_info_header2 {
+    uint32_t size; // Size of this header (in bytes), 64 bytes
+    int32_t width; // width of bitmap in pixels
+    int32_t height; // height of bitmap in pixels
+    uint16_t planes;    // No. of planes for the target device, this is always 1
+    uint16_t bit_count; // No. of bits per pixel, 1, 4, 8, 24
+    uint32_t compression; // 0 or 3 - uncompressed.
+    uint32_t size_image;
+    int32_t x_pixels_per_meter;
+    int32_t y_pixels_per_meter;
+    uint32_t colors_used;
+    uint32_t colors_important;
+    uint16_t units;
+    uint16_t reserved;
+    uint16_t recording;
+    uint16_t rendering;
+    uint32_t size1;
+    uint32_t size2;
+    uint32_t color_encoding;
+    uint32_t identifier;
 };
 
 /* BITMAPV4HEADER */
@@ -66,7 +96,7 @@ enum halftoning_algrithm {
    SUPER_CIRCLE = 3
 };
 
-struct bmp_info_header2 {
+struct bmp_info_header3 {
     uint16_t resolutions;
     uint16_t padding;
     uint16_t fill_direction;
@@ -89,7 +119,10 @@ struct bmp_color_entry {
 
 typedef struct BMP {
     struct bmp_file_header file_header;
-    struct bmp_info_header dib;
+    union {
+        struct bmp_info_header1 v1;
+        struct bmp_info_header v2;
+    } dib;
     struct bmp_color_header color;
     struct bmp_color_entry * palette;
     uint8_t *data;

@@ -11,17 +11,18 @@
 
 VLOG_REGISTER(bmp, DEBUG)
 
+const char *bmptype[] = {
+    "BM", // Windows 3.1x, 95, NT, ... etc
+    "BA", // OS/2 Bitmap Array
+    "CI", // OS/2 Color Icon
+    "CP", // OS/2 Color Pointer
+    "IC", // OS/2 Icon
+    "PT", // OS/2 Pointer
+};
+
 static int 
 BMP_probe(const char* filename)
 {
-    const char* bmptype[] = {
-        "BM",
-        "BA",
-        "CI",
-        "CP",
-        "IC",
-        "PT",
-    };
     FILE *f = fopen(filename, "rb");
     if (f == NULL) {
         VERR(bmp, "fail to open %s\n", filename);
@@ -43,8 +44,9 @@ BMP_probe(const char* filename)
     return -EINVAL;
 }
 
-int RLE8_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
-                struct bmp_color_entry *ct) {
+static int
+RLE8_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
+            struct bmp_color_entry *ct) {
     int p = 0;
     int y = (height > 0) ? height - 1 : 0;
     int delta = (height > 0) ? -1 : 1;
@@ -90,8 +92,9 @@ int RLE8_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int
     return -1;
 }
 
-int RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
-                struct bmp_color_entry *ct)
+static int
+RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int depth,
+            struct bmp_color_entry *ct)
 {
     int p = 0;
     uint8_t lo, hi, px;
@@ -150,81 +153,93 @@ BMP_load(const char* filename)
     BMP *b = p->pic;
     FILE *f = fopen(filename, "rb");
     fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);
-    fread(&b->dib, sizeof(struct bmp_info_header), 1, f);
+    uint32_t size;
+    fread(&size, 4, 1, f);
+    fseek(f, -4, SEEK_CUR);
+    fread(&b->dib, size, 1, f);
     /* FIXME: header length and later struct */
 
-    p->depth = b->dib.bit_count;
-    if (!memcmp(&b->file_header.file_type, "BM", 2)) {
-        if (b->dib.compression == BI_BITFIELDS) {
+    if (size == 12) {
+        p->depth = b->dib.v1.bit_count;
+        p->width = b->dib.v1.width;
+        p->height = b->dib.v1.height;
+        if (b->dib.v1.bit_count <= 8) {
+            p->depth = 24;
+            int color_num = (1 << b->dib.v1.bit_count);
+            b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
+            fread(b->palette, 4, color_num, f);
+            VDBG(bmp, "palette");
+            for (int i = 0; i < color_num; i++) {
+                vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n",
+                     b->palette[i].blue, b->palette[i].green, b->palette[i].red,
+                     b->palette[i].alpha);
+            }
+        }
+    } else if (size == 40) {
+        p->depth = b->dib.v2.bit_count;
+        p->width = b->dib.v2.width;
+        p->height = b->dib.v2.height;
+        if (b->dib.v2.compression == BI_BITFIELDS) {
             fread(&b->color, 12, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
-        } else if (b->dib.compression == BI_ALPHABITFIELDS) {
+        } else if (b->dib.v2.compression == BI_ALPHABITFIELDS) {
             fread(&b->color, 16, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
         }
-    }
-    if (b->dib.bit_count <= 8) {
-        p->depth = 24;
-        int color_num = b->dib.colors_used ? b->dib.colors_used : (1 << b->dib.bit_count);
-        b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
-        fread(b->palette, 4, color_num, f);
-        VDBG(bmp, "palette");
-        for (int i = 0; i < color_num; i++) {
-            vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n", b->palette[i].blue,
-                 b->palette[i].green, b->palette[i].red, b->palette[i].alpha);
+
+        if (b->dib.v2.bit_count <= 8) {
+            p->depth = 24;
+            int color_num = b->dib.v2.colors_used ? b->dib.v2.colors_used
+                                                  : (1 << b->dib.v2.bit_count);
+            b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
+            fread(b->palette, 4, color_num, f);
+            VDBG(bmp, "palette");
+            for (int i = 0; i < color_num; i++) {
+                vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n",
+                     b->palette[i].blue, b->palette[i].green, b->palette[i].red,
+                     b->palette[i].alpha);
+            }
         }
     }
+
     if (p->depth == 24) {
         p->format = CS_PIXELFORMAT_BGR24;
     } else if (p->depth == 32) {
         p->format = CS_PIXELFORMAT_BGRX8888;
     }
-    VINFO(bmp, "bitcount %d pixel format %s", b->dib.bit_count, CS_GetPixelFormatName(p->format));
+    VINFO(bmp, "bitcount %d pixel format %s", p->depth,
+          CS_GetPixelFormatName(p->format));
 
     fseek(f, b->file_header.offset_data, SEEK_SET);
 
-    /* pitch must be multiple of four bytes */
-    p->width = b->dib.width;
-    p->height = b->dib.height;
+    /* pitch must be multiple of 4 bytes */
     p->pitch = ((p->width + 3) >> 2 << 2) * p->depth / 8;
     b->data = malloc(p->height * p->pitch);
     memset(b->data, 0, p->height * p->pitch);
 
-    int top = b->dib.height > 0 ? b->dib.height - 1 : 0;
-    int bottom = b->dib.height > 0 ? 0 : 1 - b->dib.height;
-    int delta = b->dib.height > 0 ? -1 : 1;
-    // int bytes_perline = b->dib.width * b->dib.bit_count / 8;
+    int top = p->height > 0 ? p->height - 1 : 0;
+    int bottom = p->height > 0 ? 0 : 1 - p->height;
+    int delta = p->height > 0 ? -1 : 1;
 
-    if (b->dib.bit_count > 8) {
-        /* For read bmp pic data from bottom to up */
-        for (int i = top, j = 0; i >= bottom; i += delta, j++) {
-            fread(b->data + p->pitch * i, b->dib.width * p->depth / 8, 1, f);
-        }
-    } else {
-        if (b->dib.compression == BI_RLE8) {
-            uint8_t *compressed = malloc(b->dib.size_image);
-            fread(compressed, b->dib.size_image, 1, f);
-            RLE8_decode(compressed, b->dib.size_image, b->data, p->pitch, p->height, p->depth,
-                        b->palette);
-            free(compressed);
-        } else if (b->dib.compression == BI_RLE4) {
-            uint8_t *compressed = malloc(b->dib.size_image);
-            fread(compressed, b->dib.size_image, 1, f);
-            RLE4_decode(compressed, b->dib.size_image, b->data, p->pitch, p->height, p->depth,
-                             b->palette);
-            free(compressed);
+    if (size == 12) {
+        if (b->dib.v1.bit_count > 8) {
+            /* For read bmp pic data from bottom to up */
+            for (int i = top; i >= bottom; i += delta) {
+                // FIX: why we need read the whole pad, only for OS/2 1.x format?
+                fread(b->data + p->pitch * i, p->depth >> 3, (p->width + 3) >> 2 << 2, f);
+            }
         } else {
             VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
             for (int i = top; i >= bottom; i += delta) {
-                for(int j = 0; j < p->width; j ++) {
+                for (int j = 0; j < p->width; j++) {
                     uint8_t px = 0, pxlo;
-                    if (b->dib.bit_count == 8) {
+                    if (b->dib.v1.bit_count == 8) {
                         px = fgetc(f);
-                    } else if (b->dib.bit_count == 4) {
+                    } else if (b->dib.v1.bit_count == 4) {
                         px = fgetc(f);
                         pxlo = px & 0xF;
                         px = (px >> 4) & 0xF;
@@ -236,7 +251,7 @@ BMP_load(const char* filename)
                     if (p->depth == 32) {
                         b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
                     }
-                    if (b->dib.bit_count == 4) {
+                    if (b->dib.v1.bit_count == 4) {
                         clr = b->palette + pxlo;
                         b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
                         b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
@@ -247,8 +262,61 @@ BMP_load(const char* filename)
                     }
                 }
             }
+            
+        }
+    } else if (size == 40) {
+        if (b->dib.v2.bit_count > 8) {
+            /* For read bmp pic data from bottom to up */
+            for (int i = top; i >= bottom; i += delta) {
+                fread(b->data + p->pitch * i, p->depth / 8, p->width, f);
+            }
+        } else {
+            if (b->dib.v2.compression == BI_RLE8) {
+                uint8_t *compressed = malloc(b->dib.v2.size_image);
+                fread(compressed, b->dib.v2.size_image, 1, f);
+                RLE8_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
+                            p->height, p->depth, b->palette);
+                free(compressed);
+            } else if (b->dib.v2.compression == BI_RLE4) {
+                uint8_t *compressed = malloc(b->dib.v2.size_image);
+                fread(compressed, b->dib.v2.size_image, 1, f);
+                RLE4_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
+                            p->height, p->depth, b->palette);
+                free(compressed);
+            } else {
+                VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
+                for (int i = top; i >= bottom; i += delta) {
+                    for (int j = 0; j < p->width; j++) {
+                        uint8_t px = 0, pxlo;
+                        if (b->dib.v2.bit_count == 8) {
+                          px = fgetc(f);
+                        } else if (b->dib.v2.bit_count == 4) {
+                          px = fgetc(f);
+                          pxlo = px & 0xF;
+                          px = (px >> 4) & 0xF;
+                        }
+                        struct bmp_color_entry *clr = b->palette + px;
+                        b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
+                        b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
+                        b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
+                        if (p->depth == 32) {
+                          b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
+                        }
+                        if (b->dib.v2.bit_count == 4) {
+                          clr = b->palette + pxlo;
+                          b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
+                          b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
+                          b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
+                          if (p->depth == 32) {
+                            b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
+                          }
+                        }
+                    }
+                }
+            }
         }
     }
+
     fclose(f);
     p->pixels = b->data;
     return p;
@@ -294,19 +362,26 @@ BMP_info(FILE* f, struct pic* p)
     fprintf(f, "\tfile size: %d\n", b->file_header.file_size);
     fprintf(f, "\tpixels starting address: %d\n", b->file_header.offset_data);
     fprintf(f, "-------------------------------------\n");
-    fprintf(f, "\tinfo header size: %d\n", b->dib.size);
-    fprintf(f, "\timage width: %d\n", b->dib.width);
-    fprintf(f, "\timage height: %d\n", b->dib.height);
-    fprintf(f, "\timage planes: %d\n", b->dib.planes);
-    fprintf(f, "\tbits per pixel: %d\n", b->dib.bit_count);
-    fprintf(f, "\tcompression: %s\n", compression_str[b->dib.compression]);
-    fprintf(f, "\tsize_image: %d\n", b->dib.size_image);
-    fprintf(f, "\tx resolution: %d\n", b->dib.x_pixels_per_meter);
-    fprintf(f, "\ty resolution: %d\n", b->dib.y_pixels_per_meter);
-    fprintf(f, "\tcolors_used: %d\n", b->dib.colors_used);
-    fprintf(f, "\tcolors_important: %d\n", b->dib.colors_important);
-    if (b->palette) {
-        fprintf(f, "\tpalette nubmer: %d\n", 1 << b->dib.bit_count);
+    fprintf(f, "\tinfo header size: %d\n", b->dib.v2.size);
+    if (b->dib.v1.size == 12) {
+        fprintf(f, "\timage width: %d\n", b->dib.v1.width);
+        fprintf(f, "\timage height: %d\n", b->dib.v1.height);
+        fprintf(f, "\timage planes: %d\n", b->dib.v1.planes);
+        fprintf(f, "\tbits per pixel: %d\n", b->dib.v1.bit_count);
+    } else if (b->dib.v1.size == 40) {
+        fprintf(f, "\timage width: %d\n", b->dib.v2.width);
+        fprintf(f, "\timage height: %d\n", b->dib.v2.height);
+        fprintf(f, "\timage planes: %d\n", b->dib.v2.planes);
+        fprintf(f, "\tbits per pixel: %d\n", b->dib.v2.bit_count);
+        fprintf(f, "\tcompression: %s\n", compression_str[b->dib.v2.compression]);
+        fprintf(f, "\tsize_image: %d\n", b->dib.v2.size_image);
+        fprintf(f, "\tx resolution: %d\n", b->dib.v2.x_pixels_per_meter);
+        fprintf(f, "\ty resolution: %d\n", b->dib.v2.y_pixels_per_meter);
+        fprintf(f, "\tcolors_used: %d\n", b->dib.v2.colors_used);
+        fprintf(f, "\tcolors_important: %d\n", b->dib.v2.colors_important);
+        if (b->palette) {
+            fprintf(f, "\tpalette nubmer: %d\n", 1 << b->dib.v2.bit_count);
+        }
     }
     fprintf(f, "\n");
 }

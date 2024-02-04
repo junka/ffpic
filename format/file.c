@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #include "file.h"
 #include "bmp.h"
@@ -78,7 +79,7 @@ file_find_codec(const char *name)
 {
     struct file_ops *ops;
     TAILQ_FOREACH(ops, &ops_list, next) {
-        if (strcmp(ops->name, name) == 0) {
+        if (strcasecmp(ops->name, name) == 0 || (ops->alias && strcasecmp(ops->alias, name) == 0)) {
             return ops;
         }
     }

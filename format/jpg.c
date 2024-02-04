@@ -538,7 +538,7 @@ JPG_load_one(FILE *f)
         VDBG(jpg, "offset at 0x%zx", ftell(f));
         m = read_marker_skip_null(f);
     }
-    VDBG(jpg, "done one image");
+    VDBG(jpg, "done one image %lu", ftell(f));
     JPG_decode_image(j);
     p->width = ((j->sof.width + 7) >> 3) << 3;
     p->height = j->sof.height;
@@ -553,12 +553,16 @@ JPG_load_one(FILE *f)
 static struct pic *JPG_load(const char *filename)
 {
     FILE *f = fopen(filename, "rb");
+    fseek(f, 0, SEEK_END);
+    long end = ftell(f);
+    fseek(f, 0, SEEK_SET);
     int num = 1;
     struct pic *p = NULL;
     p = JPG_load_one(f);
-    while (!feof(f)) {
+    while (ftell(f) < end ) {
         file_enqueue_pic(p);
         p = JPG_load_one(f);
+        num ++;
     }
     fclose(f);
     if (num == 1) {
@@ -664,11 +668,11 @@ JPG_info(FILE *f, struct pic* p)
     }
 }
 
-static int init_encoder(JPG *j, struct jpg_decoder *d, uint8_t comp_id,
+static int init_encoder(struct jpg_decoder *d, uint8_t comp_id,
                         struct huffman_symbol *dc_sym,
                         struct huffman_symbol *ac_sym) {
     // see ITU-T81 Table K.1 and K.2, for Y:UV 2:1
-    const uint16_t y_quant[8*8] = {
+    static const uint16_t y_quant[64] = {
         16, 11, 10, 16, 24,  40,  51,  61,
         12, 12, 14, 19, 26,  58,  60,  55,
         14, 13, 16, 24, 40,  57,  69,  56,
@@ -678,7 +682,7 @@ static int init_encoder(JPG *j, struct jpg_decoder *d, uint8_t comp_id,
         49, 64, 78, 87, 103, 121, 120, 101,
         72, 92, 95, 98, 112, 100, 103, 99
     };
-    const uint16_t uv_quant[8*8] = {
+    static const uint16_t uv_quant[64] = {
         17, 18, 24, 47, 99, 99, 99, 99,
         18, 21, 26, 66, 99, 99, 99, 99,
         24, 26, 56, 99, 99, 99, 99, 99,
@@ -691,8 +695,10 @@ static int init_encoder(JPG *j, struct jpg_decoder *d, uint8_t comp_id,
 
     huffman_tree *dc_tree = huffman_tree_init();
     huffman_tree *ac_tree = huffman_tree_init();
-    huffman_build_lookup_table(dc_tree, 0, dc_sym);
-    huffman_build_lookup_table(ac_tree, 0, ac_sym);
+    huffman_build_lookup_table(dc_tree, comp_id, dc_sym);
+    huffman_build_lookup_table(ac_tree, comp_id, ac_sym);
+    huffman_dump_table(vlog_get_stream(), dc_tree);
+    huffman_dump_table(vlog_get_stream(), ac_tree);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -766,7 +772,7 @@ push_and_quant(struct huffman_codec *hdec, struct jpg_decoder *d,
     }
 }
 
-void JPG_encode(struct pic *p)
+void JPG_encode(struct pic *p, const char *fname)
 {
     // int16_t *Y = malloc(p->height * p->pitch * 2);
     // int16_t *U = malloc(p->height * p->pitch / 2);
@@ -832,8 +838,7 @@ void JPG_encode(struct pic *p)
         0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
         0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
         0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4,
-        0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa
-    };
+        0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
     struct huffman_symbol *y_dc = huffman_symbol_alloc((uint8_t *)y_dc_count, (uint8_t *)y_dc_sym);
     struct huffman_symbol *y_ac = huffman_symbol_alloc((uint8_t *)y_ac_count, (uint8_t *)y_ac_sym);
     struct huffman_symbol *uv_dc = huffman_symbol_alloc((uint8_t *)uv_dc_count, (uint8_t *)uv_dc_sym);
@@ -842,9 +847,9 @@ void JPG_encode(struct pic *p)
     for (int i = 0; i < 3; i++) {
         d[i] = malloc(sizeof(struct jpg_decoder));
         if (i == 0) {
-            init_encoder(p->pic, d[i], i, y_dc, y_ac);
+            init_encoder(d[i], 0, y_dc, y_ac);
         } else {
-            init_encoder(p->pic, d[i], i, uv_dc, uv_ac);
+            init_encoder(d[i], 1, uv_dc, uv_ac);
         }
     }
 
@@ -892,6 +897,7 @@ void JPG_encode(struct pic *p)
 
 static struct file_ops jpg_ops = {
     .name = "JPG",
+    .alias = "JPEG",
     .probe = JPG_probe,
     .load = JPG_load,
     .free = JPG_free,

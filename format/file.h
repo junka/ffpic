@@ -14,11 +14,12 @@ extern "C" {
 
 struct file_ops {
     const char *name;
+    const char *alias;
     int (*probe)(const char *filename);
     struct pic* (*load)(const char *filename);
     void (*free)(struct pic *p);
     void (*info)(FILE *f, struct pic* p);
-    void (*encode)(struct pic *p);
+    void (*encode)(struct pic *p, const char *fname);
     TAILQ_ENTRY(file_ops) next;
 };
 

@@ -346,7 +346,7 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
 int huffman_encode_symbol_8bit(struct huffman_codec *codec, struct huffman_tree *tree, uint8_t ch)
 {
     struct bits_vec *v = codec->v;
-    printf("write %x in %d bits\n", tree->fast_codec[ch], tree->fast_codbits[ch]);
+    VINFO(huffman, "write [%d]%x in %d bits", ch, tree->fast_codec[ch], tree->fast_codbits[ch]);
     WRITE_BITS(v, tree->fast_codec[ch], tree->fast_codbits[ch]);
     return 0;
 }

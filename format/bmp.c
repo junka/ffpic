@@ -311,12 +311,68 @@ BMP_info(FILE* f, struct pic* p)
     fprintf(f, "\n");
 }
 
+static uint8_t *alloc_bmp_with_head(uint32_t w, uint32_t h)
+{
+    struct bmp_file_header *bmp_p;
+    long file_length = (w * h * (32 >> 3));
+    uint8_t *d_ptr = (uint8_t *)malloc(file_length + 54);
+
+    bmp_p = (struct bmp_file_header *)d_ptr;
+    bmp_p->file_type = 0x4D42;
+    bmp_p->file_size = 54 + w * h * 4;
+    bmp_p->reserved1 = 0x0;
+    bmp_p->reserved2 = 0x0;
+    bmp_p->offset_data = 0x36;
+
+    struct bmp_info_header *info_p =
+        (struct bmp_info_header *)(d_ptr + sizeof(struct bmp_file_header));
+    // bmp info head
+    info_p->size = 0x28;
+    info_p->width = w;
+    info_p->height = -h;
+    info_p->planes = 0x01;
+    info_p->bit_count = 32;
+    info_p->compression = 0;
+    info_p->size_image = w * h * 4;
+    info_p->x_pixels_per_meter = 0x60;
+    info_p->y_pixels_per_meter = 0x60;
+    info_p->colors_used = 2;
+    info_p->colors_important = 0;
+
+    return d_ptr;
+}
+
+void BMP_encode(struct pic *p, const char * fname)
+{
+    FILE *fd = fopen(fname, "w");
+    uint8_t *data = alloc_bmp_with_head(p->width, p->height);
+    long file_length = (p->width * p->height * (p->depth >> 3)) + 54;
+    uint8_t *file_p = data;
+    uint8_t *file_p_tmp = NULL;
+    uint8_t *b = (uint8_t *)p->pixels;
+
+    file_p_tmp = file_p;
+    file_p_tmp += 54;
+    for (int i = 0; i < p->height; i++) {
+        for (int j = 0; j < p->width; j++) {
+            memcpy(file_p_tmp, b, 4);
+            b += 4;
+            file_p_tmp += 4;
+        }
+    }
+    fwrite(file_p, file_length, 1, fd);
+
+    free(data);
+    fclose(fd);
+}
+
 static struct file_ops bmp_ops = {
     .name = "BMP",
     .probe = BMP_probe,
     .load = BMP_load,
     .free = BMP_free,
     .info = BMP_info,
+    .encode = BMP_encode,
 };
 
 void 

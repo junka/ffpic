@@ -6,6 +6,7 @@
 
 #include "bmp.h"
 #include "file.h"
+#include "utils.h"
 #include "vlog.h"
 #include "colorspace.h"
 
@@ -146,19 +147,78 @@ RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int dep
     return -1;
 }
 
-static struct pic* 
+static void
+read_pixels(struct pic *p, FILE *f)
+{
+    int bottom = p->height > 0 ? 0 : 1 - p->height;
+    int top = p->height > 0 ? p->height - 1 : 0;
+    int delta = p->height > 0 ? -1 : 1;
+    int width = (p->width + 3) >> 2 << 2;
+    BMP *b = p->pic;
+    /* For read bmp pic data from bottom to up */
+    for (int i = top; i >= bottom; i += delta) {
+        fread(b->data + p->pitch * i, p->depth / 8, width, f);
+        for (int j = 0; j < width; j++) {
+            if (p->depth == 32) {
+                b->data[p->pitch * i + j * p->depth / 8 + 3] = 0xFF;
+            }
+        }
+    }
+}
+
+static void
+read_color_index(struct pic *p, int bit_count, FILE *f)
+{
+    BMP *b = p->pic;
+    int top = p->height > 0 ? p->height - 1 : 0;
+    int bottom = p->height > 0 ? 0 : 1 - p->height;
+    int delta = p->height > 0 ? -1 : 1;
+    // byte per line is aligned to 4 in bmp file
+    int width = (p->width + 3) >> 2 << 2;
+
+    for (int i = top; i >= bottom; i += delta) {
+        for (int j = 0; j < width; j++) {
+            uint8_t px = 0, pxlo;
+            if (bit_count == 8) {
+                px = fgetc(f);
+            } else if (bit_count == 4) {
+                px = fgetc(f);
+                pxlo = px & 0xF;
+                px = (px >> 4) & 0xF;
+            }
+            struct bmp_color_entry *clr = b->palette + px;
+            b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
+            b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
+            b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
+            if (p->depth == 32) {
+                b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
+            }
+            if (bit_count == 4) {
+                clr = b->palette + pxlo;
+                b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
+                b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
+                b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
+                if (p->depth == 32) {
+                    b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
+                }
+            }
+        }
+    }
+}
+
+static struct pic*
 BMP_load(const char* filename)
 {
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&b->file_header, sizeof(struct bmp_file_header ), 1, f);
+    fread(&b->file_header, sizeof(struct bmp_file_header), 1, f);
     uint32_t size;
     fread(&size, 4, 1, f);
     fseek(f, -4, SEEK_CUR);
     fread(&b->dib, size, 1, f);
-    /* FIXME: header length and later struct */
 
+    /* FIXME: header length and later struct */
     if (size == 12) {
         p->depth = b->dib.v1.bit_count;
         p->width = b->dib.v1.width;
@@ -167,15 +227,15 @@ BMP_load(const char* filename)
             p->depth = 24;
             int color_num = (1 << b->dib.v1.bit_count);
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
-            fread(b->palette, 4, color_num, f);
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
+                fread(b->palette, 4, 1, f);
                 vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n",
                      b->palette[i].blue, b->palette[i].green, b->palette[i].red,
                      b->palette[i].alpha);
             }
         }
-    } else if (size == 40) {
+    } else if (size == 40 || memcmp("BM", &b->file_header.file_type, 2) == 0) {
         p->depth = b->dib.v2.bit_count;
         p->width = b->dib.v2.width;
         p->height = b->dib.v2.height;
@@ -209,67 +269,27 @@ BMP_load(const char* filename)
     if (p->depth == 24) {
         p->format = CS_PIXELFORMAT_BGR24;
     } else if (p->depth == 32) {
-        p->format = CS_PIXELFORMAT_BGRX8888;
+        p->format = CS_PIXELFORMAT_BGRA8888;
     }
-    VINFO(bmp, "bitcount %d pixel format %s", p->depth,
-          CS_GetPixelFormatName(p->format));
+    VINFO(bmp, "bitcount %d pixel format %s", p->depth, CS_GetPixelFormatName(p->format));
 
     fseek(f, b->file_header.offset_data, SEEK_SET);
 
     /* pitch must be multiple of 4 bytes */
     p->pitch = ((p->width + 3) >> 2 << 2) * p->depth / 8;
-    b->data = malloc(p->height * p->pitch);
-    memset(b->data, 0, p->height * p->pitch);
-
-    int top = p->height > 0 ? p->height - 1 : 0;
-    int bottom = p->height > 0 ? 0 : 1 - p->height;
-    int delta = p->height > 0 ? -1 : 1;
+    b->data = malloc((ABS(p->height)) * p->pitch);
+    memset(b->data, 0, (ABS(p->height)) * p->pitch);
 
     if (size == 12) {
         if (b->dib.v1.bit_count > 8) {
-            /* For read bmp pic data from bottom to up */
-            for (int i = top; i >= bottom; i += delta) {
-                // FIX: why we need read the whole pad, only for OS/2 1.x format?
-                fread(b->data + p->pitch * i, p->depth >> 3, (p->width + 3) >> 2 << 2, f);
-            }
+            read_pixels(p, f);
         } else {
-            VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
-            for (int i = top; i >= bottom; i += delta) {
-                for (int j = 0; j < p->width; j++) {
-                    uint8_t px = 0, pxlo;
-                    if (b->dib.v1.bit_count == 8) {
-                        px = fgetc(f);
-                    } else if (b->dib.v1.bit_count == 4) {
-                        px = fgetc(f);
-                        pxlo = px & 0xF;
-                        px = (px >> 4) & 0xF;
-                    }
-                    struct bmp_color_entry *clr = b->palette + px;
-                    b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
-                    b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
-                    b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
-                    if (p->depth == 32) {
-                        b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
-                    }
-                    if (b->dib.v1.bit_count == 4) {
-                        clr = b->palette + pxlo;
-                        b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
-                        b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
-                        b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
-                        if (p->depth == 32) {
-                            b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
-                        }
-                    }
-                }
-            }
-            
+            VDBG(bmp, "width %d pitch %d, bit %d", p->width, p->pitch, b->dib.v1.bit_count);
+            read_color_index(p, b->dib.v1.bit_count, f);
         }
-    } else if (size == 40) {
+    } else if (size == 40 || memcmp("BM", &b->file_header.file_type, 2) == 0) {
         if (b->dib.v2.bit_count > 8) {
-            /* For read bmp pic data from bottom to up */
-            for (int i = top; i >= bottom; i += delta) {
-                fread(b->data + p->pitch * i, p->depth / 8, p->width, f);
-            }
+            read_pixels(p, f);
         } else {
             if (b->dib.v2.compression == BI_RLE8) {
                 uint8_t *compressed = malloc(b->dib.v2.size_image);
@@ -285,40 +305,14 @@ BMP_load(const char* filename)
                 free(compressed);
             } else {
                 VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
-                for (int i = top; i >= bottom; i += delta) {
-                    for (int j = 0; j < p->width; j++) {
-                        uint8_t px = 0, pxlo;
-                        if (b->dib.v2.bit_count == 8) {
-                          px = fgetc(f);
-                        } else if (b->dib.v2.bit_count == 4) {
-                          px = fgetc(f);
-                          pxlo = px & 0xF;
-                          px = (px >> 4) & 0xF;
-                        }
-                        struct bmp_color_entry *clr = b->palette + px;
-                        b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
-                        b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
-                        b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
-                        if (p->depth == 32) {
-                          b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
-                        }
-                        if (b->dib.v2.bit_count == 4) {
-                          clr = b->palette + pxlo;
-                          b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
-                          b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
-                          b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
-                          if (p->depth == 32) {
-                            b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
-                          }
-                        }
-                    }
-                }
+                read_color_index(p, b->dib.v2.bit_count, f);
             }
         }
     }
 
     fclose(f);
     p->pixels = b->data;
+    p->height = ABS(p->height);
     return p;
 }
 

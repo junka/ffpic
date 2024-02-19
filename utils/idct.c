@@ -5,7 +5,8 @@
 
 #if 1
 // got from hevc spec 8.6.4.2
-void idct_1d_4(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, int bdShift)
+static void
+idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, int bdShift)
 {
     const int8_t transMatrix[4][4] = {
     {29, 55, 74, 84},
@@ -42,13 +43,13 @@ void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp)
         for (int j = 0; j < 4; j++) {
             tmp[j] = in[i + j * 4];
         }
-        idct_1d_4(tmp, e[i], mincoeff, maxcoeff, 7);
+        idct_1d_4_16bit(tmp, e[i], mincoeff, maxcoeff, 7);
     }
     for (int j = 0; j < 4; j ++) {
         for (int i = 0; i < 4; i ++) {
             tmp[i] = e[i][j];
         }
-        idct_1d_4(tmp, out + j * 4, mincoeff, maxcoeff, bdShift);
+        idct_1d_4_16bit(tmp, out + j * 4, mincoeff, maxcoeff, bdShift);
     }
 }
 #endif
@@ -348,10 +349,10 @@ idct_float(int *buf, int *output, int stride)
 }
 #endif
 
-// kIDCTMatrix[8*x+u] = alpha(u)*cos((2*x+1)*u*M_PI/16)*sqrt(2), with fixed 13
+// idct_transform[8*x+u] = alpha(u)*cos((2*x+1)*u*M_PI/16)*sqrt(2), with fixed 13
 // bit precision, where alpha(0) = 1/sqrt(2) and alpha(u) = 1 for u > 0.
 // Some coefficients are off by +-1 to mimick libjpeg's behaviour.
-static const int kIDCTMatrix[64] = {
+static const int idct_transform[64] = {
     8192,  11363,  10703, 9633, 8192, 6437, 4433, 2260,
     8192,  9633, 4433, -2259, -8192, -11362, -10704, -6436,
     8192, 6437, -4433, -11362, -8192, 2261, 10704, 9633,
@@ -367,7 +368,7 @@ idct_1d_8_8bit(const uint8_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++) {
         int tmp = 0;
         for (int u = 0; u < 8; ++u) {
-            tmp += kIDCTMatrix[8 * i + u] * in[u * stride];
+            tmp += idct_transform[8 * i + u] * in[u * stride];
         }
         out[i] = tmp;
     }
@@ -376,24 +377,23 @@ idct_1d_8_8bit(const uint8_t *in, const int stride, int out[8]) {
 static inline void 
 idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++) {
-        int tmp = 0;
+        out[i] = 0;
         for (int u = 0; u < 8; ++u) {
-            tmp += kIDCTMatrix[8 * i + u] * in[u * stride];
+            out[i] += idct_transform[8 * i + u] * in[u * stride];
         }
-        out[i] = tmp;
     }
 #if 0
     // which can be expanded to below
     // int tmp0, tmp1, tmp2, tmp3, tmp4;
 
-    // tmp1 = kIDCTMatrix[0] * in[0];
+    // tmp1 = idct_transform[0] * in[0];
     // out[0] = out[1] = out[2] = out[3] = out[4] = out[5] = out[6] = out[7] = tmp1;
 
     // tmp0 = in[stride];
-    // tmp1 = kIDCTMatrix[1] * tmp0;
-    // tmp2 = kIDCTMatrix[9] * tmp0;
-    // tmp3 = kIDCTMatrix[17] * tmp0;
-    // tmp4 = kIDCTMatrix[25] * tmp0;
+    // tmp1 = idct_transform[1] * tmp0;
+    // tmp2 = idct_transform[9] * tmp0;
+    // tmp3 = idct_transform[17] * tmp0;
+    // tmp4 = idct_transform[25] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] += tmp3;
@@ -404,8 +404,8 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] -= tmp1;
 
     // tmp0 = in[2 * stride];
-    // tmp1 = kIDCTMatrix[2] * tmp0;
-    // tmp2 = kIDCTMatrix[10] * tmp0;
+    // tmp1 = idct_transform[2] * tmp0;
+    // tmp2 = idct_transform[10] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] -= tmp2;
@@ -416,10 +416,10 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] += tmp1;
 
     // tmp0 = in[3 * stride];
-    // tmp1 = kIDCTMatrix[3] * tmp0;
-    // tmp2 = kIDCTMatrix[11] * tmp0;
-    // tmp3 = kIDCTMatrix[19] * tmp0;
-    // tmp4 = kIDCTMatrix[27] * tmp0;
+    // tmp1 = idct_transform[3] * tmp0;
+    // tmp2 = idct_transform[11] * tmp0;
+    // tmp3 = idct_transform[19] * tmp0;
+    // tmp4 = idct_transform[27] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] += tmp3;
@@ -430,7 +430,7 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] -= tmp1;
 
     // tmp0 = in[4 * stride];
-    // tmp1 = kIDCTMatrix[4] * tmp0;
+    // tmp1 = idct_transform[4] * tmp0;
     // out[0] += tmp1;
     // out[1] -= tmp1;
     // out[2] -= tmp1;
@@ -441,10 +441,10 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] += tmp1;
 
     // tmp0 = in[5 * stride];
-    // tmp1 = kIDCTMatrix[5] * tmp0;
-    // tmp2 = kIDCTMatrix[13] * tmp0;
-    // tmp3 = kIDCTMatrix[21] * tmp0;
-    // tmp4 = kIDCTMatrix[29] * tmp0;
+    // tmp1 = idct_transform[5] * tmp0;
+    // tmp2 = idct_transform[13] * tmp0;
+    // tmp3 = idct_transform[21] * tmp0;
+    // tmp4 = idct_transform[29] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] += tmp3;
@@ -455,8 +455,8 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] -= tmp1;
 
     // tmp0 = in[6 * stride];
-    // tmp1 = kIDCTMatrix[6] * tmp0;
-    // tmp2 = kIDCTMatrix[14] * tmp0;
+    // tmp1 = idct_transform[6] * tmp0;
+    // tmp2 = idct_transform[14] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] -= tmp2;
@@ -467,10 +467,10 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
     // out[7] += tmp1;
 
     // tmp0 = in[7 * stride];
-    // tmp1 = kIDCTMatrix[7] * tmp0;
-    // tmp2 = kIDCTMatrix[15] * tmp0;
-    // tmp3 = kIDCTMatrix[23] * tmp0;
-    // tmp4 = kIDCTMatrix[31] * tmp0;
+    // tmp1 = idct_transform[7] * tmp0;
+    // tmp2 = idct_transform[15] * tmp0;
+    // tmp3 = idct_transform[23] * tmp0;
+    // tmp4 = idct_transform[31] * tmp0;
     // out[0] += tmp1;
     // out[1] += tmp2;
     // out[2] += tmp3;
@@ -530,56 +530,176 @@ static void idct_8x8_16(void *block, int depth) {
     }
 }
 
-// kDCTMatrix[8*u+x] = 0.5*alpha(u)*cos((2*x+1)*u*M_PI/16),
-// where alpha(0) = 1/sqrt(2) and alpha(u) = 1 for u > 0.
-// static const double kDCTMatrix[64] = {
-//     0.3535533906,  0.3535533906,  0.3535533906,  0.3535533906,
-//     0.3535533906,  0.3535533906,  0.3535533906,  0.3535533906,
-//     0.4903926402,  0.4157348062,  0.2777851165,  0.0975451610,
-//     -0.0975451610, -0.2777851165, -0.4157348062, -0.4903926402,
-//     0.4619397663,  0.1913417162,  -0.1913417162, -0.4619397663,
-//     -0.4619397663, -0.1913417162, 0.1913417162,  0.4619397663,
-//     0.4157348062,  -0.0975451610, -0.4903926402, -0.2777851165,
-//     0.2777851165,  0.4903926402,  0.0975451610,  -0.4157348062,
-//     0.3535533906,  -0.3535533906, -0.3535533906, 0.3535533906,
-//     0.3535533906,  -0.3535533906, -0.3535533906, 0.3535533906,
-//     0.2777851165,  -0.4903926402, 0.0975451610,  0.4157348062,
-//     -0.4157348062, -0.0975451610, 0.4903926402,  -0.2777851165,
-//     0.1913417162,  -0.4619397663, 0.4619397663,  -0.1913417162,
-//     -0.1913417162, 0.4619397663,  -0.4619397663, 0.1913417162,
-//     0.0975451610,  -0.2777851165, 0.4157348062,  -0.4903926402,
-//     0.4903926402,  -0.4157348062, 0.2777851165,  -0.0975451610,
-// };
+void dct_float(float *data) {
+    float tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
+    float tmp10, tmp11, tmp12, tmp13;
+    float z1, z2, z3, z4, z5, z11, z13;
+    float *dataptr;
+
+    /* Pass 1: process rows. */
+
+    dataptr = data;
+    for (int ctr = 0; ctr < 8; ctr++) {
+        /* Load data into workspace */
+        tmp0 = dataptr[0] + dataptr[7];
+        tmp7 = dataptr[0] - dataptr[7];
+        tmp1 = dataptr[1] + dataptr[6];
+        tmp6 = dataptr[1] - dataptr[6];
+        tmp2 = dataptr[2] + dataptr[5];
+        tmp5 = dataptr[2] - dataptr[5];
+        tmp3 = dataptr[3] + dataptr[4];
+        tmp4 = dataptr[3] - dataptr[4];
+
+        /* Even part */
+
+        tmp10 = tmp0 + tmp3; /* phase 2 */
+        tmp13 = tmp0 - tmp3;
+        tmp11 = tmp1 + tmp2;
+        tmp12 = tmp1 - tmp2;
+
+        /* Apply unsigned->signed conversion */
+        dataptr[0] = tmp10 + tmp11; /* phase 3 */
+        dataptr[4] = tmp10 - tmp11;
+
+        z1 = (tmp12 + tmp13) * ((float)0.707106781); /* c4 */
+        dataptr[2] = tmp13 + z1;                     /* phase 5 */
+        dataptr[6] = tmp13 - z1;
+
+        /* Odd part */
+
+        tmp10 = tmp4 + tmp5; /* phase 2 */
+        tmp11 = tmp5 + tmp6;
+        tmp12 = tmp6 + tmp7;
+
+        /* The rotator is modified from fig 4-8 to avoid extra negations. */
+        z5 = (tmp10 - tmp12) * ((float)0.382683433); /* c6 */
+        z2 = ((float)0.541196100) * tmp10 + z5;      /* c2-c6 */
+        z4 = ((float)1.306562965) * tmp12 + z5;      /* c2+c6 */
+        z3 = tmp11 * ((float)0.707106781);           /* c4 */
+
+        z11 = tmp7 + z3; /* phase 5 */
+        z13 = tmp7 - z3;
+
+        dataptr[5] = z13 + z2; /* phase 6 */
+        dataptr[3] = z13 - z2;
+        dataptr[1] = z11 + z4;
+        dataptr[7] = z11 - z4;
+
+        dataptr += 8; /* advance pointer to next row */
+    }
+
+    /* Pass 2: process columns. */
+
+    dataptr = data;
+    for (int ctr = 8 - 1; ctr >= 0; ctr--) {
+        tmp0 = dataptr[8 * 0] + dataptr[8 * 7];
+        tmp7 = dataptr[8 * 0] - dataptr[8 * 7];
+        tmp1 = dataptr[8 * 1] + dataptr[8 * 6];
+        tmp6 = dataptr[8 * 1] - dataptr[8 * 6];
+        tmp2 = dataptr[8 * 2] + dataptr[8 * 5];
+        tmp5 = dataptr[8 * 2] - dataptr[8 * 5];
+        tmp3 = dataptr[8 * 3] + dataptr[8 * 4];
+        tmp4 = dataptr[8 * 3] - dataptr[8 * 4];
+
+        /* Even part */
+
+        tmp10 = tmp0 + tmp3; /* phase 2 */
+        tmp13 = tmp0 - tmp3;
+        tmp11 = tmp1 + tmp2;
+        tmp12 = tmp1 - tmp2;
+
+        dataptr[8 * 0] = tmp10 + tmp11; /* phase 3 */
+        dataptr[8 * 4] = tmp10 - tmp11;
+
+        z1 = (tmp12 + tmp13) * ((float)0.707106781); /* c4 */
+        dataptr[8 * 2] = tmp13 + z1;           /* phase 5 */
+        dataptr[8 * 6] = tmp13 - z1;
+
+        /* Odd part */
+
+        tmp10 = tmp4 + tmp5; /* phase 2 */
+        tmp11 = tmp5 + tmp6;
+        tmp12 = tmp6 + tmp7;
+
+        /* The rotator is modified from fig 4-8 to avoid extra negations. */
+        z5 = (tmp10 - tmp12) * ((float)0.382683433); /* c6 */
+        z2 = ((float)0.541196100) * tmp10 + z5;      /* c2-c6 */
+        z4 = ((float)1.306562965) * tmp12 + z5;      /* c2+c6 */
+        z3 = tmp11 * ((float)0.707106781);           /* c4 */
+
+        z11 = tmp7 + z3; /* phase 5 */
+        z13 = tmp7 - z3;
+
+        dataptr[8 * 5] = z13 + z2; /* phase 6 */
+        dataptr[8 * 3] = z13 - z2;
+        dataptr[8 * 1] = z11 + z4;
+        dataptr[8 * 7] = z11 - z4;
+
+        dataptr++; /* advance pointer to next column */
+    }
+}
+
+static const int dct_transform[64] = {
+    // 2896,  2896,  2896,  2896,  2896,  2896,  2896,  2896,
+    // 4017,  3405, 2275,  799,   -799,  -2275, -3405, -4017,
+    // 3784,  1567,  -1567, -3784, -3784, -1567, 1567,  3784,
+    // 3405,  -799,  -4017, -2275, 2275,  4017, 799,   -3405,
+    // 2896,  -2896, -2896, 2896,  2896,  -2896, -2896, 2896,
+    // 2275,  -4017, 799,   3405,  -3405, -799,  4017,  -2275,
+    // 1567,  -3784, 3784,  -1567, -1567, 3784,  -3784, 1567,
+    // 799,   -2275, 3405,  -4017, 4017,  -3405, 2275,  -799,
+    5792,     5792,     5792,     5792,     5792,     5792,     5792,     5792, 
+    8034,     6811,     4551,     1598,    -1598,    -4551,    -6811,    -8034, 
+    7568,     3134,    -3134,    -7568,    -7568,    -3134,     3134,     7568, 
+    6811,    -1598,    -8034,    -4551,     4551,     8034,     1598,    -6811, 
+    5792,    -5792,    -5792,     5792,     5792,    -5792,    -5792,     5792, 
+    4551,    -8034,     1598,     6811,    -6811,    -1598,     8034,    -4551, 
+    3134,    -7568,     7568,    -3134,    -3134,     7568,    -7568,     3134, 
+    1598,    -4551,     6811,    -8034,     8034,    -6811,     4551,    -1598,
+};
 
 static inline void 
 dct_1d_8(const int16_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++){
-        int tmp = 0;
+        out[i] = 0;
         for (int u = 0; u < 8; ++u) {
-            tmp += kIDCTMatrix[8 * i + u] * in[u * stride];
+            out[i] += dct_transform[8 * i + u] * in[u * stride];
         }
-        out[i] = tmp;
+        out[i] >>= 1;
     }
 }
 
-void dct_8x8(const int16_t *block, int16_t *out, int stride) {
-    int16_t coldcts[64];
-    const int kColScale = 11;
-    const int kColRound = 1 << (kColScale - 1);
-    for (int x = 0; x < 8; x++) {
-        int colbuff[8];
-        dct_1d_8(block, 8, colbuff);
-        for (int y = 0; y < 8; y++) {
-            coldcts[y * 8 + x] = (colbuff[y] + kColRound) >> kColScale;
+static void
+fdct_8x8_8(void *data, int bitdepth) {
+    int16_t *block = (int16_t *)data;
+    int16_t rowdcts[64];
+    const int kRowScale = 11;
+    const int kRowRound = (1 << (kRowScale - 1));
+    //do for each row
+    for (int y = 0; y < 8; y++) {
+        int rowbuf[8];
+        dct_1d_8(block + y * 8, 1, rowbuf);
+        for (int x = 0; x < 8; x++) {
+            rowdcts[y * 8 + x] = (rowbuf[x] + kRowRound) >> kRowScale;
+            // coldcts[y * 8 + x] = colbuff[y];
         }
     }
-    const int kRowScale = 18;
-    const int kRowRound = 257 << (kRowScale - 1); // includes offset by 128
-    for (int y = 0; y < 8; y++) {
-        int rowbuf[8] = {0};
-        dct_1d_8(coldcts, 1, rowbuf);
-        for (int x = 0; x < 8; x++) {
-            out[y * stride + x] = ((rowbuf[x] + kRowRound) >> kRowScale);
+    // printf("intermedia:\n");
+    // for (int i = 0; i < 8; i++) {
+    //     for (int j = 0; j < 8; j++) {
+    //         printf("%d ", rowdcts[8 * i + j]);
+    //     }
+    //     printf("\n");
+    // }
+    // printf("\n");
+    const int kColScale = 12;
+    const int kColRound = 1 << (kColScale - 1);
+    for (int x = 0; x < 8; x++) {
+        int colbuf[8] = {0};
+        dct_1d_8(&rowdcts[x], 8, colbuf);
+        for (int y = 0; y < 8; y++) {
+            block[y * 8 + x] = ((colbuf[y] + kColRound) >> kColScale);
+            // out[y * stride + x] = rowbuf[x];
         }
     }
 }
@@ -595,6 +715,7 @@ static const struct dct_ops dops[DCT_BITLEN_MAX] = {
     {
         .bitdepth = 8,
         .idct_8x8 = idct_8x8_8,
+        .fdct_8x8 = fdct_8x8_8,
     },
     {
         .bitdepth = 16,

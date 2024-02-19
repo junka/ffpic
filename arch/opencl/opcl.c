@@ -6,8 +6,11 @@
 
 #include "accl.h"
 #include "opcl.h"
+#include "vlog.h"
 
 #include "opcl.cl_xx.h"
+
+VLOG_REGISTER(opcl, INFO)
 
 struct opcl_priv {
     cl_device_id device_id; // device ID
@@ -107,9 +110,9 @@ void opcl_amd_init(void) {
     for (cl_uint i = 0; i < num_platforms; i++) {
         const cl_platform_id pid = platform_ids[i];
         clGetPlatformInfo(pid, CL_PLATFORM_NAME, 500, dname, NULL);
-        printf("Platform #%u: %s\n", i + 1, dname);
+        // printf("Platform #%u: %s\n", i + 1, dname);
         clGetPlatformInfo(pid, CL_PLATFORM_VERSION, 500, dname, NULL);
-        printf("Version: %s\n", dname);
+        // printf("Version: %s\n", dname);
 
         cl_device_id dev_ids[8];
         cl_uint num_devices;
@@ -126,7 +129,7 @@ void opcl_amd_init(void) {
                 clGetDeviceInfo(did, CL_DEVICE_NAME, sizeof(dname), dname, NULL);
                 if (strstr(dname, "AMD")) {
                     // choose high-performace gpu automatically
-                    printf("Device #%u: Name: %s\n", j + 1, dname);
+                    VINFO(opcl, "Device #%u: Name: %s", j + 1, dname);
                     priv.device_id = did;
                     break;
                 }
@@ -135,22 +138,22 @@ void opcl_amd_init(void) {
     }
 
     clGetDeviceInfo(did, CL_DEVICE_VERSION, sizeof(dname), dname, NULL);
-    printf("\tVersion: %s\n", dname);
+    VINFO(opcl, "Version: %s", dname);
 
     cl_uint max_cu;
     clGetDeviceInfo(did, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(max_cu),
                     &max_cu, NULL);
-    printf("\tCompute Units: %u\n", max_cu);
+    VINFO(opcl, "Compute Units: %u", max_cu);
 
     cl_ulong local_mem_size;
     clGetDeviceInfo(did, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong),
                     &local_mem_size, 0);
-    printf("\tLocal Memory Size: %"PRIu64"\n", local_mem_size);
+    VINFO(opcl, "Local Memory Size: %" PRIu64 , local_mem_size);
 
     cl_ulong const_mem_size;
     clGetDeviceInfo(did, CL_DEVICE_MAX_CONSTANT_BUFFER_SIZE,
                     sizeof(cl_ulong), &const_mem_size, 0);
-    printf("\tConstant Memory Size: %"PRIu64"\n", const_mem_size);
+    VINFO(opcl, "Constant Memory Size: %" PRIu64, const_mem_size);
     priv.context = clCreateContext(NULL, 1, &priv.device_id, NULL, NULL, &ret);
     if (ret != CL_SUCCESS) {
         fprintf(stderr, "clCreateContext failed (error %d)\n", err);
@@ -164,7 +167,7 @@ void opcl_amd_init(void) {
         return;
     }
     size_t len = srcstr_len;
-    printf("%d: %s\n", srcstr_len, prog_src);
+    VINFO(opcl, "source code %d: %s", srcstr_len, prog_src);
     priv.program = clCreateProgramWithSource(priv.context, 1, &prog_src,
                                              (const size_t *)&len, &ret);
     if (ret != CL_SUCCESS) {

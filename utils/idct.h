@@ -16,15 +16,15 @@ struct dct_ops {
     void (*idct_4x4)(void *in, int bitdepth);
     void (*idct_8x8)(void *in, int bitdepth);
 
-    void (*dct_4x4)(const void *in, void *out, int bitdepth);
-    void (*dct_8x8)(const void *in, void *out, int bitdepth);
+    void (*fdct_4x4)(void *in, int bitdepth);
+    void (*fdct_8x8)(void *in, int bitdepth);
 };
 
 const struct dct_ops *get_dct_ops(int component_bits);
 
 void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp);
 
-void dct_8x8(const int16_t *block, int16_t *out, int stride);
+void dct_float(float *data);
 
 #ifdef __cplusplus
 }

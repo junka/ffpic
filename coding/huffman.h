@@ -12,18 +12,21 @@ extern "C"{
 #define MAX_BIT_LEN (16)
 #define FAST_HF_BITS (8)
 #define FAST_HF_SIZE (1<<FAST_HF_BITS)
+#define SLOW_HF_BITS (MAX_BIT_LEN - FAST_HF_BITS)
 
 typedef struct huffman_tree {
     uint8_t tid;
     uint8_t fast_bitlen[FAST_HF_SIZE];    /* lookup table for 8 bit codec*/
     uint8_t fast_symbol[FAST_HF_SIZE];
+
     uint8_t fast_codec[FAST_HF_SIZE];                     // for encoding
     uint8_t fast_codbits[FAST_HF_SIZE];                   // for encoding
-    uint16_t* slow_codec[MAX_BIT_LEN - FAST_HF_BITS];     /* symbols length over 8 bits */
-    uint16_t* slow_symbol[MAX_BIT_LEN - FAST_HF_BITS];
-    uint8_t slow_cnt[MAX_BIT_LEN - FAST_HF_BITS];
-    int maxbitlen;       	/*maximum number of bits a single code can get */
-    int n_codes;       		/*number of symbols in the alphabet = number of codes */
+
+    uint16_t *slow_codec[SLOW_HF_BITS];   /* symbols length greater than 8 bits */
+    uint16_t *slow_symbol[SLOW_HF_BITS];
+    uint8_t slow_cnt[SLOW_HF_BITS];
+    int maxbitlen;       /* maximum number of bits a single code can get */
+    int n_codes;       	 /* number of symbols in the alphabet = number of codes */
 } huffman_tree;
 
 struct huffman_symbol {
@@ -54,8 +57,6 @@ void huffman_build_lookup_table(huffman_tree *tree, uint8_t id,
 void huffman_dump_table(FILE *f, huffman_tree *tree);
 
 int huffman_decode_symbol(struct huffman_codec *codec, huffman_tree *codetree);
-
-int huffman_read_symbol(struct huffman_codec *codec, int n);
 
 /* start read bitstream from next byte boundary */
 void huffman_reset_stream(struct huffman_codec *codec);

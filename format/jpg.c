@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <assert.h>
+#include <string.h>
 
 #include "bitstream.h"
 #include "file.h"
@@ -77,7 +78,7 @@ read_marker_skip_null(FILE *f)
 }
 
 
-void 
+static void
 read_dqt(JPG *j, FILE *f)
 {
     uint8_t c;
@@ -91,21 +92,39 @@ read_dqt(JPG *j, FILE *f)
         uint8_t id = (c & 0xF);
         uint8_t precision = (c >> 4) & 0xF;
         if (id > 3) {
-            VERR(jpg, "invalid dqt id");
+            VERR(jpg, "invalid dqt id %d", id);
         }
         j->dqt[id].id = id;
         j->dqt[id].precision = precision;
         for (int i = 0; i < 64; i ++) {
             fread(&j->dqt[id].tdata[zigzag[i]], precision + 1, 1, f);
             if (precision == 1) {
-              j->dqt[id].tdata[zigzag[i]] = SWAP(j->dqt[id].tdata[zigzag[i]]);
+                j->dqt[id].tdata[zigzag[i]] = SWAP(j->dqt[id].tdata[zigzag[i]]);
             }
         }
         tlen -= ((precision + 1) << 6);
+        VDBG(jpg, "dqt left %d", tlen);
     }
 }
 
-void
+static void
+write_dqt(int id, const uint16_t *quant, FILE *f)
+{
+    //precision = 0, use 8bit
+    uint16_t mark = DQT;
+    uint8_t c = id & 0xF;
+    uint16_t tlen = 64 + 1 + 2;
+    fwrite(&mark, 2, 1, f);
+    tlen = SWAP(tlen);
+    fwrite(&tlen, 2, 1, f);
+    fwrite(&c, 1, 1, f);
+    for (int i = 0; i < 64; i++) {
+        uint8_t q = quant[zigzag[i]];
+        fputc(q, f);
+    }
+}
+
+static void
 read_dht(JPG* j, FILE *f)
 {
     uint16_t tlen;
@@ -133,9 +152,72 @@ read_dht(JPG* j, FILE *f)
         j->dht[ac][id].len = len;
         tlen -= len;
     }
-
 }
 
+// see ITU-T81 Table K.3 and K.5
+const uint8_t y_dc_count[16] = {
+    0, 1, 5, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+};
+const uint8_t y_dc_sym[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+const uint8_t y_ac_count[16] = {
+    0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125,
+};
+const uint8_t y_ac_sym[] = {
+    0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06,
+    0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+    0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72,
+    0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+    0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45,
+    0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+    0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+    0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3,
+    0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+    0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9,
+    0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4,
+    0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
+// see ITU-T81 Table K.4 and K.6
+const uint8_t uv_dc_count[16] = {0, 3, 1, 1, 1, 1, 1, 1,
+                                 1, 1, 1, 0, 0, 0, 0, 0};
+const uint8_t uv_dc_sym[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+const uint8_t uv_ac_count[16] = {
+    0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119,
+};
+const uint8_t uv_ac_sym[] = {
+    0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41,
+    0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+    0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1,
+    0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+    0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44,
+    0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+    0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
+    0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
+    0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+    0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+    0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+    0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4,
+    0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
+
+static void
+write_dht(int id, int class, const uint8_t count[16], const uint8_t *sym, FILE *f)
+{
+    // precision = 0, use 8bit
+    uint16_t mark = DHT;
+    uint8_t c = (id & 0xF) | (class << 4);
+    fwrite(&mark, 2, 1, f);
+    int total = 0;
+    for(int i = 0; i < 16; i++) {
+        total += count[i];
+    }
+    uint16_t tlen = 16 + total + 1 + 2;
+    tlen = SWAP(tlen);
+    fwrite(&tlen, 2, 1, f);
+    fputc(c, f);
+    fwrite(count, 1, 16, f);
+    fwrite(sym, 1, total, f);
+}
 
 static int 
 get_vlc(int code, int bitlen)
@@ -152,7 +234,7 @@ get_vlc(int code, int bitlen)
 static int
 write_vlc(int code)
 {
-    int abscode = code ? code : -code;
+    int abscode = code > 0 ? code : -code;
     int mask = 1 << 15;
     if (abscode == 0) {
         return 0;
@@ -165,9 +247,8 @@ write_vlc(int code)
     return i + 1;
 }
 
-//decode vec to decoder buf
 static bool
-decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf[64])
+decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[64])
 {
     int dc, ac;
     huffman_tree *dc_tree = d->dc;
@@ -178,15 +259,7 @@ decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf
         VERR(jpg, "invalid dc value");
         return false;
     }
-    // if (dc != 0) {
-    //     int code = huffman_read_symbol(hdec, dc);
-    //     if ((code << 1) < (1 << dc)) {
-    //         dc = code + 1 - (1 << dc);
-    //     } else {
-    //         dc = code;
-    //     }
-    // }
-    dc = get_vlc(huffman_read_symbol(hdec, dc), dc);
+    dc = get_vlc(READ_BITS(hdec->v, dc), dc);
     dc += d->prev_dc;
     d->prev_dc = dc;
     buf[0] = dc;
@@ -195,7 +268,7 @@ decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf
     for (int i = 1; i < 64;) {
         ac = huffman_decode_symbol(hdec, ac_tree);
         if (ac == -1) {
-            VERR(jpg, "invalid ac value");
+            VERR(jpg, "invalid ac value for %d", i);
             return false;
         }
         int lead_zero = (ac >> 4) & 0xF;
@@ -216,7 +289,7 @@ decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf
         }
 
         if (ac) {
-            ac = get_vlc(huffman_read_symbol(hdec, ac), ac);
+            ac = get_vlc(READ_BITS(hdec->v, ac), ac);
             buf[zigzag[i++]] = ac;
         }
     }
@@ -224,6 +297,14 @@ decode_data_unit(struct huffman_codec * hdec, struct jpg_decoder *d, int16_t buf
     for (int i = 0; i < 64; i++) {
         buf[i] *= d->quant[i];
     }
+#if 0
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++) {
+            fprintf(vlog_get_stream(), "%d ", buf[i]);
+        }
+        fprintf(vlog_get_stream(), "\n");
+    }
+#endif
     return true;
 }
 
@@ -241,6 +322,8 @@ init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
     struct huffman_symbol *acsym = huffman_symbol_alloc(j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
     huffman_build_lookup_table(dc_tree, dc_ht_id, dcsym);
     huffman_build_lookup_table(ac_tree, ac_ht_id, acsym);
+    // huffman_dump_table(vlog_get_stream(), dc_tree);
+    // huffman_dump_table(vlog_get_stream(), ac_tree);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -266,51 +349,13 @@ destroy_decoder(struct jpg_decoder *d)
     free(d);
 }
 
-
-#if 0
-static int 
-read_next_rst_marker(struct jpg_decoder *d)
-{
-    int rst_marker_found = 0;
-    int marker;
-
-    int m = huffman_read_symbol(8);
-    /* Parse marker */
-    while (!rst_marker_found) {
-        while (m != 0xff && m != -1) {
-            m = huffman_read_symbol(8);
-        }
-        /* Skip any padding ff byte (this is normal) */
-        m = huffman_read_symbol(8);
-        while (m == 0xff && m!= -1) {
-            m = huffman_read_symbol(8);
-        }
-        if (m == -1) {
-            VERR(jpg, "wrong boudary");
-            return -1;
-        }
-
-        marker = m;
-        if ((0xD0 + d->last_rst_marker_seen) == (marker)) {
-            rst_marker_found = 1;
-            VERR(jpg, "reset marker found");
-        } else if ((marker) >= 0xD0 && MARKER(marker) <= 0xD7) {
-            VERR(jpg, "Wrong Reset marker found, abording");
-        } else if (MARKER(marker) == EOI)
-            return 0;
-    }
-
-    d->last_rst_marker_seen++;
-    d->last_rst_marker_seen &= 7;
-
-    return 0;
-}
-#endif
-
 static void
 JPG_decode_image(JPG* j)
 {
     uint8_t *data = j->data;
+    if (!j->data || !j->data_len) {
+        return ;
+    }
     int len = j->data_len;
     j->data = NULL;
     // each component owns a decoder, could be CMYK
@@ -323,10 +368,8 @@ JPG_decode_image(JPG* j)
         d[i] = malloc(sizeof(struct jpg_decoder));
         init_decoder(j, d[i], i);
     }
-    // huffman_dump_table(stdout, d[0]->dc);
-    // huffman_dump_table(stdout, d[0]->ac);
 
-    //stride value from dc
+    // stride value from dc
     int ystride = j->sof.colors[0].vertical * 8;  //means lines per mcu
     int xstride = j->sof.colors[0].horizontal * 8;  //means rows per mcu
 
@@ -335,7 +378,6 @@ JPG_decode_image(JPG* j)
     int height = j->sof.height; //((j->sof.height + 7) >> 3) << 3;
     int pitch = width * 4;
     int bytes_blockline = pitch * ystride;
-    int bytes_mcu = xstride * 4;
 
     int restarts = j->dri.interval;
 
@@ -354,7 +396,6 @@ JPG_decode_image(JPG* j)
         assert(h * v <= 4);
     }
     for (int y = 0; y <= height / ystride; y++) {
-        //block start
         ptr = j->data + y * bytes_blockline;
         for (int x = 0; x < width; x += xstride) {
             // for YUV420, get 4 DCU for Y and 1 DCU for U and 1 DCU for V
@@ -364,8 +405,9 @@ JPG_decode_image(JPG* j)
                 for (int vi = 0; vi < v; vi ++) {
                     for (int hi = 0; hi < h; hi ++) {
                         if (!decode_data_unit(hdec, d[i], &Y[i][64 * (vi * h + hi)])) {
-                            VDBG(jpg, "fail at %d %d", x, y);
-                            exit(-1);
+                            // those MCU at the edge could be incomplete
+                            VDBG(jpg, "fail at (%d, %d) for %d", x, y, i);
+                            continue;
                         }
                         dct->idct_8x8(&Y[i][64 * (vi * h + hi)], 8);
                     }
@@ -394,7 +436,7 @@ JPG_decode_image(JPG* j)
                     // read_next_rst_marker(d[0]);
                 }
             }
-            ptr += bytes_mcu; //skip to next 
+            ptr += xstride * 4; // skip to next
         }
     }
     // hexdump(stdout, "jpg decode data", j->data, 160);
@@ -466,6 +508,93 @@ read_sos(JPG* j, FILE *f)
     fread(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
     fread(&j->sos.predictor_start, 3, 1, f);
     read_compressed_image(j, f);
+
+}
+
+void
+write_sos(uint16_t len, FILE *f)
+{
+    uint16_t mark = SOS;
+    fwrite(&mark, 2, 1, f);
+    len = SWAP(len);
+    fwrite(&len, 2, 1, f);
+    uint8_t num = 3;
+    fwrite(&num, 1, 1, f);
+    struct comp_sel c[3] = {
+        {0, 0, 0},
+        {1, 1, 1},
+        {2, 1, 1}
+    };
+    fwrite(c, sizeof(struct comp_sel), 3, f);
+    uint8_t spe_start = 0, spe_end = 63, approx = 0;
+    fwrite(&spe_start, 1, 1, f);
+    fwrite(&spe_end, 1, 1, f);
+    fwrite(&approx, 1, 1, f);
+}
+
+void
+read_sof(JPG *j, FILE *f)
+{
+    fread(&j->sof, 8, 1, f);
+    j->sof.len = SWAP(j->sof.len);
+    j->sof.height = SWAP(j->sof.height);
+    j->sof.width = SWAP(j->sof.width);
+    fread(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num,
+          f);
+    VDBG(jpg, "height %d, width %d, comp %d", j->sof.height, j->sof.width,
+         j->sof.components_num);
+    for (int i = 0; i < j->sof.components_num; i++) {
+        VDBG(jpg, "cid %d vertical %d, horizon %d, quatation id %d",
+             j->sof.colors[i].cid, j->sof.colors[i].vertical,
+             j->sof.colors[i].horizontal, j->sof.colors[i].qt_id);
+    }
+}
+
+void
+write_sof(uint16_t height, uint16_t width, FILE *f)
+{
+    uint16_t mark = SOF0;
+    uint16_t len = 17;
+    uint8_t precision = 8; 
+    uint8_t components_num = 3;
+    fwrite(&mark, 2, 1, f);
+    len = SWAP(len);
+    fwrite(&len, 2, 1, f);
+    fwrite(&precision, 1, 1, f);
+    height = SWAP(height);
+    fwrite(&height, 2, 1, f);
+    width = SWAP(width);
+    fwrite(&width, 2, 1, f);
+    fwrite(&components_num, 1, 1, f);
+    struct jpg_component com[3] = {
+        {1, 2, 2, 0},
+        {2, 1, 1, 1},
+        {3, 1, 1, 1},
+    };
+    fwrite(com, sizeof(struct jpg_component), 3, f);
+}
+
+void
+write_soi(FILE *f)
+{
+    uint16_t mark = SOI;
+    fwrite(&mark, 2, 1, f);
+}
+
+void write_eoi(FILE *f)
+{
+    uint16_t mark = EOI;
+    fwrite(&mark, 2, 1, f);
+}
+
+void
+read_app0(JPG *j, FILE *f)
+{
+    fread(&j->app0, 16, 1, f);
+    if (j->app0.xthumbnail * j->app0.ythumbnail) {
+        j->app0.data = malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
+        fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail, f);
+    }
 }
 
 static struct pic *
@@ -485,22 +614,11 @@ JPG_load_one(FILE *f)
         switch (m) {
         case SOF0:
             VDBG(jpg, "SOF0");
-            fread(&j->sof, 8, 1, f);
-            j->sof.len = SWAP(j->sof.len);
-            j->sof.height = SWAP(j->sof.height);
-            j->sof.width = SWAP(j->sof.width);
-            fread(j->sof.colors, sizeof(struct jpg_component),
-                      j->sof.components_num, f);
+            read_sof(j, f);
             break;
         case APP0:
             VDBG(jpg, "APP0");
-            fread(&j->app0, 16, 1, f);
-            if (j->app0.xthumbnail * j->app0.ythumbnail) {
-                j->app0.data =
-                    malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
-                fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail,
-                      f);
-            }
+            read_app0(j, f);
             break;
         case DHT:
             VDBG(jpg, "DHT");
@@ -588,7 +706,7 @@ JPG_free(struct pic *p)
             }
         }
     }
-    if (j->data) {
+    if (j->data && j->data_len) {
         free(j->data);
     }
     pic_free(p);
@@ -666,32 +784,26 @@ JPG_info(FILE *f, struct pic* p)
         fprintf(f, "-----------------------\n");
         fprintf(f, "\tComment: %s\n", j->comment.data);
     }
+    fprintf(f, "-----------------------\n");
+    fprintf(f, "MacroBlock num: %d\n", ((j->sof.width + 7)/ 8) * ((j->sof.height + 7) / 8));
 }
+
+static const uint16_t y_quant[64] = {
+    16, 11, 10, 16, 24,  40,  51,  61,  12, 12, 14, 19, 26,  58,  60,  55,
+    14, 13, 16, 24, 40,  57,  69,  56,  14, 17, 22, 29, 51,  87,  80,  62,
+    18, 22, 37, 56, 68,  109, 103, 77,  24, 35, 55, 64, 81,  104, 113, 92,
+    49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99};
+static const uint16_t uv_quant[64] = {
+    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+};
 
 static int init_encoder(struct jpg_decoder *d, uint8_t comp_id,
                         struct huffman_symbol *dc_sym,
                         struct huffman_symbol *ac_sym) {
     // see ITU-T81 Table K.1 and K.2, for Y:UV 2:1
-    static const uint16_t y_quant[64] = {
-        16, 11, 10, 16, 24,  40,  51,  61,
-        12, 12, 14, 19, 26,  58,  60,  55,
-        14, 13, 16, 24, 40,  57,  69,  56,
-        14, 17, 22, 29, 51,  87,  80,  62,
-        18, 22, 37, 56, 68,  109, 103, 77,
-        24, 35, 55, 64, 81,  104, 113, 92,
-        49, 64, 78, 87, 103, 121, 120, 101,
-        72, 92, 95, 98, 112, 100, 103, 99
-    };
-    static const uint16_t uv_quant[64] = {
-        17, 18, 24, 47, 99, 99, 99, 99,
-        18, 21, 26, 66, 99, 99, 99, 99,
-        24, 26, 56, 99, 99, 99, 99, 99,
-        47, 66, 99, 99, 99, 99, 99, 99,
-        99, 99, 99, 99, 99, 99, 99, 99,
-        99, 99, 99, 99, 99, 99, 99, 99,
-        99, 99, 99, 99, 99, 99, 99, 99,
-        99, 99, 99, 99, 99, 99, 99, 99,
-    };
 
     huffman_tree *dc_tree = huffman_tree_init();
     huffman_tree *ac_tree = huffman_tree_init();
@@ -713,10 +825,12 @@ static int init_encoder(struct jpg_decoder *d, uint8_t comp_id,
     return 0;
 }
 
-static void encode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d,
-                             int16_t *buf)
+static void
+encode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d,
+                 int16_t *buf)
 {
-    uint8_t diff = buf[0] - d->prev_dc;
+    int diff = buf[0] - d->prev_dc;
+    VINFO(jpg, " %d, %d, %d", diff, buf[0], d->prev_dc);
     d->prev_dc = buf[0];
 
     // F.1.4.1, Figure F.4
@@ -725,10 +839,11 @@ static void encode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d,
     if (diff < 0) {
         diff = (1 << bitlen) + diff - 1;
     }
+    VINFO(jpg, "write %d in %d bits", diff, bitlen);
     WRITE_BITS(hdec->v, diff, bitlen);
 
     int last_nz = 63;
-    for (int i = 63; i > 1; i--) {
+    for (int i = 63; i > 0; i--) {
         if (buf[i] != 0) {
             last_nz = i;
             break;
@@ -743,11 +858,14 @@ static void encode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d,
             j ++;
         }
         for (int n = 0; n < lead_zero / 16; n++) {
-            huffman_encode_symbol_8bit(hdec, d->ac, EOB);
+            VINFO(jpg, "AC write 0xF0");
+            huffman_encode_symbol_8bit(hdec, d->ac, 0xF << 4 | EOB);
         }
         lead_zero %= 16;
         int aclen = write_vlc(buf[j]);
         huffman_encode_symbol_8bit(hdec, d->ac, lead_zero << 4 | aclen);
+        VINFO(jpg, "AC write %d in %d bits", buf[j], aclen);
+        WRITE_BITS(hdec->v, buf[j], aclen);
         i = j;
     }
 
@@ -764,8 +882,17 @@ push_and_quant(struct huffman_codec *hdec, struct jpg_decoder *d,
     int16_t data[64];
     // do quant and zigzag
     for (int i = 0; i < 64; i++) {
-        data[i] = buf[zigzag[i]] / d->quant[zigzag[i]];
+        data[i] = (int16_t)((((float)buf[zigzag[i]]) / (((float)d->quant[zigzag[i]]*80+50)/100*8)));
+        data[i] = clamp(data[i], 255);
     }
+    fprintf(vlog_get_stream(), "after quant \n");
+    for (int i = 0; i < 8; i++) {
+        for (int j = 0; j < 8; j++) {
+            fprintf(vlog_get_stream(), "%d ", data[i * 8 + j]);
+        }
+        fprintf(vlog_get_stream(), "\n");
+    }
+
     encode_data_unit(hdec, d, data);
     for (int i = 0; i < 64; i++) {
         yuv[i] = data[i];
@@ -777,73 +904,19 @@ void JPG_encode(struct pic *p, const char *fname)
     // int16_t *Y = malloc(p->height * p->pitch * 2);
     // int16_t *U = malloc(p->height * p->pitch / 2);
     // int16_t *V = malloc(p->height * p->pitch / 2);
-    int16_t coeff[64];
+    // int16_t coeff[64];
     int y_stride = 16;
     int x_stride = 16;
     struct huffman_codec *hdec = huffman_codec_init(NULL, 0);
     struct jpg_decoder *d[3];
 
-    // see ITU-T81 Table K.3 and K.5
-    const uint8_t y_dc_count[16] = {
-        0, 1, 5, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-    };
-    const uint8_t y_dc_sym[] = {
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
-    };
-    const uint8_t y_ac_count[16] = {
-        0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 125,
-    };
-    const uint8_t y_ac_sym[] = {
-        0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12,
-        0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07,
-        0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
-        0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0,
-        0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16,
-        0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
-        0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
-        0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49,
-        0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
-        0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
-        0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79,
-        0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
-        0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98,
-        0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
-        0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
-        0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5,
-        0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4,
-        0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
-        0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
-        0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8,
-        0xf9, 0xfa
-    };
-    // see ITU-T81 Table K.4 and K.6
-    const uint8_t uv_dc_count[16] = {
-        0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0
-    };
-    const uint8_t uv_dc_sym[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    const uint8_t uv_ac_count[16] = {
-        0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119,
-    };
-    const uint8_t uv_ac_sym[] = {
-        0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41,
-        0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
-        0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1,
-        0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
-        0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44,
-        0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
-        0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74,
-        0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-        0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
-        0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
-        0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
-        0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
-        0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4,
-        0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
     struct huffman_symbol *y_dc = huffman_symbol_alloc((uint8_t *)y_dc_count, (uint8_t *)y_dc_sym);
     struct huffman_symbol *y_ac = huffman_symbol_alloc((uint8_t *)y_ac_count, (uint8_t *)y_ac_sym);
     struct huffman_symbol *uv_dc = huffman_symbol_alloc((uint8_t *)uv_dc_count, (uint8_t *)uv_dc_sym);
     struct huffman_symbol *uv_ac = huffman_symbol_alloc((uint8_t *)uv_ac_count, (uint8_t *)uv_ac_sym);
 
+    FILE *f = fopen(fname, "wb");
+    write_soi(f);
     for (int i = 0; i < 3; i++) {
         d[i] = malloc(sizeof(struct jpg_decoder));
         if (i == 0) {
@@ -852,36 +925,67 @@ void JPG_encode(struct pic *p, const char *fname)
             init_encoder(d[i], 1, uv_dc, uv_ac);
         }
     }
+    write_dqt(0, y_quant, f);
+    write_dqt(1, uv_quant, f);
+    write_sof(p->height, p->width, f);
+    write_dht(0, 0, y_dc_count, y_dc_sym, f);
+    write_dht(0, 1, y_ac_count, y_ac_sym, f);
+    write_dht(1, 0, uv_dc_count, uv_dc_sym, f);
+    write_dht(1, 1, uv_ac_count, uv_ac_sym, f);
 
     int16_t Y[64 * 4], U[64], V[64];
+    float tmp[64];
     // prepare huffman code table, planar yuv
     uint8_t *yuv = malloc(p->height * p->width * 3 / 2);
     uint8_t *u = yuv + p->height * p->width;
     uint8_t *v = u + p->height * p->width/4;
 
     //divide and transform in block size, 420
+    printf("vert %d, horiz %d\n", p->height / y_stride, p->width / x_stride);
+    const struct dct_ops *dct = get_dct_ops(8);
+
+
     for (int y = 0; y < p->height / y_stride; y++) {
         for (int x = 0; x < p->width / x_stride; x ++) {
             // including downsample
-            BGRA32_to_YUV420((uint8_t *)p->pixels + y * y_stride * p->pitch + x * x_stride, p->pitch,
+            BGR24_to_YUV420((uint8_t *)p->pixels + y * y_stride * p->pitch + x * x_stride, p->pitch,
                              Y, U, V);
+            for (int i = 0; i < 8; i++) {
+                for (int j = 0; j < 8; j++) {
+                    fprintf(vlog_get_stream(), "%d ", Y[i * 8 + j]);
+                    tmp[i*8+j] = Y[i*8+j];
+                }
+                fprintf(vlog_get_stream(), "\n");
+            }
+            fprintf(vlog_get_stream(), "\n");
+            dct->fdct_8x8(Y, 8);
 
-            dct_8x8(Y, coeff, 16);
-            push_and_quant(hdec, d[0], yuv + (y * p->width / 4 + x * 4) * 64, coeff);
-            dct_8x8(Y + 64, coeff, 16);
-            push_and_quant(hdec,d[0], yuv + (y * p->width / 4 + x * 4 + 1) * 64, coeff);
-            dct_8x8(Y + 128, coeff, 16);
-            push_and_quant(hdec, d[0], yuv + (y * p->width / 4 + x * 4 + 2) * 64, coeff);
-            dct_8x8(Y + 192, coeff, 16);
-            push_and_quant(hdec, d[0], yuv + (y * p->width / 4 + x * 4 + 3) * 64, coeff);
+            fprintf(vlog_get_stream(), "Block: \n");
+            for (int i = 0; i < 8; i++) {
+                for (int j = 0; j < 8; j++) {
+                    fprintf(vlog_get_stream(), "%d ", Y[i * 8 + j]);
+                }
+                fprintf(vlog_get_stream(), "\n");
+            }
+            push_and_quant(hdec, d[0], yuv + (y * p->width / 4 + x * 4) * 64, Y);
 
-            dct_8x8(U, coeff, 8);
+            dct->fdct_8x8(Y + 64, 8);
+            push_and_quant(hdec, d[0],
+                           yuv + (y * p->width / 4 + x * 4 + 1) * 64, Y + 64);
+            dct->fdct_8x8(Y + 128, 8);
+            push_and_quant(hdec, d[0],
+                           yuv + (y * p->width / 4 + x * 4 + 2) * 64, Y + 128);
+            dct->fdct_8x8(Y + 192, 8);
+            push_and_quant(hdec, d[0],
+                           yuv + (y * p->width / 4 + x * 4 + 3) * 64, Y + 192);
+
+            dct->fdct_8x8(U, 8);
             push_and_quant(hdec, d[1], u + (y * p->width / x_stride + x) * 64,
-                           coeff);
+                           U);
 
-            dct_8x8(V, coeff, 8);
+            dct->fdct_8x8(V, 8);
             push_and_quant(hdec, d[2], v + (y * p->width / x_stride + x) * 64,
-                           coeff);
+                           V);
         }
     }
     ALIGN_BYTE(hdec->v);
@@ -893,6 +997,11 @@ void JPG_encode(struct pic *p, const char *fname)
     }
 
     huffman_codec_free(hdec);
+
+    write_sos(hdec->v->len, f);
+    //write compressed data here
+    write_eoi(f);
+    fclose(f);
 }
 
 static struct file_ops jpg_ops = {

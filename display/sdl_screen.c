@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "SDL_events.h"
+#include "SDL_keycode.h"
 #include "SDL_render.h"
 #include "display.h"
 #include "exr.h"
@@ -59,6 +60,9 @@ void pic_poll_block(bool q)
             switch (e.type) {
             case SDL_QUIT:
             case SDL_KEYDOWN:
+                if (e.key.keysym.sym == SDLK_r) {
+                    // do rotation
+                }
                 quit = true;
                 break;
             case SDL_MOUSEBUTTONDOWN:

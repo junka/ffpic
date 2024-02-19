@@ -28,9 +28,9 @@ main(int argc, const char *argv[])
         return -1;
     }
     char title[128];
-    // FILE *logf = fopen("picinfo.log", "w+");
-    // vlog_init();
-    // vlog_openlog_stream(logf);
+    FILE *logf = fopen("picinfo.log", "w+");
+    vlog_init();
+    vlog_openlog_stream(logf);
 
     file_ops_init();
     accl_ops_init();

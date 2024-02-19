@@ -269,7 +269,7 @@ BMP_load(const char* filename)
     if (p->depth == 24) {
         p->format = CS_PIXELFORMAT_BGR24;
     } else if (p->depth == 32) {
-        p->format = CS_PIXELFORMAT_BGRA8888;
+        p->format = CS_PIXELFORMAT_ARGB32;
     }
     VINFO(bmp, "bitcount %d pixel format %s", p->depth, CS_GetPixelFormatName(p->format));
 
@@ -398,8 +398,8 @@ static uint8_t *alloc_bmp_with_head(uint32_t w, uint32_t h)
     // bmp info head
     info_p->size = 0x28;
     info_p->width = w;
-    info_p->height = -h;
-    info_p->planes = 0x01;
+    info_p->height = h;
+    info_p->planes = 1;
     info_p->bit_count = 32;
     info_p->compression = 0;
     info_p->size_image = w * h * 4;
@@ -411,11 +411,13 @@ static uint8_t *alloc_bmp_with_head(uint32_t w, uint32_t h)
     return d_ptr;
 }
 
-void BMP_encode(struct pic *p, const char * fname)
+void
+BMP_encode(struct pic *p, const char * fname)
 {
     FILE *fd = fopen(fname, "w");
-    uint8_t *data = alloc_bmp_with_head(p->width, p->height);
-    long file_length = (p->width * p->height * (p->depth >> 3)) + 54;
+    int width = ((p->width + 3) >> 2) << 2;
+    uint8_t *data = alloc_bmp_with_head(width, p->height);
+    long file_length = (p->height * p->pitch) + 54;
     uint8_t *file_p = data;
     uint8_t *file_p_tmp = NULL;
     uint8_t *b = (uint8_t *)p->pixels;
@@ -423,16 +425,11 @@ void BMP_encode(struct pic *p, const char * fname)
     file_p_tmp = file_p;
     file_p_tmp += 54;
     for (int i = 0; i < p->height; i++) {
-        for (int j = 0; j < p->width; j++) {
-            memcpy(file_p_tmp, b, 4);
-            b += 4;
-            file_p_tmp += 4;
-        }
+        memcpy(file_p_tmp + (p->height-1-i) * p->pitch, b + i * p->pitch, p->pitch);
     }
     fwrite(file_p, file_length, 1, fd);
-
-    free(data);
     fclose(fd);
+    free(data);
 }
 
 static struct file_ops bmp_ops = {

@@ -13,7 +13,7 @@ if("${FFPIC_ROOT}" STREQUAL "${FFPIC_CONFIG_DIR}")
     "And re-run CMake from the ffpic_build directory.")
 endif()
 
-project(FFPIC C CXX)
+project(FFPIC C)
 
 # GENERATED source property global visibility.
 if(POLICY CMP0118)
@@ -23,8 +23,12 @@ endif()
 # Enable generators like Xcode and Visual Studio to place projects in folders.
 set_property(GLOBAL PROPERTY USE_FOLDERS TRUE)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native -Werror -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+if(CMAKE_COMPILER_IS_GNUCXX)
+    message(STATUS "GCC detected, adding compile flags")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic -Wall -Wextra")
+endif(CMAKE_COMPILER_IS_GNUCXX)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2)
 
@@ -111,7 +115,6 @@ endif()
 
 add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_ACCL})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
-target_compile_options(ffpic PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function)
 
 if(OpenCL_FOUND)
   target_compile_options(ffpic PRIVATE -DENABLE_OPENCL)
@@ -122,9 +125,9 @@ add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c")
 add_executable(transcode "${FFPIC_ROOT}/app/transcode.c")
 
 if(SDL2_FOUND)
-add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
-target_link_libraries(sdlshow ffpic m)
-target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
+  add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
+  target_link_libraries(sdlshow ffpic m)
+  target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 endif(SDL2_FOUND)
 
 target_link_libraries(picinfo ffpic m)
@@ -139,16 +142,18 @@ if(SDL2_FOUND)
   message("SDL2 library found ${SDL2_INCLUDE_DIRS}")
   target_link_libraries(sdlshow ${SDL2_LIBRARIES})
 else(SDL2_FOUND)
-  message(FATAL_ERROR "SDL2 library not found")
+  message("SDL2 library not found")
 endif(SDL2_FOUND)
 
 if(OpenCL_FOUND)
   target_include_directories(ffpic PRIVATE ${OpenCL_INCLUDE_DIRS})
   target_link_libraries(ffpic OpenCL::OpenCL)
-  target_link_libraries(sdlshow OpenCL::OpenCL)
   target_link_libraries(picinfo OpenCL::OpenCL)
   target_link_libraries(transbmp OpenCL::OpenCL)
   target_link_libraries(transcode OpenCL::OpenCL)
+  if(SDL2_FOUND)
+    target_link_libraries(sdlshow OpenCL::OpenCL)
+  endif(SDL2_FOUND)
 endif()
 
 include(CTest)

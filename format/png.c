@@ -17,7 +17,7 @@
 
 VLOG_REGISTER(png, INFO)
 
-#define CRC_ASSER(a, b) b = ntohl(b);  assert(a == b);
+#define CRC_ASSER(a, b) b = SWAP(b);  assert(a == b);
 
 static int 
 PNG_probe(const char* filename)
@@ -228,6 +228,269 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
     }
 }
 
+static uint32_t
+read_ihdr(PNG *b, FILE *f, uint32_t crc32)
+{
+    fread(&b->ihdr, 1, sizeof(struct png_ihdr), f);
+    crc32 = update_crc(crc32, (uint8_t *)&b->ihdr, sizeof(struct png_ihdr));
+    b->ihdr.width = SWAP(b->ihdr.width);
+    b->ihdr.height = SWAP(b->ihdr.height);
+    return crc32;
+}
+
+static uint32_t
+read_plte(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    b->palette = malloc(length);
+    fread(b->palette, sizeof(struct color), length / sizeof(struct color), f);
+    crc32 = update_crc(crc32, (uint8_t *)b->palette, length);
+    return crc32;
+}
+
+static uint32_t
+read_gama(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    fread(&b->gamma, sizeof(uint32_t), 1, f);
+    crc32 = update_crc(crc32, (uint8_t *)&b->gamma, length);
+    b->gamma = SWAP(b->gamma);
+    return crc32;
+}
+
+static uint32_t
+read_iccp(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    uint8_t keybuff[80];
+    uint8_t i = 0;
+    i = read_char_till_null(f, keybuff, 80);
+    b->icc.name = malloc(i);
+    memcpy(b->icc.name, keybuff, i);
+    crc32 = update_crc(crc32, (uint8_t *)b->icc.name, i);
+    b->icc.compression_method = fgetc(f);
+    crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_method, 1);
+    b->icc.compression_profile = malloc(length - i - 1);
+    fread(&b->icc.compression_profile, length - i - 1, 1, f);
+    crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_profile,
+                       length - i - 1);
+    return crc32;
+}
+
+static uint32_t
+read_chrm(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    fread(&b->cwp, sizeof(struct chromaticities_white_point), 1, f);
+    crc32 = update_crc(crc32, (uint8_t *)&b->cwp, length);
+    b->cwp.white_x = SWAP(b->cwp.white_x);
+    b->cwp.white_y = SWAP(b->cwp.white_y);
+    b->cwp.red_x = SWAP(b->cwp.red_x);
+    b->cwp.red_y = SWAP(b->cwp.red_y);
+    b->cwp.green_x = SWAP(b->cwp.green_x);
+    b->cwp.green_y = SWAP(b->cwp.green_y);
+    b->cwp.blue_x = SWAP(b->cwp.blue_x);
+    b->cwp.blue_y = SWAP(b->cwp.blue_y);
+    return crc32;
+}
+
+static uint32_t
+read_text(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    uint8_t keybuff[80];
+    uint8_t i = 0;
+    i = read_char_till_null(f, keybuff, 80);
+    crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
+    if (b->n_text++) {
+        b->textual =
+            realloc(b->textual, b->n_text * sizeof(struct textual_data));
+        (b->textual + b->n_text - 1)->keyword = malloc(i);
+        memcpy((b->textual + b->n_text - 1)->keyword, keybuff, i);
+        if (length - i) {
+            (b->textual + b->n_text - 1)->text = malloc(length - i);
+            fread((b->textual + b->n_text - 1)->text, 1, length - i, f);
+            crc32 =
+                update_crc(crc32, (uint8_t *)(b->textual + b->n_text - 1)->text,
+                           length - i);
+        } else {
+            (b->textual + b->n_text - 1)->text = NULL;
+        }
+    } else {
+        b->textual = malloc(sizeof(struct textual_data));
+        b->textual->keyword = malloc(i);
+        memcpy(b->textual->keyword, keybuff, i);
+        if (length - i) {
+            b->textual->text = malloc(length - i);
+            fread(b->textual->text, 1, length - i, f);
+            crc32 = update_crc(crc32, (uint8_t *)b->textual->text, length - i);
+        } else {
+            b->textual->text = NULL;
+        }
+    }
+    return crc32;
+}
+
+static uint32_t
+read_itxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    uint8_t keybuff[80];
+    uint8_t i = 0, j = 0, k = 0;
+    i = read_char_till_null(f, keybuff, 80);
+    crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
+    if (b->n_itext++) {
+        b->itextual = realloc(
+            b->itextual, b->n_text * sizeof(struct international_textual_data));
+        (b->itextual + b->n_itext - 1)->keyword = malloc(i);
+        memcpy((b->itextual + b->n_itext - 1)->keyword, keybuff, i);
+        (b->itextual + b->n_itext - 1)->compression_flag = fgetc(f);
+        (b->itextual + b->n_itext - 1)->compression_method = fgetc(f);
+        j = read_char_till_null(f, keybuff, 80);
+        crc32 = update_crc(crc32, (uint8_t *)keybuff, j);
+        if (j <= 1) {
+            (b->itextual + b->n_itext - 1)->language_tag = NULL;
+        } else {
+            (b->itextual + b->n_itext - 1)->language_tag = malloc(j);
+            memcpy((b->itextual + b->n_itext - 1)->language_tag, keybuff, j);
+        }
+        k = read_char_till_null(f, keybuff, 80);
+        crc32 = update_crc(crc32, (uint8_t *)keybuff, k);
+        if (k <= 1) {
+            (b->itextual + b->n_itext - 1)->translated_keyword = NULL;
+        } else {
+            (b->itextual + b->n_itext - 1)->translated_keyword = malloc(k);
+            memcpy((b->itextual + b->n_itext - 1)->translated_keyword, keybuff,
+                   k);
+        }
+        if (length - i - j - k) {
+            (b->itextual + b->n_itext - 1)->text = malloc(length - i - j - k);
+            fread((b->itextual + b->n_itext - 1)->text, 1, length - i - j - k,
+                  f);
+            crc32 = update_crc(crc32,
+                               (uint8_t *)(b->itextual + b->n_itext - 1)->text,
+                               length - i - j - k);
+        } else {
+            (b->itextual + b->n_itext - 1)->text = NULL;
+        }
+    } else {
+        b->itextual = malloc(sizeof(struct international_textual_data));
+        b->itextual->keyword = malloc(i);
+        memcpy(b->itextual->keyword, keybuff, i);
+        b->itextual->compression_flag = fgetc(f);
+        b->itextual->compression_method = fgetc(f);
+        j = read_char_till_null(f, keybuff, 80);
+        crc32 = update_crc(crc32, (uint8_t *)keybuff, j);
+        if (j <= 1) {
+            b->itextual->language_tag = NULL;
+        } else {
+            b->itextual->language_tag = malloc(j);
+            memcpy(b->itextual->language_tag, keybuff, j);
+        }
+        k = read_char_till_null(f, keybuff, 80);
+        crc32 = update_crc(crc32, (uint8_t *)keybuff, k);
+        if (k <= 1) {
+            b->itextual->translated_keyword = NULL;
+        } else {
+            b->itextual->translated_keyword = malloc(k);
+            memcpy(b->itextual->translated_keyword, keybuff, k);
+        }
+        if (length - i - j - k) {
+            b->itextual->text = malloc(length - i - j - k);
+            fread(b->itextual->text, 1, length - i - j - k, f);
+            crc32 = update_crc(crc32, (uint8_t *)b->itextual->text,
+                               length - i - j - k);
+        } else {
+            b->itextual->text = NULL;
+        }
+    }
+    return crc32;
+}
+
+static uint32_t
+read_ztxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    uint8_t keybuff[80];
+    uint8_t i = 0;
+    i = read_char_till_null(f, keybuff, 80);
+    crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
+    if (b->n_ctext) {
+        b->n_ctext++;
+        b->ctextual = realloc(
+            b->ctextual, b->n_ctext * sizeof(struct compressed_textual_data));
+        (b->ctextual + b->n_ctext - 1)->keyword = malloc(i);
+        memcpy((b->ctextual + b->n_ctext - 1)->keyword, keybuff, i);
+        (b->ctextual + b->n_ctext - 1)->compression_method = fgetc(f);
+        crc32 = update_crc(
+            crc32,
+            (uint8_t *)&((b->ctextual + b->n_ctext - 1)->compression_method),
+            1);
+        if (length - i - 1) {
+            (b->ctextual + b->n_ctext - 1)->compressed_text =
+                malloc(length - i - 1);
+            fread((b->ctextual + b->n_ctext - 1)->compressed_text, 1,
+                  length - i - 1, f);
+            crc32 = update_crc(
+                crc32,
+                (uint8_t *)(b->ctextual + b->n_ctext - 1)->compressed_text,
+                length - i - 1);
+        } else {
+            (b->ctextual + b->n_ctext - 1)->compressed_text = NULL;
+        }
+    } else {
+        b->ctextual = malloc(sizeof(struct compressed_textual_data));
+        b->ctextual->keyword = malloc(i);
+        memcpy(b->ctextual->keyword, keybuff, i);
+        b->ctextual->compression_method = fgetc(f);
+        crc32 =
+            update_crc(crc32, (uint8_t *)&(b->ctextual->compression_method), 1);
+        if (length - i - 1) {
+            b->ctextual->compressed_text = malloc(length - i - 1);
+            fread(b->ctextual->compressed_text, 1, length - i - 1, f);
+            crc32 = update_crc(crc32, (uint8_t *)(b->ctextual->compressed_text),
+                               length - i - 1);
+        } else {
+            b->ctextual->compressed_text = NULL;
+        }
+        b->n_ctext = 1;
+    }
+    return crc32;
+}
+
+static uint32_t
+read_hist(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    b->freqs = malloc(length);
+    fread(b->freqs, 2, length / 2, f);
+    crc32 = update_crc(crc32, (uint8_t *)b->freqs, length);
+    return crc32;
+}
+
+static uint32_t
+read_bkgd(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    VDBG(png, "color %d, length %d", b->ihdr.color_type, length);
+    if (b->ihdr.color_type == GREYSCALE ||
+        b->ihdr.color_type == GREYSCALE_ALPHA) {
+        fread(&b->bcolor, 2, 1, f);
+        crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+        b->bcolor.greyscale = SWAP(b->bcolor.greyscale);
+    } else if (b->ihdr.color_type == TRUECOLOR ||
+               b->ihdr.color_type == TRUECOLOR_ALPHA) {
+        fread(&b->bcolor, 6, 1, f);
+        crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+        b->bcolor.rgb.red = SWAP(b->bcolor.rgb.red);
+        b->bcolor.rgb.green = SWAP(b->bcolor.rgb.green);
+        b->bcolor.rgb.blue = SWAP(b->bcolor.rgb.blue);
+    } else if (b->ihdr.color_type == INDEXEDCOLOR) {
+        fread(&b->bcolor, 1, 1, f);
+        crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
+    }
+    return crc32;
+}
+
+static uint32_t
+read_time(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    fread(&b->last_mod, sizeof(struct last_modification), 1, f);
+    crc32 = update_crc(crc32, (uint8_t *)&(b->last_mod), length);
+    return crc32;
+}
+
 static struct pic* 
 PNG_load(const char* filename, int skip_flag)
 {
@@ -256,227 +519,80 @@ PNG_load(const char* filename, int skip_flag)
     PNG * b = p->pic;
 
     FILE *f = fopen(filename, "rb");
-    fread(&b->sig, sizeof(struct png_file_header), 1, f);
+    int ret = fread(&b->sig, sizeof(struct png_file_header), 1, f);
+    if (ret != 1) {
+        printf("fail to read png file header\n");
+        pic_free(p);
+        return NULL;
+    }
 
     // uint8_t nullbyte;
     uint32_t chunk_type = 0;
     uint32_t length;
-    uint8_t keybuff[80];
-    uint8_t i = 0, j = 0, k = 0;
 
     uint8_t *data = NULL, *compressed = NULL;
     int compressed_size = 0;
     uint32_t crc32, crc;
 
-    fread(&length, 1, sizeof(uint32_t), f);
-    fread(&chunk_type, 1, sizeof(uint32_t), f);
-    length = ntohl(length);
+    ret = fread(&length, sizeof(uint32_t), 1, f);
+    if (ret != 1) {
+        return NULL;
+    }
+    ret = fread(&chunk_type, sizeof(uint32_t), 1, f);
+    if (ret != 1) {
+        return NULL;
+    }
+    length = SWAP(length);
 
-    while(length && chunk_type != CHARS2UINT("IEND")) {
+    while (length && chunk_type != (uint32_t)CHARS2UINT("IEND")) {
         assert(length > 0);
         crc32 = init_crc32((uint8_t*)&chunk_type, sizeof(uint32_t));
         switch (chunk_type) {
-            case CHARS2UINT("IHDR"):
-                fread(&b->ihdr, 1, sizeof(struct png_ihdr), f);
-                crc32 = update_crc(crc32, (uint8_t *)&b->ihdr, sizeof(struct png_ihdr));
-                b->ihdr.width = ntohl(b->ihdr.width);
-                b->ihdr.height = ntohl(b->ihdr.height);
+            case CHUNK_TYPE_IHDR:
+                crc32 = read_ihdr(b, f, crc32);
                 break;
-            case CHARS2UINT("PLTE"):
-                b->palette = malloc(length);
-                fread(b->palette, sizeof(struct color), length/sizeof(struct color), f);
-                crc32 = update_crc(crc32, (uint8_t *)b->palette, length);
+            case CHUNK_TYPE_PLTE:
+                crc32 = read_plte(b, f, crc32, length);
                 break;
-            case CHARS2UINT("IDAT"):
+            case CHUNK_TYPE_IDAT:
                 compressed_size += length;
                 if ((uint32_t)compressed_size == length) {
-                    compressed = malloc(compressed_size);
-                    fread(compressed, length, 1, f);
-                    crc32 = update_crc(crc32, (uint8_t *)compressed, length);
+                  compressed = malloc(compressed_size);
+                  fread(compressed, length, 1, f);
+                  crc32 = update_crc(crc32, (uint8_t *)compressed, length);
                 } else {
-                    compressed = realloc(compressed, compressed_size);
-                    fread(compressed + compressed_size - length , length, 1, f);
-                    crc32 = update_crc(crc32, (uint8_t *)compressed + compressed_size - length, length);
-                }
+                  compressed = realloc(compressed, compressed_size);
+                  fread(compressed + compressed_size - length, length, 1, f);
+                  crc32 = update_crc(
+                      crc32, (uint8_t *)compressed + compressed_size - length,
+                      length);
+                } break;
+            case CHUNK_TYPE_GAMA:
+                crc32 = read_gama(b, f, crc32, length);
                 break;
-            case CHARS2UINT("gAMA"):
-                fread(&b->gamma, sizeof(uint32_t), 1, f);
-                crc32 = update_crc(crc32, (uint8_t *)&b->gamma, length);
-                b->gamma = ntohl(b->gamma);
+            case CHUNK_TYPE_ICCP:
+                crc32 = read_iccp(b, f, crc32, length);
                 break;
-            case CHARS2UINT("iCCP"):
-                i = read_char_till_null(f, keybuff, 80);
-                b->icc.name = malloc(i);
-                memcpy(b->icc.name, keybuff, i);
-                crc32 = update_crc(crc32, (uint8_t *)b->icc.name, i);
-                b->icc.compression_method = fgetc(f);
-                crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_method, 1);
-                b->icc.compression_profile = malloc(length - i - 1);
-                fread(&b->icc.compression_profile, length - i - 1, 1, f);
-                crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_profile, length - i - 1);
+            case CHUNK_TYPE_CHRM:
+                crc32 = read_chrm(b, f, crc32, length);
                 break;
-            case CHARS2UINT("cHRM"):
-                fread(&b->cwp, sizeof(struct chromaticities_white_point), 1, f);
-                crc32 = update_crc(crc32, (uint8_t *)&b->cwp, length);
-                b->cwp.white_x = ntohl(b->cwp.white_x);
-                b->cwp.white_y = ntohl(b->cwp.white_y);
-                b->cwp.red_x = ntohl(b->cwp.red_x);
-                b->cwp.red_y = ntohl(b->cwp.red_y);
-                b->cwp.green_x = ntohl(b->cwp.green_x);
-                b->cwp.green_y = ntohl(b->cwp.green_y);
-                b->cwp.blue_x = ntohl(b->cwp.blue_x);
-                b->cwp.blue_y = ntohl(b->cwp.blue_y);
+            case CHUNK_TYPE_TEXT:
+                crc32 = read_text(b, f, crc32, length);
                 break;
-            case CHARS2UINT("tEXt"):
-                i = read_char_till_null(f, keybuff, 80);
-                crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
-                if (b->n_text ++) {
-                    b->textual = realloc(b->textual, b->n_text * sizeof(struct textual_data));
-                    (b->textual+b->n_text-1)->keyword = malloc(i);
-                    memcpy((b->textual+b->n_text-1)->keyword, keybuff, i);
-                    if (length - i) {
-                        (b->textual+b->n_text-1)->text = malloc(length-i);
-                        fread((b->textual+b->n_text-1)->text, 1, length-i, f);
-                        crc32 = update_crc(crc32, (uint8_t *)(b->textual+b->n_text-1)->text, length - i);
-                    } else {
-                        (b->textual+ b->n_text -1)->text = NULL;
-                    }
-                } else {
-                    b->textual = malloc(sizeof(struct textual_data));
-                    b->textual->keyword = malloc(i);
-                    memcpy(b->textual->keyword, keybuff, i);
-                    if (length - i) {
-                        b->textual->text = malloc(length - i);
-                        fread(b->textual->text, 1, length - i, f);
-                        crc32 = update_crc(crc32, (uint8_t *)b->textual->text, length - i);
-                    } else {
-                        b->textual->text = NULL;
-                    }
-                }
+            case CHUNK_TYPE_ITXT:
+                crc32 = read_itxt(b, f, crc32, length);
                 break;
-            case CHARS2UINT("iTXt"):
-                i = read_char_till_null(f, keybuff, 80);
-                crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
-                if (b->n_itext ++) {
-                    b->itextual = realloc(b->itextual, b->n_text * sizeof(struct international_textual_data));
-                    (b->itextual+b->n_itext-1)->keyword = malloc(i);
-                    memcpy((b->itextual+b->n_itext-1)->keyword, keybuff, i);
-                    (b->itextual+b->n_itext-1)->compression_flag = fgetc(f);
-                    (b->itextual+b->n_itext-1)->compression_method = fgetc(f);
-                    j = read_char_till_null(f, keybuff, 80);
-                    crc32 = update_crc(crc32, (uint8_t *)keybuff, j);
-                    if (j <= 1) {
-                        (b->itextual+b->n_itext-1)->language_tag = NULL;
-                    } else {
-                        (b->itextual+b->n_itext-1)->language_tag = malloc(j);
-                        memcpy((b->itextual+b->n_itext-1)->language_tag, keybuff, j);
-                    }
-                    k = read_char_till_null(f, keybuff, 80);
-                    crc32 = update_crc(crc32, (uint8_t *)keybuff, k);
-                    if (k <= 1) {
-                        (b->itextual+b->n_itext-1)->translated_keyword = NULL;
-                    } else {
-                        (b->itextual+b->n_itext-1)->translated_keyword = malloc(k);
-                        memcpy((b->itextual+b->n_itext-1)->translated_keyword, keybuff, k);
-                    }
-                    if (length - i - j - k) {
-                        (b->itextual+b->n_itext-1)->text = malloc(length-i-j-k);
-                        fread((b->itextual+b->n_itext-1)->text, 1, length-i-j-k, f);
-                        crc32 = update_crc(crc32, (uint8_t *)(b->itextual+b->n_itext-1)->text, length-i-j-k);
-                    } else {
-                        (b->itextual+ b->n_itext -1)->text = NULL;
-                    }
-                } else {
-                    b->itextual = malloc(sizeof(struct international_textual_data));
-                    b->itextual->keyword = malloc(i);
-                    memcpy(b->itextual->keyword, keybuff, i);
-                    b->itextual->compression_flag = fgetc(f);
-                    b->itextual->compression_method = fgetc(f);
-                    j = read_char_till_null(f, keybuff, 80);
-                    crc32 = update_crc(crc32, (uint8_t *)keybuff, j);
-                    if (j <= 1) {
-                        b->itextual->language_tag = NULL;
-                    } else {
-                        b->itextual->language_tag = malloc(j);
-                        memcpy(b->itextual->language_tag, keybuff, j);
-                    }
-                    k = read_char_till_null(f, keybuff, 80);
-                    crc32 = update_crc(crc32, (uint8_t *)keybuff, k);
-                    if (k <= 1) {
-                        b->itextual->translated_keyword = NULL;
-                    } else {
-                        b->itextual->translated_keyword = malloc(k);
-                        memcpy(b->itextual->translated_keyword, keybuff, k);
-                    }
-                    if (length - i - j - k) {
-                        b->itextual->text = malloc(length - i - j - k);
-                        fread(b->itextual->text, 1, length - i - j - k, f);
-                        crc32 = update_crc(crc32, (uint8_t *)b->itextual->text, length - i - j - k);
-                    } else {
-                        b->itextual->text = NULL;
-                    }
-                }
+            case CHUNK_TYPE_ZTXT:
+                crc32 = read_ztxt(b, f, crc32, length);
                 break;
-            case CHARS2UINT("zTXt"):
-                i = read_char_till_null(f, keybuff, 80);
-                crc32 = update_crc(crc32, (uint8_t *)keybuff, i);
-                if (b->n_ctext) {
-                    b->n_ctext ++;
-                    b->ctextual = realloc(b->ctextual, b->n_ctext * sizeof(struct compressed_textual_data));
-                    (b->ctextual+b->n_ctext-1)->keyword = malloc(i);
-                    memcpy((b->ctextual+b->n_ctext-1)->keyword, keybuff, i);
-                    (b->ctextual+b->n_ctext-1)->compression_method = fgetc(f);
-                    crc32 = update_crc(crc32, (uint8_t *)&((b->ctextual+b->n_ctext-1)->compression_method), 1);
-                    if (length - i -1) {
-                        (b->ctextual+b->n_ctext-1)->compressed_text = malloc(length-i-1);
-                        fread((b->ctextual+b->n_ctext-1)->compressed_text, 1, length-i-1, f);
-                        crc32 = update_crc(crc32, (uint8_t *)(b->ctextual+b->n_ctext-1)->compressed_text, length-i-1);
-                    } else {
-                        (b->ctextual+ b->n_ctext -1)->compressed_text = NULL;
-                    }
-                }else{
-                    b->ctextual = malloc(sizeof(struct compressed_textual_data));
-                    b->ctextual->keyword = malloc(i);
-                    memcpy(b->ctextual->keyword, keybuff, i);
-                    b->ctextual->compression_method = fgetc(f);
-                    crc32 = update_crc(crc32, (uint8_t *)&(b->ctextual->compression_method), 1);
-                    if (length - i - 1) {
-                        b->ctextual->compressed_text = malloc(length - i - 1);
-                        fread(b->ctextual->compressed_text, 1, length - i -1 , f);
-                        crc32 = update_crc(crc32, (uint8_t *)(b->ctextual->compressed_text), length-i-1);
-                    } else {
-                        b->ctextual->compressed_text = NULL;
-                    }
-                    b->n_ctext = 1;
-                }
+            case CHUNK_TYPE_HIST:
+                crc32 = read_hist(b, f, crc32, length);
                 break;
-            case CHARS2UINT("hIST"):
-                b->freqs = malloc(length);
-                fread(b->freqs, 2, length/2, f);
-                crc32 = update_crc(crc32, (uint8_t*)b->freqs, length);
+            case CHUNK_TYPE_BKGD:
+                crc32 = read_bkgd(b, f, crc32, length);
                 break;
-            case CHARS2UINT("bKGD"):
-                VDBG(png, "color %d, length %d", b->ihdr.color_type, length);
-                if (b->ihdr.color_type == GREYSCALE ||
-                    b->ihdr.color_type == GREYSCALE_ALPHA) {
-                    fread(&b->bcolor, 2, 1, f);
-                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-                    b->bcolor.greyscale = SWAP(b->bcolor.greyscale);
-                } else if (b->ihdr.color_type == TRUECOLOR ||
-                           b->ihdr.color_type == TRUECOLOR_ALPHA) {
-                    fread(&b->bcolor, 6, 1, f);
-                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-                    b->bcolor.rgb.red = SWAP(b->bcolor.rgb.red);
-                    b->bcolor.rgb.green = SWAP(b->bcolor.rgb.green);
-                    b->bcolor.rgb.blue = SWAP(b->bcolor.rgb.blue);
-                } else if (b->ihdr.color_type == INDEXEDCOLOR) {
-                    fread(&b->bcolor, 1, 1, f);
-                    crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-                }
-                break;
-            case CHARS2UINT("tIME"):
-                fread(&b->last_mod, sizeof(struct last_modification), 1, f);
-                crc32 = update_crc(crc32, (uint8_t*)&(b->last_mod), length);
+            case CHUNK_TYPE_TIME:
+                crc32 = read_time(b, f, crc32, length);
                 break;
             default:
                 if (length) {
@@ -495,7 +611,7 @@ PNG_load(const char* filename, int skip_flag)
         crc32 = finish_crc32(crc32);
         CRC_ASSER(crc32, crc);
         fread(&length, sizeof(uint32_t), 1, f);
-        length = ntohl(length);
+        length = SWAP(length);
         fread(&chunk_type, sizeof(uint32_t), 1, f);
     }
     /* check iEND chunk */

@@ -9,10 +9,24 @@ extern "C" {
  *   All png integers are in network byte orders
  */
 
-#define CHARS2UINT(x) (x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
-
+#define CHARS2UINT(x) (uint32_t)(x[0] | x[1] << 8 | x[2] << 16 | x[3] << 24)
 
 #pragma pack(push, 1)
+
+enum png_chuck_type {
+    CHUNK_TYPE_IHDR = CHARS2UINT("IHDR"),
+    CHUNK_TYPE_PLTE = CHARS2UINT("PLTE"),
+    CHUNK_TYPE_IDAT = CHARS2UINT("IDAT"),
+    CHUNK_TYPE_GAMA = CHARS2UINT("gAMA"),
+    CHUNK_TYPE_ICCP = CHARS2UINT("iCCP"),
+    CHUNK_TYPE_CHRM = CHARS2UINT("cHRM"),
+    CHUNK_TYPE_TEXT = CHARS2UINT("tEXt"),
+    CHUNK_TYPE_ITXT = CHARS2UINT("iTXt"),
+    CHUNK_TYPE_ZTXT = CHARS2UINT("zTXt"),
+    CHUNK_TYPE_HIST = CHARS2UINT("hIST"),
+    CHUNK_TYPE_BKGD = CHARS2UINT("bKGD"),
+    CHUNK_TYPE_TIME = CHARS2UINT("tIME"),
+};
 
 struct png_file_header {
     uint8_t signature[4];

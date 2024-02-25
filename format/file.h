@@ -16,7 +16,7 @@ struct file_ops {
     const char *name;
     const char *alias;
     int (*probe)(const char *filename);
-    struct pic* (*load)(const char *filename);
+    struct pic* (*load)(const char *filename, int skip_flag);
     void (*free)(struct pic *p);
     void (*info)(FILE *f, struct pic* p);
     void (*encode)(struct pic *p, const char *fname);
@@ -54,7 +54,7 @@ struct file_ops* file_probe(const char *filename);
  * @return a pointer to a struct pic.
  *         return NULL if we have multiple pics and put all pics in a queue
  */
-struct pic *file_load(struct file_ops *ops, const char *filename);
+struct pic *file_load(struct file_ops *ops, const char *filename, int skip_flag);
 void file_free(struct file_ops* ops, struct pic *p);
 void file_info(struct file_ops *ops, struct pic *p);
 struct file_ops *file_find_codec(const char *name);

@@ -593,7 +593,7 @@ read_meta_box(FILE *f, struct av1_meta_box *meta)
 }
 
 static struct pic* 
-AVIF_load(const char *filename)
+AVIF_load(const char *filename, int skip_flag)
 {
         struct pic *p = pic_alloc(sizeof(AVIF));
     AVIF *h = p->pic;

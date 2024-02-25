@@ -244,7 +244,7 @@ GIF_load_one(FILE *f, Graphic *g)
 }
 
 static struct pic *
-GIF_load(const char *filename)
+GIF_load(const char *filename, int skip_flag)
 {
     GIF* g = malloc(sizeof(GIF));
     FILE* f = fopen(filename, "rb");

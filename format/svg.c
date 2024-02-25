@@ -532,7 +532,7 @@ SVG_probe(const char *filename)
 
 
 static struct pic* 
-SVG_load(const char *filename)
+SVG_load(const char *filename, int skip_flag)
 {
     struct pic * p = pic_alloc(sizeof(SVG));
     SVG * s = p->pic;

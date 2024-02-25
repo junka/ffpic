@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -6,6 +7,7 @@
 #include <string.h>
 
 #include "bitstream.h"
+#include "byteorder.h"
 #include "file.h"
 #include "jpg.h"
 #include "queue.h"
@@ -156,7 +158,7 @@ read_dht(JPG* j, FILE *f)
 
 // see ITU-T81 Table K.3 and K.5
 const uint8_t y_dc_count[16] = {
-    0, 1, 5, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+    0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0,
 };
 const uint8_t y_dc_sym[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 const uint8_t y_ac_count[16] = {
@@ -232,7 +234,7 @@ get_vlc(int code, int bitlen)
 }
 
 static int
-write_vlc(int code)
+encode_vlc(int code)
 {
     int abscode = code > 0 ? code : -code;
     int mask = 1 << 15;
@@ -259,10 +261,16 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
         VERR(jpg, "invalid dc value");
         return false;
     }
+    if (dc > 11) {
+        VERR(jpg, "dc length greater than 11");
+        return false;
+    }
+    VINFO(jpg, "DC read %d bits", dc);
     dc = get_vlc(READ_BITS(hdec->v, dc), dc);
     dc += d->prev_dc;
     d->prev_dc = dc;
     buf[0] = dc;
+    VINFO(jpg, "DC read value is %d", dc);
 
     // read AC coff
     for (int i = 1; i < 64;) {
@@ -289,22 +297,24 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
         }
 
         if (ac) {
+            VINFO(jpg, "AC read %d bits", ac);
             ac = get_vlc(READ_BITS(hdec->v, ac), ac);
+            VINFO(jpg, "AC read value is %d", ac);
             buf[zigzag[i++]] = ac;
         }
     }
-    // after dequant here, the values will be greater than 255, can not hold in uint8_t
-    for (int i = 0; i < 64; i++) {
-        buf[i] *= d->quant[i];
-    }
-#if 0
+#if 1
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            fprintf(vlog_get_stream(), "%d ", buf[i]);
+            fprintf(vlog_get_stream(), "%d ", buf[i*8+j]);
         }
         fprintf(vlog_get_stream(), "\n");
     }
 #endif
+    // after dequant here, the values will be greater than 255, can not hold in uint8_t
+    for (int i = 0; i < 64; i++) {
+        buf[i] *= d->quant[i];
+    }
     return true;
 }
 
@@ -322,8 +332,8 @@ init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
     struct huffman_symbol *acsym = huffman_symbol_alloc(j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
     huffman_build_lookup_table(dc_tree, dc_ht_id, dcsym);
     huffman_build_lookup_table(ac_tree, ac_ht_id, acsym);
-    // huffman_dump_table(vlog_get_stream(), dc_tree);
-    // huffman_dump_table(vlog_get_stream(), ac_tree);
+    huffman_dump_table(vlog_get_stream(), dc_tree);
+    huffman_dump_table(vlog_get_stream(), ac_tree);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -377,7 +387,6 @@ JPG_decode_image(JPG* j)
     int width = ((j->sof.width + 7) >> 3) << 3; //algin to 8
     int height = j->sof.height; //((j->sof.height + 7) >> 3) << 3;
     int pitch = width * 4;
-    int bytes_blockline = pitch * ystride;
 
     int restarts = j->dri.interval;
 
@@ -395,18 +404,19 @@ JPG_decode_image(JPG* j)
         int h = j->sof.colors[i].horizontal;
         assert(h * v <= 4);
     }
-    for (int y = 0; y <= height / ystride; y++) {
-        ptr = j->data + y * bytes_blockline;
+    for (int y = 0; y < height; y += ystride) {
+        ptr = j->data + y * pitch;
         for (int x = 0; x < width; x += xstride) {
             // for YUV420, get 4 DCU for Y and 1 DCU for U and 1 DCU for V
             for (uint8_t i = 0; i < j->sof.components_num; ++i) {
                 int v = j->sof.colors[i].vertical;
                 int h = j->sof.colors[i].horizontal;
-                for (int vi = 0; vi < v; vi ++) {
-                    for (int hi = 0; hi < h; hi ++) {
+                for (int vi = 0; vi < v && y + vi * 8 < height; vi ++) {
+                    for (int hi = 0; hi < h && x + hi * 8 < width; hi ++) {
+                        VDBG(jpg, "decode at (%d, %d) [%d, %d] for %d", x, y, hi, vi, i);
                         if (!decode_data_unit(hdec, d[i], &Y[i][64 * (vi * h + hi)])) {
                             // those MCU at the edge could be incomplete
-                            VDBG(jpg, "fail at (%d, %d) for %d", x, y, i);
+                            VDBG(jpg, "fail at (%d, %d) [%d, %d] for %d", x, y, hi, vi, i);
                             continue;
                         }
                         dct->idct_8x8(&Y[i][64 * (vi * h + hi)], 8);
@@ -512,18 +522,19 @@ read_sos(JPG* j, FILE *f)
 }
 
 void
-write_sos(uint16_t len, FILE *f)
+write_sos(FILE *f)
 {
     uint16_t mark = SOS;
     fwrite(&mark, 2, 1, f);
+    uint16_t len = 12;
     len = SWAP(len);
     fwrite(&len, 2, 1, f);
     uint8_t num = 3;
     fwrite(&num, 1, 1, f);
     struct comp_sel c[3] = {
-        {0, 0, 0},
-        {1, 1, 1},
-        {2, 1, 1}
+        {1, 0, 0},
+        {2, 1, 1},
+        {3, 1, 1}
     };
     fwrite(c, sizeof(struct comp_sel), 3, f);
     uint8_t spe_start = 0, spe_end = 63, approx = 0;
@@ -551,7 +562,7 @@ read_sof(JPG *j, FILE *f)
 }
 
 void
-write_sof(uint16_t height, uint16_t width, FILE *f)
+write_sof(uint16_t height, uint16_t width, FILE *f, int vert, int horizon)
 {
     uint16_t mark = SOF0;
     uint16_t len = 17;
@@ -567,38 +578,65 @@ write_sof(uint16_t height, uint16_t width, FILE *f)
     fwrite(&width, 2, 1, f);
     fwrite(&components_num, 1, 1, f);
     struct jpg_component com[3] = {
-        {1, 2, 2, 0},
+        {1, vert, horizon, 0},
         {2, 1, 1, 1},
         {3, 1, 1, 1},
     };
     fwrite(com, sizeof(struct jpg_component), 3, f);
 }
 
-void
+static void
 write_soi(FILE *f)
 {
     uint16_t mark = SOI;
     fwrite(&mark, 2, 1, f);
 }
 
-void write_eoi(FILE *f)
+static void
+write_eoi(FILE *f)
 {
     uint16_t mark = EOI;
     fwrite(&mark, 2, 1, f);
 }
 
-void
+static void
 read_app0(JPG *j, FILE *f)
 {
     fread(&j->app0, 16, 1, f);
+    j->app0.len = SWAP(j->app0.len);
+    j->app0.xdensity = SWAP(j->app0.xdensity);
+    j->app0.ydensity = SWAP(j->app0.ydensity);
     if (j->app0.xthumbnail * j->app0.ythumbnail) {
         j->app0.data = malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
         fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail, f);
     }
 }
 
+static void
+write_app0(FILE *f)
+{
+    uint16_t marker = APP0;
+    fwrite(&marker, 2, 1, f);
+    uint16_t len = 16;
+    len = SWAP(len);
+    fwrite(&len, 2, 1, f);
+    uint8_t id[5] = "JFIF";
+    fwrite(id, 5, 1, f);
+    uint16_t version = 0x0101;
+    fwrite(&version, 2, 1, f);
+    uint8_t unit = 0;
+    fwrite(&unit, 1, 1, f);
+    uint16_t density = 1;
+    density = SWAP(density);
+    fwrite(&density, 2, 1, f);
+    fwrite(&density, 2, 1, f);
+    uint8_t thumbnail = 0;
+    fwrite(&thumbnail, 1, 1, f);
+    fwrite(&thumbnail, 1, 1, f);
+}
+
 static struct pic *
-JPG_load_one(FILE *f)
+JPG_load_one(FILE *f, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(JPG));
     JPG *j = p->pic;
@@ -657,7 +695,9 @@ JPG_load_one(FILE *f)
         m = read_marker_skip_null(f);
     }
     VDBG(jpg, "done one image %lu", ftell(f));
-    JPG_decode_image(j);
+    if (!skip_flag) {
+        JPG_decode_image(j);
+    }
     p->width = ((j->sof.width + 7) >> 3) << 3;
     p->height = j->sof.height;
     p->depth = 32;
@@ -668,7 +708,7 @@ JPG_load_one(FILE *f)
     return p;
 }
 
-static struct pic *JPG_load(const char *filename)
+static struct pic *JPG_load(const char *filename, int skip_flag)
 {
     FILE *f = fopen(filename, "rb");
     fseek(f, 0, SEEK_END);
@@ -676,10 +716,10 @@ static struct pic *JPG_load(const char *filename)
     fseek(f, 0, SEEK_SET);
     int num = 1;
     struct pic *p = NULL;
-    p = JPG_load_one(f);
+    p = JPG_load_one(f, skip_flag);
     while (ftell(f) < end ) {
         file_enqueue_pic(p);
-        p = JPG_load_one(f);
+        p = JPG_load_one(f, skip_flag);
         num ++;
     }
     fclose(f);
@@ -723,11 +763,12 @@ JPG_info(FILE *f, struct pic* p)
         fprintf(f, "\t cid %d vertical %d, horizon %d, quatation id %d\n", j->sof.colors[i].cid, j->sof.colors[i].vertical, 
             j->sof.colors[i].horizontal, j->sof.colors[i].qt_id);
     }
-    fprintf(f, "\tAPP0: %s version %d.%d\n", j->app0.identifier, j->app0.major, j->app0.minor);
-    fprintf(f, "\tAPP0: xdensity %d, ydensity %d %s\n", j->app0.xdensity, j->app0.ydensity,
-        j->app0.unit == 0 ? "pixel aspect ratio" : 
-        ( j->app0.unit == 1 ? "dots per inch": (j->app0.unit == 2 ? "dots per cm":"")));
-
+    if (j->app0.len) {
+        fprintf(f, "\tAPP0: %s version %d.%d\n", j->app0.identifier, j->app0.major, j->app0.minor);
+        fprintf(f, "\tAPP0: xdensity %d, ydensity %d %s\n", j->app0.xdensity, j->app0.ydensity,
+            j->app0.unit == 0 ? "pixel aspect ratio" : 
+            ( j->app0.unit == 1 ? "dots per inch": (j->app0.unit == 2 ? "dots per cm":"")));
+    }
     fprintf(f, "-----------------------\n");
     for (uint8_t i = 0; i < 4; i++) {
         if (j->dqt[i].id == i) {
@@ -785,7 +826,7 @@ JPG_info(FILE *f, struct pic* p)
         fprintf(f, "\tComment: %s\n", j->comment.data);
     }
     fprintf(f, "-----------------------\n");
-    fprintf(f, "MacroBlock num: %d\n", ((j->sof.width + 7)/ 8) * ((j->sof.height + 7) / 8));
+    fprintf(f, "MacroBlock num: %d * %d\n", ((j->sof.width + 7)/ 8), ((j->sof.height + 7) / 8));
 }
 
 static const uint16_t y_quant[64] = {
@@ -809,8 +850,8 @@ static int init_encoder(struct jpg_decoder *d, uint8_t comp_id,
     huffman_tree *ac_tree = huffman_tree_init();
     huffman_build_lookup_table(dc_tree, comp_id, dc_sym);
     huffman_build_lookup_table(ac_tree, comp_id, ac_sym);
-    huffman_dump_table(vlog_get_stream(), dc_tree);
-    huffman_dump_table(vlog_get_stream(), ac_tree);
+    // huffman_dump_table(vlog_get_stream(), dc_tree);
+    // huffman_dump_table(vlog_get_stream(), ac_tree);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -834,69 +875,84 @@ encode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d,
     d->prev_dc = buf[0];
 
     // F.1.4.1, Figure F.4
-    int bitlen = write_vlc(diff);
-    huffman_encode_symbol_8bit(hdec, d->dc, bitlen);
+    int bitlen = encode_vlc(diff);
+    huffman_encode_symbol(hdec, d->dc, bitlen);
     if (diff < 0) {
         diff = (1 << bitlen) + diff - 1;
     }
-    VINFO(jpg, "write %d in %d bits", diff, bitlen);
-    WRITE_BITS(hdec->v, diff, bitlen);
+    if (bitlen) {
+        VINFO(jpg, "write %d in %d bits", diff, bitlen);
+        WRITE_BITS(hdec->v, diff, bitlen);
+    }
+    fprintf(vlog_get_stream(), "after quant \n");
+    for (int i = 0; i < 64; i++) {
+        fprintf(vlog_get_stream(), "%d ", buf[i]);
+    }
+    fprintf(vlog_get_stream(), "\n");
 
     int last_nz = 63;
-    for (int i = 63; i > 0; i--) {
-        if (buf[i] != 0) {
-            last_nz = i;
-            break;
-        }
+    while(buf[last_nz] == 0 && last_nz > 0) {
+        last_nz--;
     }
 
-    for (int i = 1; i < last_nz;) {
+    for (int i = 1; i <= last_nz; i++) {
         int j = i;
-        int lead_zero = 0;
-        while (buf[j] == 0) {
-            lead_zero ++;
+        while (buf[j] == 0 && j <= last_nz) {
             j ++;
         }
+        int lead_zero = j - i;
         for (int n = 0; n < lead_zero / 16; n++) {
             VINFO(jpg, "AC write 0xF0");
-            huffman_encode_symbol_8bit(hdec, d->ac, 0xF << 4 | EOB);
+            huffman_encode_symbol(hdec, d->ac, 0xF0);
         }
         lead_zero %= 16;
-        int aclen = write_vlc(buf[j]);
-        huffman_encode_symbol_8bit(hdec, d->ac, lead_zero << 4 | aclen);
+        int aclen = encode_vlc(buf[j]);
+        VINFO(jpg, "AC for lastnz %d buf[%d] %d, lead zero %d", last_nz, j, buf[j], lead_zero);
+        huffman_encode_symbol(hdec, d->ac, lead_zero << 4 | aclen);
         VINFO(jpg, "AC write %d in %d bits", buf[j], aclen);
         WRITE_BITS(hdec->v, buf[j], aclen);
         i = j;
     }
 
     if (last_nz != 63) {
-        huffman_encode_symbol_8bit(hdec, d->ac, EOB);
+        huffman_encode_symbol(hdec, d->ac, EOB);
     }
 
 }
 
 static void
 push_and_quant(struct huffman_codec *hdec, struct jpg_decoder *d,
-               uint8_t *yuv, int16_t buf[64])
+               int16_t buf[64])
 {
     int16_t data[64];
     // do quant and zigzag
+    int i = 0;
+    float q;
     for (int i = 0; i < 64; i++) {
-        data[i] = (int16_t)((((float)buf[zigzag[i]]) / (((float)d->quant[zigzag[i]]*80+50)/100*8)));
+        q = clamp((d->quant[zigzag[i]] * 100 + 50) / 100, 255);
+        q = 1.0f / ((float)q * 8.0);
+        data[i] = (int16_t)(buf[zigzag[i]] * q + 16384.5) - 16384;
         data[i] = clamp(data[i], 255);
     }
-    fprintf(vlog_get_stream(), "after quant \n");
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
-            fprintf(vlog_get_stream(), "%d ", data[i * 8 + j]);
-        }
-        fprintf(vlog_get_stream(), "\n");
-    }
+    // }
+    // fprintf(vlog_get_stream(), "after quant \n");
+    // for (int i = 0; i < 8; i++) {
+    //     for (int j = 0; j < 8; j++) {
+    //         fprintf(vlog_get_stream(), "%d ", data[i * 8 + j]);
+    //     }
+    //     fprintf(vlog_get_stream(), "\n");
+    // }
 
     encode_data_unit(hdec, d, data);
-    for (int i = 0; i < 64; i++) {
-        yuv[i] = data[i];
-    }
+    // for (int i = 0; i < 64; i++) {
+    //     yuv[i] = data[i];
+    // }
+}
+
+void
+write_compress_data(uint8_t *data, int len, FILE *f)
+{
+    fwrite(data, len, 1, f);
 }
 
 void JPG_encode(struct pic *p, const char *fname)
@@ -905,8 +961,10 @@ void JPG_encode(struct pic *p, const char *fname)
     // int16_t *U = malloc(p->height * p->pitch / 2);
     // int16_t *V = malloc(p->height * p->pitch / 2);
     // int16_t coeff[64];
-    int y_stride = 16;
-    int x_stride = 16;
+    int virt = 2;
+    int horiz = 2;
+    int y_stride = 8 * virt;
+    int x_stride = 8 * horiz;
     struct huffman_codec *hdec = huffman_codec_init(NULL, 0);
     struct jpg_decoder *d[3];
 
@@ -925,83 +983,94 @@ void JPG_encode(struct pic *p, const char *fname)
             init_encoder(d[i], 1, uv_dc, uv_ac);
         }
     }
+    write_app0(f);
     write_dqt(0, y_quant, f);
     write_dqt(1, uv_quant, f);
-    write_sof(p->height, p->width, f);
+    write_sof(p->height, p->width, f, virt, horiz);
     write_dht(0, 0, y_dc_count, y_dc_sym, f);
     write_dht(0, 1, y_ac_count, y_ac_sym, f);
     write_dht(1, 0, uv_dc_count, uv_dc_sym, f);
     write_dht(1, 1, uv_ac_count, uv_ac_sym, f);
 
     int16_t Y[64 * 4], U[64], V[64];
-    float tmp[64];
     // prepare huffman code table, planar yuv
-    uint8_t *yuv = malloc(p->height * p->width * 3 / 2);
-    uint8_t *u = yuv + p->height * p->width;
-    uint8_t *v = u + p->height * p->width/4;
+    // uint8_t *yuv = malloc(p->height * p->width * 3 / 2);
+    // uint8_t *u = yuv + p->height * p->width;
+    // uint8_t *v = u + p->height * p->width/4;
 
     //divide and transform in block size, 420
-    printf("vert %d, horiz %d\n", p->height / y_stride, p->width / x_stride);
+    printf("vert %d, horiz %d\n",
+           p->height / y_stride + ((p->height % y_stride) ? 1 : 0),
+           p->width / x_stride + ((p->width % x_stride) ? 1 : 0));
     const struct dct_ops *dct = get_dct_ops(8);
 
-
-    for (int y = 0; y < p->height / y_stride; y++) {
-        for (int x = 0; x < p->width / x_stride; x ++) {
+    for (int y = 0; y < p->height; y += y_stride) {
+        for (int x = 0; x < p->width; x += x_stride) {
             // including downsample
-            BGR24_to_YUV420((uint8_t *)p->pixels + y * y_stride * p->pitch + x * x_stride, p->pitch,
-                             Y, U, V);
+            BGR24_to_YUV420((uint8_t *)p->pixels + y * p->pitch + x*3, p->pitch, Y, U, V);
             for (int i = 0; i < 8; i++) {
                 for (int j = 0; j < 8; j++) {
                     fprintf(vlog_get_stream(), "%d ", Y[i * 8 + j]);
-                    tmp[i*8+j] = Y[i*8+j];
                 }
                 fprintf(vlog_get_stream(), "\n");
             }
             fprintf(vlog_get_stream(), "\n");
-            dct->fdct_8x8(Y, 8);
+            dct->fdct_8x8(Y);
 
-            fprintf(vlog_get_stream(), "Block: \n");
+            fprintf(vlog_get_stream(), "Block Y0: \n");
             for (int i = 0; i < 8; i++) {
                 for (int j = 0; j < 8; j++) {
                     fprintf(vlog_get_stream(), "%d ", Y[i * 8 + j]);
                 }
                 fprintf(vlog_get_stream(), "\n");
             }
-            push_and_quant(hdec, d[0], yuv + (y * p->width / 4 + x * 4) * 64, Y);
 
-            dct->fdct_8x8(Y + 64, 8);
-            push_and_quant(hdec, d[0],
-                           yuv + (y * p->width / 4 + x * 4 + 1) * 64, Y + 64);
-            dct->fdct_8x8(Y + 128, 8);
-            push_and_quant(hdec, d[0],
-                           yuv + (y * p->width / 4 + x * 4 + 2) * 64, Y + 128);
-            dct->fdct_8x8(Y + 192, 8);
-            push_and_quant(hdec, d[0],
-                           yuv + (y * p->width / 4 + x * 4 + 3) * 64, Y + 192);
+            VINFO(jpg, "encode unit at (%d, %d)", x, y);
+            push_and_quant(hdec, d[0], Y);
 
-            dct->fdct_8x8(U, 8);
-            push_and_quant(hdec, d[1], u + (y * p->width / x_stride + x) * 64,
-                           U);
+            if (x + 8 < p->width) {
+                dct->fdct_8x8(Y + 64);
+                push_and_quant(hdec, d[0], Y + 64);
+            }
 
-            dct->fdct_8x8(V, 8);
-            push_and_quant(hdec, d[2], v + (y * p->width / x_stride + x) * 64,
-                           V);
+            if (y + 8 < p->height) {
+                dct->fdct_8x8(Y + 128);
+                push_and_quant(hdec, d[0], Y + 128);
+            }
+
+            if ((x + 8 < p->width) && (y + 8 < p->height)) {
+                for (int i = 0; i < 8; i++) {
+                    for (int j = 0; j < 8; j++) {
+                        fprintf(vlog_get_stream(), "%d ", Y[192+i * 8 + j]);
+                    }
+                    fprintf(vlog_get_stream(), "\n");
+                }
+                fprintf(vlog_get_stream(), "\n");
+                VINFO(jpg, "encode unit at (%d, %d)", x+8, y+8);
+                dct->fdct_8x8(Y + 192);
+                push_and_quant(hdec, d[0], Y + 192);
+            }
+            dct->fdct_8x8(U);
+            push_and_quant(hdec, d[1], U);
+
+            dct->fdct_8x8(V);
+            push_and_quant(hdec, d[2], V);
         }
     }
     ALIGN_BYTE(hdec->v);
-
-    bits_vec_dump(hdec->v);
 
     for (int i = 0; i < 3; i++) {
         destroy_decoder(d[i]);
     }
 
-    huffman_codec_free(hdec);
-
-    write_sos(hdec->v->len, f);
-    //write compressed data here
+    write_sos(f);
+    // write compressed data here
+    bits_vec_dump(hdec->v);
+    HEXDUMP(vlog_get_stream(), "This ", "", hdec->v->start, 32);
+    write_compress_data(hdec->v->start, hdec->v->len, f);
     write_eoi(f);
     fclose(f);
+    huffman_codec_free(hdec);
 }
 
 static struct file_ops jpg_ops = {

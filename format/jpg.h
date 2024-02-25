@@ -102,8 +102,8 @@ struct sof {
 struct jfif_app0 {
     uint16_t len;
     uint8_t identifier[5];
-    uint16_t major : 8;
-    uint16_t minor : 8;
+    uint8_t major;
+    uint8_t minor;
     uint8_t unit;
     uint16_t xdensity;
     uint16_t ydensity;

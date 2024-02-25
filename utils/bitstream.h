@@ -19,7 +19,8 @@ struct bits_vec {
     uint8_t *start;     /* bitstream start position */
     uint8_t *ptr;       /* current byte pointer */
     uint8_t offset;     /* bits left in a byte for current reader */
-    size_t len;         /* total bitstream length in bytes */
+    int len;            /* total bitstream length in bytes */
+    int reserve;
     uint8_t msb;        /* indicate bits read from which side */
 };
 
@@ -53,7 +54,7 @@ int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 struct bits_vec * bits_writer_reserve(uint8_t msb);
 
 void bits_vec_write_bit(struct bits_vec *v, int8_t a);
-void bits_vec_write_bits(struct bits_vec *v, int8_t a, int n);
+void bits_vec_write_bits(struct bits_vec *v, int a, int n);
 void bits_vec_align_byte(struct bits_vec *v);
 
 /* debug function for stream info */
@@ -67,6 +68,8 @@ int bits_vec_test_bit(struct bits_vec *v);
 int bits_vec_position(struct bits_vec *v);
 
 void bits_vec_reinit_cur(struct bits_vec *v);
+
+int bits_vec_left_bits(struct bits_vec *v);
 
 /* macro define for bitstream helper */
 #define READ_BIT(v) bits_vec_read_bit(v)

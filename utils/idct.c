@@ -670,9 +670,12 @@ dct_1d_8(const int16_t *in, const int stride, int out[8]) {
 }
 
 static void
-fdct_8x8_8(void *data, int bitdepth) {
+fdct_8x8_8(void *data) {
     int16_t *block = (int16_t *)data;
     int16_t rowdcts[64];
+    for (int i = 0; i < 64; i++) {
+        block[i] -= 128;
+    }
     const int kRowScale = 11;
     const int kRowRound = (1 << (kRowScale - 1));
     //do for each row

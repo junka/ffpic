@@ -207,7 +207,7 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
 }
 
 static struct pic*
-BMP_load(const char* filename)
+BMP_load(const char* filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;

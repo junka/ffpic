@@ -287,7 +287,7 @@ read_pam_data(PNM *m, FILE *f)
 }
 
 static struct pic* 
-PNM_load(const char *filename)
+PNM_load(const char *filename, int skip_flag)
 {
     struct pic * p = pic_alloc(sizeof(PNM));
     PNM *m = p->pic;

@@ -299,7 +299,7 @@ read_image_data(PSD *s, FILE *f)
 
 
 static struct pic* 
-PSD_load(const char* filename)
+PSD_load(const char* filename, int skip_flag)
 {
     struct pic * p = pic_alloc(sizeof(PSD));
     PSD * s = p->pic;

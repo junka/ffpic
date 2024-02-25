@@ -180,11 +180,11 @@ void ff_fdct_ifast(int16_t *data) {
   }
 }
 
-void jpeg_fdct(float *data) {
+void jpeg_fdct(int16_t *data) {
   float tmp0, tmp1, tmp2, tmp3, tmp4, tmp5, tmp6, tmp7;
   float tmp10, tmp11, tmp12, tmp13;
   float z1, z2, z3, z4, z5, z11, z13;
-  float *dataptr;
+  int16_t *dataptr;
   int ctr;
 
   /* Pass 1: process rows. */
@@ -299,6 +299,29 @@ void jpeg_fdct(float *data) {
   }
 }
 
+#define alpha(u) (u > 0 ? (1.0f/sqrt(2)) : 1)
+
+void fdct2d8x8(int16_t *data) {
+  int u, v;
+  int x, y, i;
+  float buf[64];
+  float temp;
+  for (u = 0; u < 8; u++) {
+    for (v = 0; v < 8; v++) {
+        temp = 0;
+        for (x = 0; x < 8; x++) {
+          for (y = 0; y < 8; y++) {
+            temp += data[y * 8 + x] *
+                    (float)cos((2.0f * x + 1.0f) / 16.0f * u * M_PI) *
+                    (float)cos((2.0f * y + 1.0f) / 16.0f * v * M_PI);
+          }
+        }
+        buf[v * 8 + u] = alpha(u) * alpha(v) * temp;
+    }
+  }
+  for (i = 0; i < 64; i++)
+    data[i] = buf[i];
+}
 
 int test_dct() {
     int16_t data[] = {
@@ -337,8 +360,12 @@ int test_dct() {
 
     const struct dct_ops *dct = get_dct_ops(8);
     int16_t out[64];
-    dct->fdct_8x8(data1, 8);
-    // jpeg_fdct(data);
+    // dct->fdct_8x8(data);
+    // for (int i = 0; i < 64; i ++) {
+    //   data1[i] -= 128;
+    // }
+    // fdct2d8x8(data);
+    jpeg_fdct(data);
     // ff_fdct_ifast(data1);
     // for (int i = 0; i < 8; i++) {
     //     for (int j = 0; j < 8; j++) {
@@ -350,7 +377,7 @@ int test_dct() {
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            printf("%d ", (int)data1[i * 8 + j]);
+            printf("%d ", (int)data[i * 8 + j]);
         }
         printf("\n");
     }
@@ -358,7 +385,7 @@ int test_dct() {
 
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            printf("%d ", (int)expect1[i * 8 + j]);
+            printf("%d ", (int)expect[i * 8 + j]);
         }
         printf("\n");
     }

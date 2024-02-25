@@ -41,7 +41,7 @@ main(int argc, const char *argv[])
         return -1;
     }
     int left, top;
-    struct pic *p = file_load(ops, filename);
+    struct pic *p = file_load(ops, filename, 0);
     if (!p) {
         p = file_dequeue_pic();
         file_enqueue_pic(p);

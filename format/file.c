@@ -38,9 +38,9 @@ file_probe(const char *filename)
     return NULL;
 }
 
-struct pic * file_load(struct file_ops *ops, const char *filename) {
+struct pic * file_load(struct file_ops *ops, const char *filename, int skip_flag) {
     rq = ring_alloc(64);
-    return ops->load(filename);
+    return ops->load(filename, skip_flag);
 }
 
 struct pic *

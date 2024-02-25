@@ -229,7 +229,7 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 }
 
 static struct pic* 
-PNG_load(const char* filename)
+PNG_load(const char* filename, int skip_flag)
 {
     // const char *chunk_types[] = {
     //     "IHDR",
@@ -506,19 +506,21 @@ PNG_load(const char* filename)
     fclose(f);
     b->size = calc_image_raw_size(b);
     VDBG(png, "compressed size %d, pre allocate %d\n", compressed_size, b->size);
-    
-    uint8_t* udata = malloc(b->size);
-    int a = deflate_decode(compressed, compressed_size, udata, &b->size);
-#if 0
-    hexdump(stdout, "png raw data", "", compressed, 32);
-    hexdump(stdout, "png decompress data", "", udata, 32);
-#endif
-    free(compressed);
-    b->data = (uint8_t*)malloc(b->size);
-    VDBG(png, "ret %d, size %d\n", a, b->size);
 
-    PNG_unfilter(b, udata, b->size);
-    free(udata);
+    if (!skip_flag) {
+        uint8_t* udata = malloc(b->size);
+        int a = deflate_decode(compressed, compressed_size, udata, &b->size);
+#if 0
+        hexdump(stdout, "png raw data", "", compressed, 32);
+        hexdump(stdout, "png decompress data", "", udata, 32);
+#endif
+        free(compressed);
+        b->data = (uint8_t*)malloc(b->size);
+        VDBG(png, "ret %d, size %d\n", a, b->size);
+
+        PNG_unfilter(b, udata, b->size);
+        free(udata);
+    }
     p->width = b->ihdr.width;
     p->height = b->ihdr.height;
     p->depth = calc_png_bits_per_pixel(b);

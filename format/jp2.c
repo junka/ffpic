@@ -600,7 +600,7 @@ read_next_box(JP2 *j, FILE *f, int len)
 }
 
 static struct pic* 
-JP2_load(const char *filename)
+JP2_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(JP2));
     JP2 *j = p->pic;

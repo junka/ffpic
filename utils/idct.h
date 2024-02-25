@@ -16,8 +16,8 @@ struct dct_ops {
     void (*idct_4x4)(void *in, int bitdepth);
     void (*idct_8x8)(void *in, int bitdepth);
 
-    void (*fdct_4x4)(void *in, int bitdepth);
-    void (*fdct_8x8)(void *in, int bitdepth);
+    void (*fdct_4x4)(void *in);
+    void (*fdct_8x8)(void *in);
 };
 
 const struct dct_ops *get_dct_ops(int component_bits);

@@ -117,23 +117,24 @@ if(OpenCL_FOUND)
   target_compile_options(ffpic PRIVATE -DENABLE_OPENCL)
 endif()
 
-add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
 add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c")
-
 add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c")
 add_executable(transcode "${FFPIC_ROOT}/app/transcode.c")
 
+if(SDL2_FOUND)
+add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
 target_link_libraries(sdlshow ffpic m)
+target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
+endif(SDL2_FOUND)
+
 target_link_libraries(picinfo ffpic m)
 target_link_libraries(transbmp ffpic m)
 target_link_libraries(transcode ffpic m)
-target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 target_include_directories(transbmp PRIVATE ${FFPIC_DIRS})
 target_include_directories(transcode PRIVATE ${FFPIC_DIRS})
 
 if(SDL2_FOUND)
-  target_include_directories(ffpic PRIVATE ${SDL2_INCLUDE_DIRS})
   target_include_directories(sdlshow PRIVATE ${SDL2_INCLUDE_DIRS})
   message("SDL2 library found ${SDL2_INCLUDE_DIRS}")
   target_link_libraries(sdlshow ${SDL2_LIBRARIES})

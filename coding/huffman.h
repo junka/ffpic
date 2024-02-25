@@ -17,14 +17,15 @@ extern "C"{
 typedef struct huffman_tree {
     uint8_t tid;
     uint8_t fast_bitlen[FAST_HF_SIZE];    /* lookup table for 8 bit codec*/
-    uint8_t fast_symbol[FAST_HF_SIZE];
+    uint16_t fast_symbol[FAST_HF_SIZE];
 
-    uint8_t fast_codec[FAST_HF_SIZE];                     // for encoding
+    uint16_t fast_codec[FAST_HF_SIZE];                    // for encoding
     uint8_t fast_codbits[FAST_HF_SIZE];                   // for encoding
-
+#if SLOW_HF_BITS > 0
     uint16_t *slow_codec[SLOW_HF_BITS];   /* symbols length greater than 8 bits */
     uint16_t *slow_symbol[SLOW_HF_BITS];
     uint8_t slow_cnt[SLOW_HF_BITS];
+#endif
     int maxbitlen;       /* maximum number of bits a single code can get */
     int n_codes;       	 /* number of symbols in the alphabet = number of codes */
 } huffman_tree;
@@ -67,7 +68,7 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id);
 
 int huffman_write_symbol(void);
 
-int huffman_encode_symbol_8bit(struct huffman_codec *codec, struct huffman_tree *tree, uint8_t ch);
+int huffman_encode_symbol(struct huffman_codec *codec, struct huffman_tree *tree, int ch);
 
 int huffman_encode_done(struct huffman_codec *codec, uint8_t **ptr);
 

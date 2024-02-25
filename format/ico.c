@@ -33,7 +33,7 @@ ICO_probe(const char *filename)
 }
 
 static struct pic* 
-ICO_load(const char *filename)
+ICO_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(ICO));
     ICO *c = p->pic;

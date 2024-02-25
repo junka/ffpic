@@ -218,6 +218,7 @@ YUV_to_BGRA32_8bit(uint8_t *ptr, int pitch, void *Y, void *U, void *V,
         p += pitch;
     }
 }
+
 void BGR24_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
                       int16_t *V) {
     int r, g, b;
@@ -235,17 +236,14 @@ void BGR24_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
                 b = *(p + 3 * i);
                 g = *(p + 3 * i + 1);
                 r = *(p + 3 * i + 2);
-                Y[j * 8 + i] = 0.299 * r + 0.587 * g + 0.114 * b;
-                // printf("(%d,%d,%d)->%d ", b, g, r, Y[j * 8 + i]);
+                Y[j * 8 + i] = (int16_t)(0.299 * r + 0.587 * g + 0.114 * b);
                 if (k == 0) {
-                    U[j * 8 + i] = -0.16874 * r - 0.33126 * g + 0.5 * b + 128;
-                    V[j * 8 + i] = 0.5 * r - 0.41869 * g - 0.08131 * b + 128;
+                    U[j * 8 + i] = (int16_t)(-0.16874 * r - 0.33126 * g + 0.5 * b + 128);
+                    V[j * 8 + i] = (int16_t)(0.5 * r - 0.41869 * g - 0.08131 * b + 128);
                 }
             }
-            // printf("\n");
             p += pitch;
         }
-        // printf("\n");
         Y += 64;
     }
 }

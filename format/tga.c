@@ -133,7 +133,7 @@ read_compress_data(TGA *t, FILE *f)
 }
 
 static struct pic* 
-TGA_load(const char *filename)
+TGA_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(TGA));
     TGA *t = p->pic;

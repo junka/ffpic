@@ -346,7 +346,7 @@ tiff_compose_image_from_de(TIFF *t)
 
 
 static struct pic*
-TIFF_load(const char *filename)
+TIFF_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(TIFF));
     TIFF *t = p->pic;

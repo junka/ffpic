@@ -179,7 +179,7 @@ read_pixel(FILE *f, int type)
 }
 
 static struct pic* 
-EXR_load(const char* filename)
+EXR_load(const char* filename, int skip_flag)
 {
     struct pic * p = pic_alloc(sizeof(EXR));
     EXR * e = p->pic;

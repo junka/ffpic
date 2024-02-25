@@ -2003,7 +2003,7 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
 }
 
 static struct pic* 
-WEBP_load(const char *filename)
+WEBP_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(WEBP));
     WEBP *w = p->pic;

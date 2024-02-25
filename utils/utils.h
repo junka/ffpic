@@ -44,7 +44,7 @@ static inline int clip3(int minv, int maxv, int v)
     return MIN(MAX(minv, v), maxv);
 }
 
-#define HEXDUMP(f, t, b, l) hexdump(f, t, b, l)
+#define HEXDUMP(f, t, p, b, l) hexdump(f, t, p, b, l)
 
 
 #define OFFSET_OF(type, member) ((size_t) &((type *)0)->member)

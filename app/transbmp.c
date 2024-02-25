@@ -30,7 +30,7 @@ int main(int argc, char *argv[])
         return -1;
     }
     int left = 0, top = 0;
-    struct pic *p = file_load(ops, filename);
+    struct pic *p = file_load(ops, filename, 0);
     snprintf(bmpfile, 128, "%s (%d * %d)", filename, p->width, p->height);
 
     struct display *d = display_get("bmpwriter");

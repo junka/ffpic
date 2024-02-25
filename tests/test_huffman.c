@@ -27,6 +27,7 @@ int test_decoder(void)
     struct huffman_symbol *s = huffman_symbol_alloc(num_codecs, syms);
 
     huffman_build_lookup_table(dtree, 0, s);
+    // huffman_dump_table(stdout, dtree);
 
     uint8_t *data = malloc(2);
     data[0] = 0xA5;
@@ -44,10 +45,11 @@ int test_decoder(void)
     int ret = 0, i = 0;
     do {
         ret = huffman_decode_symbol(hdec, dtree);
-        if (i < len && expect[i++] != ret) {
+        // printf("get %c expect %c\n", ret, expect[i]);
+        if (expect[i++] != ret) {
             goto err_decode;
         }
-    } while (ret != -1);
+    } while (ret != -1 && i < len);
 
 end_decode:
     free(s->syms);
@@ -94,7 +96,7 @@ int test_encoder(void)
     //huffman_dump_table(stdout, tree);
     struct huffman_codec *codec = huffman_codec_init(NULL, 0);
     for (int i = 0; i< sizeof(data)/sizeof(data[0])-1; i++) {
-        huffman_encode_symbol_8bit(codec, tree, data[i]);
+        huffman_encode_symbol(codec, tree, data[i]);
     }
     uint8_t *got;
     int len = huffman_encode_done(codec, &got);
@@ -112,10 +114,14 @@ int test_encoder(void)
 
 int main(void) {
     if (test_decoder()) {
+        printf("test decoder fail\n");
         return -1;
     }
+    printf("test decoder done\n");
     if (test_encoder()) {
+        printf("test encoder fail\n");
         return -1;
     }
+    printf("test encoder done\n");
     return 0;
 }

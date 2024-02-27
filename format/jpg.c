@@ -928,11 +928,15 @@ push_and_quant(struct huffman_codec *hdec, struct jpg_decoder *d,
     // do quant and zigzag
     int i = 0;
     float q;
-    for (int i = 0; i < 64; i++) {
-        q = clamp((d->quant[zigzag[i]] * 100 + 50) / 100, 255);
-        q = 1.0f / ((float)q * 8.0);
-        data[i] = (int16_t)(buf[zigzag[i]] * q + 16384.5) - 16384;
-        data[i] = clamp(data[i], 255);
+    for (int x = 0; x < 8; x++) {
+        for (int y = 0; y < 8; y++) {
+            q = (float)(d->quant[zigzag[i]] * 100 + 50) / 100;
+            if (q < 1) {q = 1;}
+            else if (q > 255) {q = 255;}
+            q = 1.0f / ((float)q);
+            data[i] = (int16_t)(buf[zigzag[i]] * q + 16384.5) - 16384;
+            i++;
+        }
     }
     // }
     // fprintf(vlog_get_stream(), "after quant \n");

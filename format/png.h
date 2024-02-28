@@ -4,28 +4,33 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 #include <stdint.h>
+
 /* according to https://www.w3.org/TR/2003/REC-PNG-20031110/#7Integers-and-byte-order
  *   All png integers are in network byte orders
  */
 
-#define CHARS2UINT(x) (uint32_t)(x[0] | x[1] << 8 | x[2] << 16 | x[3] << 24)
+#define FOUR2UINT(a, b, c, d)  (uint32_t)(a | b << 8| c << 16 | d << 24)
+
+#define CHARS2UINT(x) FOUR2UINT(x[0], x[1], x[2], x[3])
+
 
 #pragma pack(push, 1)
 
 enum png_chuck_type {
-    CHUNK_TYPE_IHDR = CHARS2UINT("IHDR"),
-    CHUNK_TYPE_PLTE = CHARS2UINT("PLTE"),
-    CHUNK_TYPE_IDAT = CHARS2UINT("IDAT"),
-    CHUNK_TYPE_GAMA = CHARS2UINT("gAMA"),
-    CHUNK_TYPE_ICCP = CHARS2UINT("iCCP"),
-    CHUNK_TYPE_CHRM = CHARS2UINT("cHRM"),
-    CHUNK_TYPE_TEXT = CHARS2UINT("tEXt"),
-    CHUNK_TYPE_ITXT = CHARS2UINT("iTXt"),
-    CHUNK_TYPE_ZTXT = CHARS2UINT("zTXt"),
-    CHUNK_TYPE_HIST = CHARS2UINT("hIST"),
-    CHUNK_TYPE_BKGD = CHARS2UINT("bKGD"),
-    CHUNK_TYPE_TIME = CHARS2UINT("tIME"),
+    CHUNK_TYPE_IHDR = FOUR2UINT('I', 'H', 'D', 'R'),
+    CHUNK_TYPE_PLTE = FOUR2UINT('P', 'L', 'T', 'E'),
+    CHUNK_TYPE_IDAT = FOUR2UINT('I', 'D', 'A', 'T'),
+    CHUNK_TYPE_GAMA = FOUR2UINT('g', 'A', 'M', 'A'),
+    CHUNK_TYPE_ICCP = FOUR2UINT('i', 'C', 'C', 'P'),
+    CHUNK_TYPE_CHRM = FOUR2UINT('c', 'H', 'R', 'M'),
+    CHUNK_TYPE_TEXT = FOUR2UINT('t', 'E', 'X', 't'),
+    CHUNK_TYPE_ITXT = FOUR2UINT('i', 'T', 'X', 't'),
+    CHUNK_TYPE_ZTXT = FOUR2UINT('z', 'T', 'X', 't'),
+    CHUNK_TYPE_HIST = FOUR2UINT('h', 'I', 'S', 'T'),
+    CHUNK_TYPE_BKGD = FOUR2UINT('b', 'K', 'G', 'D'),
+    CHUNK_TYPE_TIME = FOUR2UINT('t', 'I', 'M', 'E'),
 };
 
 struct png_file_header {

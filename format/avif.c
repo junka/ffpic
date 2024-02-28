@@ -566,22 +566,22 @@ read_meta_box(FILE *f, struct av1_meta_box *meta)
         fseek(f, -8, SEEK_CUR);
         VDBG(avif, "type (%s), size %d", UINT2TYPE(type), b.size);
         switch (type) {
-        case TYPE2UINT("hdlr"):
+        case FOURCC2UINT('h', 'd', 'l', 'r'):
             read_hdlr_box(f, &meta->hdlr);
             break;
-        case TYPE2UINT("pitm"):
+        case FOURCC2UINT('p', 'i', 't', 'm'):
             read_pitm_box(f, &meta->pitm);
             break;
-        case TYPE2UINT("iloc"):
+        case FOURCC2UINT('i', 'l', 'o', 'c'):
             read_iloc_box(f, &meta->iloc);
             break;
-        case TYPE2UINT("iinf"):
+        case FOURCC2UINT('i', 'i', 'n', 'f'):
             read_iinf_box(f, &meta->iinf);
             break;
-        case TYPE2UINT("iref"):
+        case FOURCC2UINT('i', 'r', 'e', 'f'):
             read_iref_box(f, &meta->iref);
             break;
-        case TYPE2UINT("iprp"):
+        case FOURCC2UINT('i', 'p', 'r', 'p'):
             read_iprp_box(f, &meta->iprp, &read_av1c_box);
             break;
         default:
@@ -609,10 +609,10 @@ AVIF_load(const char *filename, int skip_flag)
         uint32_t type = read_box(f, &b, size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
-        case TYPE2UINT("meta"):
+        case FOURCC2UINT('m', 'e', 't', 'a'):
             read_meta_box(f, &h->meta);
             break;
-        case TYPE2UINT("mdat"):
+        case FOURCC2UINT('m', 'd', 'a', 't'):
             h->mdat_num ++;
             h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
             read_mdat_box(f, h->mdat + h->mdat_num - 1);

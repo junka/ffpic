@@ -27,7 +27,7 @@ EXR_probe(const char* filename)
         return -EBADF;
     }
     fclose(f);
-    if (ntohl(magic) == 0x762f3101) {
+    if (SWAP(magic) == 0x762f3101) {
         return 0;
     }
 

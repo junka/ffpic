@@ -23,7 +23,7 @@ endif()
 # Enable generators like Xcode and Visual Studio to place projects in folders.
 set_property(GLOBAL PROPERTY USE_FOLDERS TRUE)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native -Werror -Wno-unused-parameter -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native -Werror -Wno-unused-parameter -Wno-unused-variable -Wno-unused-const-variable -Wno-unused-function")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 if(CMAKE_COMPILER_IS_GNUCXX)
     message(STATUS "GCC detected, adding compile flags")

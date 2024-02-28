@@ -11,6 +11,7 @@ extern "C" {
 #include "byteorder.h"
 
 
+#define FOURCC2UINT(a, b, c, d) (uint32_t)(a | b << 8 | c << 16 | d << 24)
 #define TYPE2UINT(x) (uint32_t)(x[0]|x[1]<<8|x[2]<<16|x[3]<<24)
 
 static inline char *

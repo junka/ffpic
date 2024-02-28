@@ -8,37 +8,37 @@ extern "C" {
 #include "basemedia.h"
 
 //following jp box and ftyp box, super box
-#define JP2H TYPE2UINT("jp2h")
+#define JP2H FOURCC2UINT('j', 'p', '2', 'h')
 
 
 //other jp2 boxes
-#define IHDR TYPE2UINT("ihdr")
+#define IHDR FOURCC2UINT('i', 'h', 'd', 'r')
 //color specification
-#define COLR TYPE2UINT("colr")
+#define COLR FOURCC2UINT('c', 'o', 'l', 'r')
 //bits per component
-#define BPCC TYPE2UINT("bpcc")
+#define BPCC FOURCC2UINT('b', 'p', 'c', 'c')
 //palette
-#define PCLR TYPE2UINT("pclr")
+#define PCLR FOURCC2UINT('p', 'c', 'l',  'r')
 //component mapping
-#define CMAP TYPE2UINT("cmap")
+#define CMAP FOURCC2UINT('c', 'm', 'a', 'p')
 //channel definition
-#define CDEF TYPE2UINT("cdef")
+#define CDEF FOURCC2UINT('c', 'd', 'e', 'f')
 //resolution
-#define RES  TYPE2UINT("res ")
+#define RES  FOURCC2UINT('r', 'e', 's', ' ')
 //capture resolution
-#define RESC TYPE2UINT("resc")
+#define RESC FOURCC2UINT('r', 'e', 's', 'c')
 //default display resolution
-#define RESD TYPE2UINT("resd")
+#define RESD FOURCC2UINT('r', 'e', 's', 'd')
 //contiguous code stream
-#define JP2C TYPE2UINT("jp2c")
+#define JP2C FOURCC2UINT('j', 'p', '2', 'c')
 //intellectual property
-#define JP2I TYPE2UINT("jp2i")
+#define JP2I FOURCC2UINT('j', 'p', '2', 'i')
 
-#define XML  TYPE2UINT("xml ")
-#define UUID TYPE2UINT("uuid")
-#define UINF TYPE2UINT("uinf")
-#define ULST TYPE2UINT("ulst")
-#define URL  TYPE2UINT("url ")
+#define XML  FOURCC2UINT('x', 'm', 'l', ' ')
+#define UUID FOURCC2UINT('u', 'u', 'i', 'd')
+#define UINF FOURCC2UINT('u', 'i', 'n', 'f')
+#define ULST FOURCC2UINT('u', 'l', 's', 't')
+#define URL  FOURCC2UINT('u', 'r', 'l', ' ')
 
 
 

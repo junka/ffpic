@@ -375,20 +375,20 @@ read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
         // printf("type %s, size %d\n", UINT2TYPE(type), p.size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
-            case TYPE2UINT("hvcC"):
+            case FOURCC2UINT('h', 'v', 'c', 'C'):
                 s -= cb(f, &cc);
                 b->property[n++] = cc;
                 break;
-            case TYPE2UINT("av1C"):
+            case FOURCC2UINT('a', 'v', '1', 'C'):
                 s -= cb(f, &cc);
                 b->property[n++] = cc;
                 break;
-            case TYPE2UINT("ispe"):
+            case FOURCC2UINT('i', 's', 'p', 'e'):
                 ispe = malloc(sizeof(struct ispe_box));
                 s -= read_ispe_box(f, ispe);
                 b->property[n++] = (struct box *)ispe;
                 break;
-            case TYPE2UINT("pixi"):
+            case FOURCC2UINT('p', 'i', 'x', 'i'):
                 pixi = malloc(sizeof(struct pixi_box));
                 s -= read_pixi_box(f, pixi);
                 b->property[n++] = (struct box *)pixi;

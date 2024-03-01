@@ -396,13 +396,20 @@ struct av1_meta_box {
     struct iref_box iref;
 };
 
+struct avif_item {
+    const struct item_location *item;
+    uint32_t type;
+    uint64_t length;
+    uint8_t *data;
+};
+
 typedef struct {
     struct ftyp_box ftyp;
     struct av1_meta_box meta;
     int mdat_num;
-    struct mdat_box *mdat;
+    // struct mdat_box *mdat;
 
-    // struct avif_item *items;
+    struct avif_item *items;
 } AVIF;
 
 

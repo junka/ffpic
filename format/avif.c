@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "bitstream.h"
+#include "colorspace.h"
 #include "vlog.h"
 #include "file.h"
 #include "avif.h"
@@ -585,13 +586,65 @@ read_meta_box(FILE *f, struct av1_meta_box *meta)
             read_iprp_box(f, &meta->iprp, &read_av1c_box);
             break;
         default:
+            fseek(f, b.size, SEEK_CUR);
             break;
         }
         size -= b.size;
+        VDBG(avif, "%s, left %d", UINT2TYPE(type), size);
     }
     
 }
 
+void decode_av01(AVIF *h, uint8_t *data, uint64_t len, uint8_t **pixels)
+{
+    // hexdump(stdout, "coded ", "", data, 256);
+    uint8_t *p = data;
+    while (len > 0) {
+        int sample_len = p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
+        len -= 4;
+        p += 4;
+        // parse_nalu(p, sample_len, pixels);
+        len -= sample_len;
+        p += sample_len;
+    }
+}
+
+static void pre_read_item(AVIF *h, FILE *f, uint32_t idx) {
+    // for now make sure, extent_count = 1 work
+    if (h->items[idx].item->extent_count == 1) {
+        h->items[idx].length = h->items[idx].item->extents[0].extent_length;
+        h->items[idx].data = malloc(h->items[idx].length);
+        fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET);
+        fread(h->items[idx].data, h->items[idx].length, 1, f);
+    } else {
+        h->items[idx].data = malloc(1);
+        uint64_t total = 0;
+        for (int i = 0; i < h->items[idx].item->extent_count; i++) {
+            h->items[idx].data = realloc(h->items[idx].data,
+                        h->items[idx].item->extents[i].extent_length);
+            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET);
+            fread(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
+            total += h->items[idx].item->extents[i].extent_length;
+        }
+        h->items[idx].length = total;
+    }
+}
+
+static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        pre_read_item(h, f, i);
+        if (h->items[i].type == TYPE2UINT("mime")) {
+            // exif mime, skip it
+            // hexdump(stdout, "exif:", "", h->items[i].data,
+            // h->items[i].length);
+            VDBG(avif, "exif %" PRIu64, h->items[i].length);
+        } else if (h->items[i].type == TYPE2UINT("av01")) {
+            // take it as real coded data
+            VINFO(avif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
+            decode_av01(h, h->items[i].data, h->items[i].length, pixels);
+        }
+    }
+}
 static struct pic* 
 AVIF_load(const char *filename, int skip_flag)
 {
@@ -603,7 +656,7 @@ AVIF_load(const char *filename, int skip_flag)
     fseek(f, 0, SEEK_SET);
 
     size -= read_ftyp(f, &h->ftyp);
-    h->mdat = malloc(sizeof(struct mdat_box));
+    // h->mdat = malloc(sizeof(struct mdat_box));
     struct box b;
     while (size) {
         uint32_t type = read_box(f, &b, size);
@@ -614,8 +667,8 @@ AVIF_load(const char *filename, int skip_flag)
             break;
         case FOURCC2UINT('m', 'd', 'a', 't'):
             h->mdat_num ++;
-            h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
-            read_mdat_box(f, h->mdat + h->mdat_num - 1);
+            // h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
+            // read_mdat_box(f, h->mdat + h->mdat_num - 1);
             break;
         default:
             break;
@@ -631,11 +684,33 @@ AVIF_load(const char *filename, int skip_flag)
             p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
         }
     }
-    // h->items = malloc(h->meta.iloc.item_count * sizeof(struct heif_item));
-    // for (int i = 0; i < h->meta.iloc.item_count; i ++) {
-    //     h->items[i].item = &h->meta.iloc.items[i];
-    // }
-
+    h->items = malloc(h->meta.iloc.item_count * sizeof(struct avif_item));
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        h->items[i].item = &h->meta.iloc.items[i];
+        for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
+            if (h->meta.iinf.item_infos[j].item_id ==
+                h->items[i].item->item_id) {
+                h->items[i].type = h->meta.iinf.item_infos[j].item_type;
+            }
+        }
+    }
+    uint16_t primary_id = h->meta.pitm.item_id;
+    VINFO(avif, "primary id %d", h->meta.pitm.item_id);
+    for (int i = 0; i < (int)h->meta.iloc.item_count; i++) {
+        if (h->meta.iloc.items[i].item_id == primary_id) {
+            VINFO(avif, "primary loc at %" PRIu64,
+                  h->meta.iloc.items[i].base_offset);
+            break;
+        }
+    }
+    // process mdata
+    VINFO(avif, "mdat_num %d", h->mdat_num);
+    p->width = ((p->width + 3) >> 2) << 2;
+    p->depth = 32;
+    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    p->pixels = malloc(p->pitch * p->height);
+    p->format = CS_PIXELFORMAT_RGB888;
+    decode_items(h, f, (uint8_t **)&p->pixels);
 
     fclose(f);
 
@@ -646,8 +721,8 @@ static void
 AVIF_free(struct pic *p)
 {
     AVIF * a = (AVIF *)p->pic;
-    if (a->mdat) {
-        free(a->mdat);
+    if (a->items) {
+        free(a->items);
     }
     pic_free(p);
 }

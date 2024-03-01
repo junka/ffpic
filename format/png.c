@@ -494,39 +494,16 @@ read_time(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 static struct pic* 
 PNG_load(const char* filename, int skip_flag)
 {
-    // const char *chunk_types[] = {
-    //     "IHDR",
-    //     "cHRM",
-    //     "gAMA",
-    //     "sBIT",
-    //     "PLTE",
-    //     "bKGD",
-    //     "hIST",
-    //     "tRNS",
-    //     "oFFs",
-    //     "pHYs",
-    //     "sCAL",
-    //     "IDAT",
-    //     "tIME",
-    //     "tEXt",
-    //     "zTXt",
-    //     "fRAc",
-    //     "gIFg",
-    //     "gIFx",
-    //     "IEND"
-    // };
     struct pic *p = pic_alloc(sizeof(struct PNG));
     PNG * b = p->pic;
 
     FILE *f = fopen(filename, "rb");
-    int ret = fread(&b->sig, sizeof(struct png_file_header), 1, f);
-    if (ret != 1) {
+    if (READ_FAIL(&b->sig, sizeof(struct png_file_header), 1, f)) {
         printf("fail to read png file header\n");
         pic_free(p);
         return NULL;
     }
 
-    // uint8_t nullbyte;
     uint32_t chunk_type = 0;
     uint32_t length;
 
@@ -534,12 +511,10 @@ PNG_load(const char* filename, int skip_flag)
     int compressed_size = 0;
     uint32_t crc32, crc;
 
-    ret = fread(&length, sizeof(uint32_t), 1, f);
-    if (ret != 1) {
+    if (READ_FAIL(&length, sizeof(uint32_t), 1, f)) {
         return NULL;
     }
-    ret = fread(&chunk_type, sizeof(uint32_t), 1, f);
-    if (ret != 1) {
+    if (READ_FAIL(&chunk_type, sizeof(uint32_t), 1, f)) {
         return NULL;
     }
     length = SWAP(length);

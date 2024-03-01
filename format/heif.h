@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include "basemedia.h"
 #include "hevc.h"
 
 #pragma pack(push, 1)
@@ -101,6 +102,7 @@ struct meta_box {
     struct iref_box iref;
 };
 
+
 struct heif_item {
     const struct item_location *item;
     uint32_t type;
@@ -111,6 +113,9 @@ struct heif_item {
 typedef struct {
     struct ftyp_box ftyp;
     struct meta_box meta;
+
+    int moov_num;
+    struct moov_box *moov;
     int mdat_num;
     // struct mdat_box *mdat;
 

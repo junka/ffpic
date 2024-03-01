@@ -17,7 +17,7 @@
 #include "idct.h"
 #include "colorspace.h"
 
-VLOG_REGISTER(jpg, DEBUG)
+VLOG_REGISTER(jpg, INFO)
 
 struct jpg_decoder {
     int prev_dc;
@@ -708,7 +708,8 @@ JPG_load_one(FILE *f, int skip_flag)
     return p;
 }
 
-static struct pic *JPG_load(const char *filename, int skip_flag)
+static struct pic *
+JPG_load(const char *filename, int skip_flag)
 {
     FILE *f = fopen(filename, "rb");
     fseek(f, 0, SEEK_END);

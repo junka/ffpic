@@ -122,6 +122,7 @@ read_mvhd_box(FILE *f, struct mvhd_box *b)
 {
     fread(b, 4, 3, f);
     b->size = SWAP(b->size);
+    printf("mvhd size %d, version %d\n", b->size, b->version);
     if (b->version == 0) {
         fread(&b->ctime, 4, 1, f);
         fread(&b->mtime, 4, 1, f);
@@ -130,7 +131,18 @@ read_mvhd_box(FILE *f, struct mvhd_box *b)
     } else if (b->version == 1) {
         fread(&b->ctime, 28, 1, f);
     }
-    fread(&b->rate, 80, 1, f);
+    fread(&b->rate, 4, 1, f);
+    fread(&b->volume, 2, 1, f);
+    fread(&b->reserved, 2, 1, f);
+    fread(b->rsd, 4, 2, f);
+    fread(b->matrix, 4, 9, f);
+    fread(b->pre_defined, 4, 6, f);
+    fread(&b->next_track_id, 4, 1, f);
+
+    b->rate = SWAP(b->rate);
+    b->volume = SWAP(b->volume);
+    b->next_track_id = SWAP(b->next_track_id);
+    printf("rate %d, volume %d, trak_id %d\n", b->rate, b->volume, b->next_track_id);
 }
 
 
@@ -138,6 +150,7 @@ void
 read_hdlr_box(FILE *f, struct hdlr_box *b)
 {
     fread(b, 4, 8, f);
+    assert(b->type == FOURCC2UINT('h', 'd', 'l', 'r'));
     b->size = SWAP(b->size);
     if (b->size - 32 - 1) {
         b->name = malloc(b->size - 32 -1);
@@ -153,6 +166,7 @@ void
 read_iloc_box(FILE *f, struct iloc_box *b)
 {
     fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('i', 'l', 'o', 'c'));
     b->size = SWAP(b->size);
     uint8_t a = read_u8(f);
     b->offset_size = a >> 4;
@@ -395,7 +409,7 @@ read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
                 break;
             default:
                 // assert(0);
-                s -= p.size;
+                s -= (p.size);
                 fseek(f, p.size, SEEK_CUR);
                 break;
         }
@@ -455,28 +469,389 @@ read_mdat_box(FILE *f, struct mdat_box *b)
     // hexdump(stdout, "mdat ", "", b->data, 256);
 }
 
+void read_dref_box(FILE *f, struct dref_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == TYPE2UINT("dref"));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    // printf("dinf %d, dref %d, count %d\n", b->size, b->size, b->entry_count);
+    b->entries = malloc(b->entry_count * sizeof(struct DataEntryBox));
+    for (int i = 0; i < (int)b->entry_count; i++) {
+        fread(b->entries + i, 12, 1, f);
+        b->entries[i].size = SWAP(b->entries[i].size);
+        // printf("data entry size %d, type %s\n", b->entries[i].size,
+        //        type2name(b->entries[i].type));
+        if (b->entries[i].type == TYPE2UINT("url ")) {
+            b->entries[i].location = malloc(b->entries[i].size - 12);
+            // printf("%s\n", b->entries[i].location);
+            fread(b->entries[i].location, b->entries[i].size - 12, 1,
+                  f);
+        } else if (b->entries[i].type == TYPE2UINT("urn ")) {
+            b->entries[i].name = malloc(b->entries[i].size - 12);
+            fread(b->entries[i].name, b->entries[i].size - 12, 1, f);
+        }
+    }
+}
+
 void read_dinf_box(FILE *f, struct dinf_box *b)
 {
     fread(b, 8, 1, f);
+    assert(b->type == TYPE2UINT("dinf"));
     b->size = SWAP(b->size);
-    fread(&b->dref, 12, 1, f);
-    b->dref.size = SWAP(b->dref.size);
-    fread(&b->dref.entry_count, 4, 1, f);
-    b->dref.entry_count = SWAP(b->dref.entry_count);
-    // printf("dinf %d, dref %d, count %d\n", b->size, b->dref.size, b->dref.entry_count);
-    b->dref.entries = malloc(b->dref.entry_count * sizeof(struct DataEntryBox));
-    for (int i = 0; i < (int)b->dref.entry_count; i++) {
-        fread(b->dref.entries+i, 12, 1, f);
-        b->dref.entries[i].size = SWAP(b->dref.entries[i].size);
-        // printf("data entry size %d, type %s\n", b->dref.entries[i].size,
-        //        type2name(b->dref.entries[i].type));
-        if (b->dref.entries[i].type == TYPE2UINT("url ")) {
-            b->dref.entries[i].location = malloc(b->dref.entries[i].size-12);
-            printf("%s\n", b->dref.entries[i].location);
-            fread(b->dref.entries[i].location, b->dref.entries[i].size - 12, 1, f);
-        } else if (b->dref.entries[i].type == TYPE2UINT("urn ")) {
-            b->dref.entries[i].name = malloc(b->dref.entries[i].size-12);
-            fread(b->dref.entries[i].name, b->dref.entries[i].size - 12, 1, f);
+    read_dref_box(f, &b->dref);
+}
+
+static void
+read_tkhd_box(FILE *f, struct tkhd_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('t', 'k', 'h', 'd'));
+    b->size = SWAP(b->size);
+    if (b->version == 0) {
+        fread(&b->creation_time, 4, 1, f);
+        fread(&b->modification_time, 4, 1, f);
+        fread(&b->track_id, 4, 1, f);
+        fread(&b->reserved, 4, 1, f);
+        fread(&b->duration, 4, 1, f);
+    } else {
+        fread(&b->creation_time, 32, 1, f);
+    }
+    fread(b->rsd, 4, 2, f);
+    fread(&b->layer, 2, 1, f);
+    fread(&b->alternate_group, 2, 1, f);
+    fread(&b->volume, 2, 1, f);
+    fread(&b->reserved0, 2, 1, f);
+    fread(&b->matrix, 4, 9, f);
+    fread(&b->width, 4, 1, f);
+    fread(&b->height, 4, 1, f);
+    b->width = SWAP(b->width);
+    b->height = SWAP(b->height);
+    printf("width %d, height %d\n",b->width, b->height);
+}
+
+void read_vmhd_box(FILE *f, struct vmhd_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('v', 'm', 'h', 'd'));
+    b->size = SWAP(b->size);
+    fread(&b->graphicsmode, 2, 1, f);
+    b->graphicsmode = SWAP(b->graphicsmode);
+    fread(b->opcolor, 2, 3, f);
+}
+
+void read_mdhd_box(FILE *f, struct mdhd_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('m', 'd', 'h', 'd'));
+    b->size = SWAP(b->size);
+    if (b->version == 0) {
+        fread(&b->creation_time, 4, 1, f);
+        fread(&b->modification_time, 4, 1, f);
+        fread(&b->timescale, 4, 1, f);
+        fread(&b->duration, 4, 1, f);
+    } else {
+        fread(&b->creation_time, 28, 1, f);
+    }
+    fread(&b->lan, 2, 1, f);
+    fread(&b->pre_defined, 2, 1, f);
+}
+
+void read_stsd_box(FILE *f, struct stsd_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 's', 'd'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    // printf("stsd entry_count %d\n", b->entry_count);
+    b->entries = malloc(sizeof(struct SampleEntry) * b->entry_count);
+    for (int i = 0; i < b->entry_count; i++) {
+        fread(b->entries+i, 4, 2, f);
+        b->entries[i].size = SWAP(b->entries[i].size);
+        printf("sample entry %s: %d\n", type2name(b->entries[i].type), b->size);
+        // fread(b->entries[i].reserved, 1, 6, f);
+        // fread(&b->entries[i].data_reference_index, 2, 1, f);
+        // b->entries[i].data_reference_index = SWAP(b->entries[i].data_reference_index);
+        // printf("data_ref_index %d\n", b->entries[i].data_reference_index);
+        fseek(f, b->entries[i].size - 8, SEEK_CUR);
+    }
+}
+
+void read_stdp_box(FILE *f, struct stdp_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 'd', 'p'));
+    b->size = SWAP(b->size);
+
+}
+
+void read_stts_box(FILE *f, struct stts_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 't', 's'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    printf("%s size %d, entry_count %d\n", type2name(b->type), b->size, b->entry_count);
+    if (b->entry_count) {
+        b->sample_count = malloc(4 * b->entry_count);
+        b->sample_delta = malloc(4 * b->entry_count);
+        for (int i = 0; i < b->entry_count; i++) {
+            fread(b->sample_count + i, 4, 1, f);
+            fread(b->sample_delta + i, 4, 1, f);
         }
+    }
+}
+
+void read_ctts_box(FILE *f, struct ctts_box *b) {
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('c', 't', 't', 's'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    b->sample_count = malloc(4 * b->entry_count);
+    b->sample_offset = malloc(4 * b->entry_count);
+    for (int i = 0; i < b->entry_count; i++) {
+        fread(b->sample_count + i, 4, 1, f);
+        fread(b->sample_offset + i, 4, 1, f);
+    }
+}
+
+void read_stsc_box(FILE *f, struct stsc_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 's', 'c'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
+           b->entry_count);
+
+    b->first_chunk = malloc(4 * b->entry_count);
+    b->sample_per_chunk = malloc(4 * b->entry_count);
+    b->sample_description_index = malloc(4 * b->entry_count);
+    for (int i = 0; i < b->entry_count; i++) {
+        fread(b->first_chunk + i, 4, 1, f);
+        fread(b->sample_per_chunk + i, 4, 1, f);
+        fread(b->sample_description_index + i, 4, 1, f);
+    }
+}
+
+void read_stco_box(FILE *f, struct stco_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 'c', 'o'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
+           b->entry_count);
+
+    b->chunk_offset = malloc(4 * b->entry_count);
+    for (int i = 0; i < b->entry_count; i++) {
+        fread(b->chunk_offset + i, 4, 1, f);
+    }
+}
+
+void read_stsz_box(FILE *f, struct stsz_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 's', 'z'));
+    b->size = SWAP(b->size);
+    fread(&b->sample_size, 4, 1, f);
+    b->sample_size = SWAP(b->sample_size);
+    fread(&b->sample_count, 4, 1, f);
+    b->sample_count = SWAP(b->sample_count);
+    printf("%s size %d, sample_size %d, sample_count %d\n", type2name(b->type), b->size,
+           b->sample_size, b->sample_count);
+    if (b->sample_size == 0) {
+        b->entry_size = malloc(4 * b->sample_count);
+        for (int i = 0; i < b->sample_count; i++) {
+            fread(b->entry_size + i, 4, 1, f);
+            b->entry_size[i] = SWAP(b->entry_size[i]);
+            // printf("entry size %d\n", b->entry_size[i]);
+        }
+    }
+}
+
+void read_stss_box(FILE *f, struct stss_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 't', 's', 's'));
+    b->size = SWAP(b->size);
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    b->sample_number = malloc(b->entry_count * 4);
+    for (int i = 0; i < b->entry_count; i++) {
+        fread(b->sample_number+i, 4, 1, f);
+        b->sample_number[i] = SWAP(b->sample_number[i]);
+    }
+}
+
+void read_stbl_box(FILE *f, struct stbl_box *b)
+{
+    fread(b, 4, 2, f);
+    assert(b->type == FOURCC2UINT('s', 't', 'b', 'l'));
+    b->size = SWAP(b->size);
+    read_stsd_box(f, &b->stsd);
+    int s = b->size - 8 - b->stsd.size;
+    while (s) {
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("%s, stbl left %d\n", type2name(type), s);
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+        case FOURCC2UINT('s', 't', 'd', 'p'):
+            read_stdp_box(f, &b->stdp);
+            break;
+        case FOURCC2UINT('s', 't', 't', 's'):
+            read_stts_box(f, &b->stts);
+            break;
+        case FOURCC2UINT('s', 't', 's', 'c'):
+            read_stsc_box(f, &b->stsc);
+            break;
+        case FOURCC2UINT('s', 't', 'c', 'o'):
+            read_stco_box(f, &b->stco);
+            break;
+        case FOURCC2UINT('c', 't', 't', 's'):
+            read_ctts_box(f, &b->ctts);
+            break;
+        case FOURCC2UINT('s', 't', 's', 'z'):
+        case FOURCC2UINT('s', 't', 'z', '2'):
+            read_stsz_box(f, &b->stsz);
+            break;
+        case FOURCC2UINT('s', 't', 's', 's'):
+            read_stss_box(f, &b->stss);
+            break;
+        default:
+            fseek(f, p.size, SEEK_CUR);
+            break;
+        }
+        s -= (p.size);
+    }
+}
+void read_minf_box(FILE *f, struct minf_box *b)
+{
+    fread(b, 4, 2, f);
+    assert(b->type == FOURCC2UINT('m', 'i', 'n', 'f'));
+    b->size = SWAP(b->size);
+    int s = b->size - 8;
+    while (s) {
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("%s\n", type2name(type));
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+        case FOURCC2UINT('v', 'm', 'h', 'd'):
+            read_vmhd_box(f, &b->vmhd);
+            break;
+        case FOURCC2UINT('s', 'm', 'h', 'd'):
+            // read_smhd_box();
+            break;
+        case FOURCC2UINT('h', 'm', 'h', 'd'):
+            // read_hmhd_box();
+            break;
+        case FOURCC2UINT('s', 't', 'h', 'd'):
+            // read_sthd_box();
+            break;
+        case FOURCC2UINT('n', 'm', 'h', 'd'):
+            // read_nmhd_box();
+            break;
+        case FOURCC2UINT('d', 'i', 'n', 'f'):
+            read_dinf_box(f, &b->dinf);
+            break;
+        case FOURCC2UINT('s', 't', 'b', 'l'):
+            read_stbl_box(f, &b->stbl);
+            break;
+        default:
+            fseek(f, p.size, SEEK_CUR);
+            break;
+        }
+        s -= (p.size);
+
+    }
+}
+
+void read_mdia_box(FILE *f, struct mdia_box *b)
+{
+    fread(b, 4, 2, f);
+    assert(b->type == FOURCC2UINT('m', 'd', 'i', 'a'));
+    b->size = SWAP(b->size);
+    read_mdhd_box(f, &b->mdhd);
+    read_hdlr_box(f, &b->hdlr);
+    int s = b->size - b->mdhd.size - b->hdlr.size - 8;
+    struct box p;
+    uint32_t type = read_box(f, &p, s);
+    fseek(f, -8, SEEK_CUR);
+    if (type == FOURCC2UINT('e', 'l', 'n', 'g')) {
+        // read_elng_box (f, &b->elng);
+    }
+    read_minf_box(f, &b->minf);
+
+}
+
+void read_trak_box(FILE *f, struct trak_box *b)
+{
+    fread(b, 4, 2, f);
+    b->size = SWAP(b->size);
+    read_tkhd_box(f, &b->tkhd);
+    int s = b->size - 8 - b->tkhd.size;
+    while (s) {
+        printf("trak left %d\n", s);
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("%s\n", type2name(type));
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+            case FOURCC2UINT('t', 'r', 'e', 'f'):
+                // read_tref_box();
+                break;
+            case FOURCC2UINT('t', 'r', 'g', 'r'):
+                // read_trgr_box();
+                break;
+            case FOURCC2UINT('e', 'd', 't', 's'):
+                // read_edts_box();
+                break;
+            case FOURCC2UINT('m', 'e', 't', 'a'):
+                // read_meta_box();
+                break;
+            case FOURCC2UINT('m', 'd', 'i', 'a'):
+                read_mdia_box(f, &b->mdia);
+                break;
+            default:
+                fseek(f, p.size, SEEK_CUR);
+                break;
+        }
+        s -= (p.size);
+    }
+}
+
+void
+read_moov_box(FILE *f, struct moov_box *b)
+{
+    fread(b, 4, 2, f);
+    b->size = SWAP(b->size);
+    read_mvhd_box(f, &b->mvhd);
+
+    int s = b->size - b->mvhd.size - 8;
+    printf("moov left size %d\n", s);
+    while (s) {
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("%s\n", type2name(type));
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+            case FOURCC2UINT('t', 'r', 'a', 'k'):
+                b->trak_num++;
+                b->trak = realloc(b->trak, sizeof(struct trak_box)*b->trak_num);
+                read_trak_box(f, b->trak+b->trak_num-1);
+                break;
+            default:
+                fseek(f, p.size, SEEK_CUR);
+                break;
+        }
+        s -= (p.size);
     }
 }

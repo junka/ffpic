@@ -12,6 +12,9 @@ extern "C" {
 
 #include "queue.h"
 
+#define READ_OK(dst, size, nitem, f) (fread(dst, size, nitem, f) == nitem)
+#define READ_FAIL(dst, size, nitem, f) (fread(dst, size, nitem, f) != nitem)
+
 struct file_ops {
     const char *name;
     const char *alias;

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.6)
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 11)
 
 set(FFPIC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(FFPIC_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}")
@@ -13,7 +14,7 @@ if("${FFPIC_ROOT}" STREQUAL "${FFPIC_CONFIG_DIR}")
     "And re-run CMake from the ffpic_build directory.")
 endif()
 
-project(FFPIC C)
+project(FFPIC C CXX)
 
 # GENERATED source property global visibility.
 if(POLICY CMP0118)

@@ -2470,13 +2470,14 @@ static void calc_pps_params(struct sps *sps, struct pps *pps) {
     for (int ctbAddrRs = 0; ctbAddrRs < sps->PicSizeInCtbsY; ctbAddrRs++)
         pps->CtbAddrTsToRs[pps->CtbAddrRsToTs[ctbAddrRs]] = ctbAddrRs;
     // see (6-9)
+    printf("Tile row %d, col %d\n", pps->num_tile_rows_minus1 + 1,
+           pps->num_tile_columns_minus1+1);
     pps->TileId = calloc(sps->PicSizeInCtbsY, sizeof(uint32_t));
     for (int j = 0, tileIdx = 0; j <= (int)pps->num_tile_rows_minus1; j++) {
         for (int i = 0; i <= (int)pps->num_tile_columns_minus1; i++, tileIdx++) {
             for (int y = rowBd[j]; y < rowBd[j + 1]; y++) {
                 for (int x = colBd[i]; x < colBd[i + 1]; x++) {
-                    pps->TileId[pps->CtbAddrRsToTs[y * sps->PicWidthInCtbsY +
-                                                   x]] = tileIdx;
+                    pps->TileId[pps->CtbAddrRsToTs[y * sps->PicWidthInCtbsY + x]] = tileIdx;
                 }
             }
         }
@@ -6934,15 +6935,26 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 
         end_of_slice_segment_flag = cabac_dec_terminate(d);
         VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
-        //bits_vec_dump(v);
-        CtbAddrInTs ++;
-        CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
+        // bits_vec_dump(v);
+        CtbAddrInTs++;
+        if (CtbAddrInTs < sps->PicSizeInCtbsY) {
+            printf("CtbAddrInTs %d, PicSizeInCtbsY %d\n", CtbAddrInTs, sps->PicSizeInCtbsY);
+            CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
+        } else {
+            CtbAddrInRs = sps->PicSizeInCtbsY;
+            if (!end_of_slice_segment_flag) {
+                printf("error !\n");
+                exit(-1);
+            }
+        }
+
         VDBG(hevc, "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
              "CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
              "TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]] %d",
              CtbAddrInTs, pps->TileId[CtbAddrInTs],
              pps->CtbAddrRsToTs[CtbAddrInRs - 1],
              pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]]);
+
         if (!end_of_slice_segment_flag && ((pps->tiles_enabled_flag && pps->TileId[CtbAddrInTs] != pps->TileId[CtbAddrInTs - 1]) ||
                 (pps->entropy_coding_sync_enabled_flag && (CtbAddrInRs % sps->PicWidthInCtbsY == 0 ||
                 pps->TileId[CtbAddrInTs] != pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]])))) {
@@ -6956,7 +6968,6 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             cabac_dec_reset(d);
             i ++;
             // end of entry_point_offset
-
         }
     } while (!end_of_slice_segment_flag);
     cabac_dec_free(d);
@@ -7275,6 +7286,7 @@ void free_hevc_param_set(void) {
         free(hps.pps->CtbAddrRsToTs);
         free(hps.pps->TileId);
         free(hps.pps);
+        hps.pps = NULL;
     }
     if (hps.sps) {
         if (hps.sps->list_data)
@@ -7288,6 +7300,7 @@ void free_hevc_param_set(void) {
         if (hps.sps->vui)
             free(hps.sps->vui);
         free(hps.sps);
+        hps.sps = NULL;
     }
     if (hps.vps) {
         if (hps.vps->vps_timing_info)
@@ -7297,5 +7310,6 @@ void free_hevc_param_set(void) {
         if (hps.vps->vps_3d_ext)
             free(hps.vps->vps_3d_ext);
         free(hps.vps);
+        hps.vps = NULL;
     }
 }

@@ -18,11 +18,11 @@ static inline char *
 type2name(uint32_t type)
 {
     static char name[5];
+    name[4]= '\0';
     name[3] = (type >> 24) & 0xFF;
     name[2] = (type >> 16) & 0xFF;
     name[1] = (type >> 8) & 0xFF;
     name[0] = (type) & 0xFF;
-    name[4]= '\0';
     return name;
 }
 
@@ -68,10 +68,10 @@ struct ftyp_box {
 struct mvhd_box {
     FULL_BOX_ST;
 
-    uint64_t ctime;
-    uint64_t mtime;
+    uint64_t ctime; // for version 0, it is 32bits
+    uint64_t mtime; // for version 0, it is 32bits
     uint32_t timescale;
-    uint64_t duration;
+    uint64_t duration; // for version 0, it is 32bits
 
     uint32_t rate;
     uint16_t volume;
@@ -79,7 +79,7 @@ struct mvhd_box {
     uint32_t rsd[2];
     uint32_t matrix[9];
     uint32_t pre_defined[6];
-    uint32_t netx_track_id;
+    uint32_t next_track_id;
 
 };
 
@@ -262,69 +262,120 @@ struct tkhd_box {
     uint32_t reserved;
     uint64_t duration; //for version 0 , size 32
 
-    uint64_t rsd;
+    uint32_t rsd[2];
     int16_t layer;
     int16_t alternate_group;
     int16_t volume;
+    uint16_t reserved0;
     uint32_t matrix[9];
     uint32_t width;
     uint32_t height;
 };
 
 
-//see 8.3.3
-//track reference box
-struct tref_box {
-    BOX_ST;
-    
-};
-
-// see 8.4.1 (14496-12:2015)
-struct mdia_box {
-    BOX_ST;
-};
-
 struct mdhd_box {
     FULL_BOX_ST;
-    // version == 1, bits width is below, version == 0, all four is 32-bits wide
-    uint64_t ctime;
-    uint64_t mtime;
+    uint64_t creation_time;     // for version 0 , size 32
+    uint64_t modification_time; // for version 0 , size 32
     uint32_t timescale;
-    uint64_t duration;
+    uint64_t duration;  // for version 0 , size 32
+    union {
+        uint16_t pad:1;
+        uint16_t language:15; //ISO-639-2/T, three bit-5 wide
 
-    uint16_t pad:1;
-    uint16_t langugae; //ISO-639-2/T, three bit-5 wide
-    uint16_t pre_defined; // = 0
+        uint16_t lan;
+    };
+    uint16_t pre_defined;
+
 };
 
-// see 8.4.4 (14496-12:2015)
-// media information box
-struct minf_box {
+struct SampleEntry {
     BOX_ST;
+    uint8_t reserved[6];
+    uint16_t data_reference_index;
 };
 
-struct nmhd_box {
+struct stsd_box {
     FULL_BOX_ST;
+    uint32_t entry_count;
+    struct SampleEntry *entries;
 };
 
-struct elng_box {
+struct stdp_box {
     FULL_BOX_ST;
-    char * extended_language; // such as "en-US", "fr-FR", "zh-CN"
+    uint16_t *priority; //sample_count num
+};
+
+struct stsz_box {
+    FULL_BOX_ST;
+    uint32_t sample_size;
+    uint32_t sample_count;
+    uint32_t *entry_size;
+};
+
+struct stz2_box {
+    FULL_BOX_ST;
+    uint32_t reserved:24;
+    uint32_t field_size:8;//4, 8, 16
+    uint32_t sample_sount;
+    uint16_t *entry_size; // real bits use filed_size
+};
+
+struct stts_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    uint32_t *sample_count;
+    uint32_t *sample_delta;
+};
+
+struct ctts_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    uint32_t *sample_count;
+    uint32_t *sample_offset;
+};
+
+struct stsc_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    uint32_t *first_chunk;
+    uint32_t *sample_per_chunk;
+    uint32_t *sample_description_index;
+};
+
+struct stco_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+    uint32_t* chunk_offset;
+};
+
+struct stss_box {
+    FULL_BOX_ST;
+    uint32_t entry_count;
+
+    uint32_t *sample_number;
 };
 
 struct stbl_box {
     BOX_ST;
-};
+    struct stsd_box stsd;
+    union {
+        struct stsz_box stsz;
+        struct stz2_box stz2; // either one of these
+    };
+    struct stts_box stts;
+    struct stsc_box stsc;
+    struct stco_box stco;
+    struct stss_box stss; //zero or one
 
-struct stsd_box {
-    BOX_ST;
+    struct ctts_box ctts; //zero or one
+    struct stdp_box stdp; //zero or one
 };
-
 
 // could be "url " or "urn "
 struct DataEntryBox {
     FULL_BOX_ST;
-    char *name; // mandatory for urn, not exist for url
+    char *name;     // mandatory for urn, not exist for url
     char *location; // mandatory for url, optional for url
 };
 
@@ -335,16 +386,85 @@ struct dref_box {
     struct DataEntryBox *entries;
 };
 
-
 struct dinf_box {
     BOX_ST;
     struct dref_box dref;
 };
 
-/* hint, cdsc, hind, vdep, vplx */
+
+struct vmhd_box {
+    FULL_BOX_ST;
+    uint16_t graphicsmode;
+    uint16_t opcolor[3];
+};
+
+struct smhd_box {
+    FULL_BOX_ST;
+    uint16_t balance;
+    uint16_t reserved;
+};
+
+
+struct hmhd_box {
+    FULL_BOX_ST;
+    uint16_t maxPDUsize;
+    uint16_t avgPDUsize;
+    uint32_t maxbitrate;
+    uint32_t avgbitrate;
+    uint32_t reserved;
+};
+
+struct sthd_box {
+
+};
+
+struct nmhd_box {
+    FULL_BOX_ST;
+
+};
+
+
+// see 8.4.4 (14496-12:2015)
+// media information box
+struct minf_box {
+    BOX_ST;
+
+    struct vmhd_box vmhd;
+    struct smhd_box smhd;
+    struct hmhd_box hmhd;
+    struct sthd_box sthd;
+    struct nmhd_box nmhd;
+
+    struct dinf_box dinf;
+    struct stbl_box stbl;
+};
+
+struct elng_box {
+    FULL_BOX_ST;
+    char *extended_language; // such as "en-US", "fr-FR", "zh-CN"
+};
+
+// see 8.4.1 (14496-12:2015)
+struct mdia_box {
+    BOX_ST;
+    struct mdhd_box mdhd;
+    struct hdlr_box hdlr;
+    struct elng_box elng;//zero or one
+    struct minf_box minf;
+};
+
+
+/* hint, cdsc, font, hind, vdep, vplx, subt */
 struct track_ref_type_box {
     BOX_ST;
     uint32_t* track_ids;
+};
+
+// see 8.3.3
+// track reference box
+struct tref_box {
+    BOX_ST;
+    struct track_ref_type_box ref_type;
 };
 
 
@@ -418,6 +538,29 @@ struct iprp_box {
     struct ipma_box ipma;
 };
 
+struct trak_box {
+    BOX_ST;
+    struct tkhd_box tkhd;
+    struct tref_box tref; // zero or one
+    struct mdia_box mdia;
+};
+
+//see 8.10.1
+struct udta_box {
+    BOX_ST;
+
+};
+
+/*see 8.2.1.1 movie box*/
+struct moov_box {
+    BOX_ST;
+    struct mvhd_box mvhd;
+    struct meta_box *meta; //zero or one
+    int trak_num;
+    struct trak_box *trak; //one or more
+    struct udta_box *udta; //zero or one
+};
+
 #pragma pack(pop)
 
 uint32_t read_box(FILE *f, void * d, int len);
@@ -449,6 +592,8 @@ void read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb);
 
 /* read mdat */
 void read_mdat_box(FILE *f, struct mdat_box *b);
+
+void read_moov_box(FILE *f, struct moov_box *b);
 
 #ifdef __cplusplus
 }

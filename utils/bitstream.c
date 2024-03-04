@@ -113,8 +113,10 @@ read_bits(struct bits_vec *v, int n)
 #endif
 
 int bits_vec_read_bit(struct bits_vec *v) {
-  if (v->ptr - v->start > (long)v->len)
+  if (v->ptr - v->start > (long)v->len) {
+    exit(-1);
     return -1;
+  }
   int ret, shift;
   if (v->msb)
     shift = 7 - v->offset;

@@ -356,6 +356,33 @@ struct stss_box {
     uint32_t *sample_number;
 };
 
+struct SampleGroupEntry {
+
+};
+
+struct sgpd_box {
+    FULL_BOX_ST;
+    uint32_t grouping_type;
+    union {
+        uint32_t default_length;
+        uint32_t default_sample_description_index;
+    };
+    uint32_t entry_count;
+
+    uint32_t *description_length;
+    struct SampleGroupEntry *entries;
+};
+
+// see 8.9.2 SampleToGroup
+struct sbgp_box {
+    FULL_BOX_ST;
+    uint32_t grouping_type;
+    uint32_t grouping_type_parameter;
+    uint32_t entry_count;
+    uint32_t *sample_count;
+    uint32_t *group_description_index;
+};
+
 struct stbl_box {
     BOX_ST;
     struct stsd_box stsd;
@@ -370,6 +397,8 @@ struct stbl_box {
 
     struct ctts_box ctts; //zero or one
     struct stdp_box stdp; //zero or one
+    struct sgpd_box sgpd; //zero or more
+    struct sbgp_box sbgp;
 };
 
 // could be "url " or "urn "

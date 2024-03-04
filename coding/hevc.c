@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, INFO)
+VLOG_REGISTER(hevc, DEBUG)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -1274,12 +1274,17 @@ process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_p
     struct slice_segment_header *slice = hslice->slice;
     struct hevc_nalu_header *headr = hslice->nalu;
     struct rps *rps = calloc(1, sizeof(*rps));
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     int currPicLayerId = headr->nuh_layer_id;
     int picX = 0;
 
     //see (7-8)
-    int MaxPicOrderCntLsb = 2 << (hps->sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
-    int PicOrderCntVal = PicOrderCnt(hslice, hps->sps, picX, false);
+    int MaxPicOrderCntLsb = 2 << (sps->log2_max_pic_order_cnt_lsb_minus4 + 4);
+    int PicOrderCntVal = PicOrderCnt(hslice, sps, picX, false);
     /* Five lists of picture order count values are constructed to derive the RPS.
      These five lists are PocStCurrBefore, PocStCurrAfter, PocStFoll, PocLtCurr and PocLtFoll,
      with NumPocStCurrBefore, NumPocStCurrAfter, NumPocStFoll, NumPocLtCurr and NumPocLtFoll
@@ -1343,13 +1348,13 @@ process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_p
     /* step 1 */
     for (int i = 0; i < rps->NumPocLtCurr; i++) {
         if (!rps->CurrDeltaPocMsbPresentFlag[i]) {
-            if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocLtCurr[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+            if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocLtCurr[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
                 rps->RefPicSetLtCurr[i] = picX;
             } else {
                 rps->RefPicSetLtCurr[i] = -1; //means no reference picture
             }
         } else {
-            if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocLtCurr[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+            if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocLtCurr[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
                 rps->RefPicSetLtCurr[i] = picX;
             } else {
                 rps->RefPicSetLtCurr[i] = -1;
@@ -1358,13 +1363,13 @@ process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_p
     }
     for (int i = 0; i < rps->NumPocLtFoll; i ++) {
         if (!rps->FollDeltaPocMsbPresentFlag[i]) {
-            if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocLtFoll[i],hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+            if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocLtFoll[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
                 rps->RefPicSetLtFoll[i] = picX;
             } else {
                 rps->RefPicSetLtFoll[i] = -1;
             }
         } else {
-            if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocLtFoll[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+            if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocLtFoll[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
                 rps->RefPicSetLtFoll[i] = picX;
             } else {
                 rps->RefPicSetLtFoll[i] = -1;
@@ -1377,21 +1382,21 @@ process_reference_picture_set(bool idr, struct hevc_slice *hslice, struct hevc_p
     
     /* step 3*/
     for (int i = 0; i < rps->NumPocStCurrBefore; i++ ) {
-        if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocStCurrBefore[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+        if (is_ref_pic_in_dpb(picX, PicOrderCntVal & (MaxPicOrderCntLsb-1), rps->PocStCurrBefore[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
             rps->RefPicSetStCurrBefore[i] = picX;
         } else {
             rps->RefPicSetStCurrBefore[i] = -1;
         }
     }
     for (int i = 0; i < rps->NumPocStCurrAfter; i++ ) {
-        if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocStCurrAfter[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+        if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocStCurrAfter[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
             rps->RefPicSetStCurrAfter[i] = picX;
         } else {
             rps->RefPicSetStCurrAfter[i] = -1;
         }
     }
     for (int i = 0; i < rps->NumPocStFoll; i++ ) {
-        if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocStFoll[i], hps->vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
+        if (is_ref_pic_in_dpb(picX, PicOrderCntVal, rps->PocStFoll[i], vps->vps_ext->layer_id_in_nuh[i], currPicLayerId)) {
             rps->RefPicSetStFoll[i] = picX;
         } else {
             rps->RefPicSetStFoll[i] = -1;
@@ -1449,6 +1454,10 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
     if (slice->slice_type == SLICE_TYPE_I) {
         return ;
     }
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int NumRpsCurrTempList0 = MAX((int)(slice->num_ref_idx_l0_active_minus1) + 1, slice->NumPicTotalCurr);
     //see (8-8)/ f-65 , F.8.3.4 Decoding process for reference picture lists construction
     int rIdx = 0;
@@ -1461,14 +1470,14 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
             RefPicListTemp0[rIdx] = rps->RefPicSetStCurrAfter[i];
         for (int i = 0; i < rps->NumPocLtCurr && rIdx < NumRpsCurrTempList0; rIdx++, i++)
             RefPicListTemp0[rIdx] = rps->RefPicSetLtCurr[i];
-        if (hps->pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag)
+        if (pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag)
             RefPicListTemp0[rIdx++] = currPic;
     }
     //see (8-9) / f-66
     for (rIdx = 0; rIdx <= (int)slice->num_ref_idx_l0_active_minus1; rIdx++) {
         rps->RefPicList0[rIdx] = slice->ref_pic_list_modification_flag_l0 ? RefPicListTemp0[slice->list_entry_l0[rIdx]] : RefPicListTemp0[rIdx];
     }
-    if (hps->pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag && !slice->ref_pic_list_modification_flag_l0 &&
+    if (pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag && !slice->ref_pic_list_modification_flag_l0 &&
             NumRpsCurrTempList0 > (int)(slice->num_ref_idx_l0_active_minus1 + 1)) {
         rps->RefPicList0[slice->num_ref_idx_l0_active_minus1] = currPic;
     }
@@ -1484,7 +1493,7 @@ process_reference_picture_lists_construction(struct hevc_slice *hslice, struct h
                 RefPicListTemp1[rIdx] = rps->RefPicSetStCurrBefore[i];
             for (int i = 0; i < rps->NumPocLtCurr && rIdx < NumRpsCurrTempList1; rIdx++, i++ )
                 RefPicListTemp1[rIdx] = rps->RefPicSetLtCurr[i];
-            if (hps->pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag)
+            if (pps->pps_scc_ext.pps_curr_pic_ref_enabled_flag)
                 RefPicListTemp1[rIdx++] = currPic;
         }
         /* (8-11) */
@@ -1515,8 +1524,10 @@ process_target_reference_index_for_residual_predication(struct hevc_slice *hslic
         return;
     }
 
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int RpRefPicAvailFlagL0 = 0, RpRefPicAvailFlagL1 = 0;
-    struct sps *sps = hps->sps;
     int RpRefIdxL0 = -1, RpRefIdxL1 = -1;
     int CurrPic = 0;
 
@@ -2635,9 +2646,6 @@ static struct slice_segment_header *
 parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         struct hevc_param_set * hps, uint32_t *SliceAddrRs)
 {
-    struct vps *vps = hps->vps;
-    struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
     struct slice_segment_header *slice = calloc(1, sizeof(*slice));
 
     static int slice_idx = 0;
@@ -2667,6 +2675,11 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         slice->no_output_of_prior_pics_flag = READ_BIT(v);
     }
     slice->slice_pic_parameter_set_id = GOL_UE(v);
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     VDBG(hevc, "first_slice_segment_in_pic_flag %d", first_slice_segment_in_pic_flag);
     VDBG(hevc, "slice_pic_parameter_set_id %d", slice->slice_pic_parameter_set_id);
     VDBG(hevc, "no_output_of_prior_pics_flag %d", slice->no_output_of_prior_pics_flag);
@@ -3476,9 +3489,12 @@ parse_cross_comp_pred(cabac_dec *d, struct cross_comp_pred *cross, int x0, int y
 static bool
 process_zscan_order_block_availablity(struct slice_segment_header *slice,
                                       struct hevc_param_set *hps, int xCurr,
-                                      int yCurr, int xNbY, int yNbY) {
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+                                      int yCurr, int xNbY, int yNbY) 
+{
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     bool availableN;
     int minBlockAddrN;
     /* (6-1) */
@@ -3680,6 +3696,10 @@ static bool process_predication_block_availablity(
     struct slice_segment_header *slice, struct picture *p, struct hevc_param_set *hps,
     int xCb, int yCb, int nCbS, int xPb, int yPb, int nPbW,
     int nPbH, int partIdx, int xNbY, int yNbY) {
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     bool availableN;
     bool sameCb;
     if (xCb <= xNbY && yCb <= yNbY && (xCb + nCbS) > xNbY &&
@@ -3698,7 +3718,7 @@ static bool process_predication_block_availablity(
     } else {
         availableN = true;
     }
-    if (availableN && get_CuPredMode(hps->sps, p, xNbY, yNbY) == MODE_INTRA) {
+    if (availableN && get_CuPredMode(sps, p, xNbY, yNbY) == MODE_INTRA) {
         availableN = false;
     }
 
@@ -3973,8 +3993,10 @@ quatization_parameters(int xCb, int yCb,
         34, 34, 35, 35, 36, 36, 37, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
         48, 49, 50, 51
     };
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     struct trans_tree *tt = &cu->tt;
     int qPY_prev, qPY_pred, left_qpy, top_qpy;
     static int last_xQg = -1, last_yQg = -1;
@@ -4136,10 +4158,12 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
                               struct hevc_param_set *hps,
                               struct slice_segment_header *slice, int xTbY, int yTbY,
                               int trafoDepth, int cIdx, int nTbS, int16_t* r, struct picture *p) {
-    struct pps *pps = hps->pps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int qP;
     int PpsActQpOffsetY = pps->pps_scc_ext.pps_act_y_qp_offset_plus5 - 5;
-    struct sps *sps = hps->sps;
     struct quant_pixel q = quatization_parameters(xTbY, yTbY, hps, slice, cu, p);
     struct trans_tree *tt = &cu->tt;
     // see 8-291, 8-292
@@ -4392,7 +4416,10 @@ static void decode_palette_mode(struct hevc_param_set *hps,
                                 struct cu *cu, int xCb,
                                 int yCb, int cIdx, int nCbSX, int nCbSY,
                                 int16_t *recSamples, struct picture *p) {
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     struct trans_tree *tt = &cu->tt;
     int nSubWidth, nSubHeight;
     if (cIdx == 0) {
@@ -4429,8 +4456,8 @@ static void decode_palette_mode(struct hevc_param_set *hps,
                 int qP = (cIdx == 0) ? MAX(0, qp.q_y)
                              : (cIdx == 1 ? MAX(0, qp.q_cb) : MAX(0, qp.q_cr));
                 int bitDepth = (cIdx == 0)
-                                   ? (hps->sps->BitDepthY)
-                                   : (hps->sps->BitDepthC);
+                                   ? (sps->BitDepthY)
+                                   : (sps->BitDepthC);
                 const int levelScale[] = {40, 45, 51, 57, 64, 72};
                 int tmpVal = ((cu->PaletteEscapeVal[cIdx][xL][yL] * levelScale[qP % 6]) << ((qP / 6) + 32)) >> 6;
                 recSamples[x + nCbSX*y] = clip3(0, (1 << bitDepth) - 1, tmpVal);
@@ -4502,8 +4529,10 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
                                     int xTbCmp, int yTbCmp, int predModeIntra,
                                     int nTbS, int cIdx, int16_t *predSamples,
                                     struct picture *p) {
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int unavaible = 0;
     int8_t unavaibleL[64] = {0}, unavaibleA[65] = {0};
     int8_t *unavaibleT = unavaibleA + 1;
@@ -4623,11 +4652,14 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                         int log2TrafoSize, int trafoDepth, int predModeIntra,
                         int cIdx, int controlParaAct, struct picture *p) {
     int xTbY, yTbY;
-    struct sps *sps = hps->sps;
-    xTbY = (cIdx == 0) ? xTb0 : xTb0 * hps->sps->SubWidthC;
-    yTbY = (cIdx == 0) ? yTb0 : yTb0 * hps->sps->SubHeightC;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
+    xTbY = (cIdx == 0) ? xTb0 : xTb0 * sps->SubWidthC;
+    yTbY = (cIdx == 0) ? yTb0 : yTb0 * sps->SubHeightC;
     int splitFlag = 0;
-    int split_transform_flag = get_split_transform_flag(hps->sps, p, xTbY, yTbY, trafoDepth);
+    int split_transform_flag = get_split_transform_flag(sps, p, xTbY, yTbY, trafoDepth);
     if (cIdx == 0) {
         splitFlag = split_transform_flag;
     } else if (split_transform_flag == 1 && log2TrafoSize > 2) {
@@ -4671,7 +4703,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
             // VDBG(hevc, "controlParaAct %d, predModeIntra %d, blkIdx %d", controlParaAct, predModeIntra, blkIdx);
             // step 4
             if (controlParaAct != 2) {
-                if (hps->sps->sps_range_ext.implicit_rdpcm_enabled_flag == 1 &&
+                if (sps->sps_range_ext.implicit_rdpcm_enabled_flag == 1 &&
                     (transform_skip_flag == 1 ||
                     cu->cu_transquant_bypass_flag == 1) &&
                     (predModeIntra == 10 || predModeIntra == 26)) {
@@ -4700,11 +4732,11 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                                                             resSamples);
                     }
                     //step 8
-                    if (hps->pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
+                    if (pps->pps_range_ext.cross_component_prediction_enabled_flag == 1 &&
                         sps->ChromaArrayType == 3 && cIdx != 0) {
                         //  8.6.6 residual modification process
                         residual_modification_transform_cross_prediction(
-                            hps->sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
+                            sps, cu, xTbY, yTbY, nTbS, cIdx, resSamples,
                             resSamples);
                     }
                 }
@@ -4741,7 +4773,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                 // in 8.6.7 ( xTb0, yTb0 + yTbOffset )
                 // int16_t recSamples[64*64]; // reconstructed sample array as output
                 //add predSamples and resSamples to recSamples
-                construct_pic_pior_to_filtering(hps->sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, dst, stride);
+                construct_pic_pior_to_filtering(sps, xTb0, yTb0+yTbOffset, nTbS, nTbS, cIdx, predSamples, resSamples, dst, stride);
 #if 0
                 VDBG(hevc, "construct_pic_pior_to_filtering %d ", nTbS);
                 for (int j = 0; j < nTbS; j++) {
@@ -4766,7 +4798,10 @@ static int8_t process_luma_intra_prediction_mode(
     int candIntraPredModeA;
     int candIntraPredModeB;
     int8_t IntraPredModeY;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
 #ifdef ENABLE_3D
     int DimFlag = !cu->intra_ext[xPb][yPb].no_dim_flag;
     VDBG(hevc, "skip_intra_flag (%d, %d) %d, DimFlag %d", xPb, yPb,
@@ -4898,7 +4933,10 @@ static int8_t process_chroma_intra_prediction_mode(struct slice_segment_header* 
                                                    int xPb, int yPb,
                                                    int intra_chroma_pred_mode,
                                                    struct picture *p) {
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int modeIdx;
     int IntraPredModeY = get_IntraPredModeY(sps, p, xPb, yPb);
     int IntraPredModeC;
@@ -4964,8 +5002,10 @@ static void decode_cu_coded_intra_prediction_mode(
     // invoke 8.6.1
     struct quant_pixel qp = quatization_parameters(xBase, yBase, hps, slice, cu, p);
     int nCbS = 1 << log2CbSize;
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     struct trans_tree *tt = &cu->tt;
     int16_t recSamples[64*64];
     int16_t resSamplesL[64*64], resSamplesCb[64*64], resSamplesCr[64*64];
@@ -5586,9 +5626,10 @@ parse_residual_coding(cabac_dec *d, struct cu *cu,
                       struct slice_segment_header *slice,
                       struct hevc_param_set *hps, int x0, int y0,
                       int log2TrafoSize, int cIdx, struct picture *p) {
-    // struct vps *vps = hps->vps;
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     struct trans_tree *tt = &cu->tt;
     int coded_sub_block_flag[8][8] = {0};
     int explicit_rdpcm_flag[4] = {0};
@@ -6007,8 +6048,10 @@ static void parse_transform_unit(cabac_dec *d, struct cu *cu,
                                  int xBase, int yBase, int log2TrafoSize,
                                  int trafoDepth, int blkIdx, struct picture *p,
                                  int cbf_luma, int cbf_cb, int cbf_cr) {
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     struct trans_tree *tt = &cu->tt;
     uint8_t ChromaArrayType = sps->ChromaArrayType;
 
@@ -6126,7 +6169,10 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
                                  int xBase, int yBase, int log2TrafoSize,
                                  int trafoDepth, int blkIdx, struct picture *p,
                                  int parent_cbf_cb, int parent_cbf_cr) {
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     // VDBG(hevc, "parse_transform_tree %d (%d, %d) (%d, %d) parent %d, %d",
     //       1 << log2TrafoSize, x0, y0, xBase, yBase, parent_cbf_cb,
     //       parent_cbf_cr);
@@ -6139,7 +6185,7 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
         trafoDepth < cu->MaxTrafoDepth && !(cu->IntraSplitFlag && (trafoDepth == 0))) {
         split_transform_flag = CABAC(d, CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG + 5 - log2TrafoSize);
     } else {
-        int interSplitFlag = (hps->sps->max_transform_hierarchy_depth_inter == 0 &&
+        int interSplitFlag = (sps->max_transform_hierarchy_depth_inter == 0 &&
              get_CuPredMode(sps, p, x0, y0) == MODE_INTER &&
              cu->PartMode != PART_2Nx2N && trafoDepth == 0)? 1: 0;
         if (log2TrafoSize > sps->MaxTbLog2SizeY || interSplitFlag == 1 ||
@@ -6254,9 +6300,11 @@ static void parse_prediction_unit(cabac_dec *d,
                                   struct cu *cu, struct hevc_nalu_header *h,
                                   struct hevc_param_set *hps, int x0, int y0,
                                   int nxCbS, int nyCbS) {
-    struct vps *vps = hps->vps;
-    struct pps *pps = hps->pps;
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     struct predication_unit *pu = &cu->pu[x0][y0];
     VDBG(hevc, "parse_prediction_unit");
 
@@ -6359,7 +6407,10 @@ static void parse_pcm_sample(struct bits_vec *v, struct pcm_sample *pcm,
 int get_split_cu_flag_ctxInc(struct slice_segment_header *slice,
                             struct hevc_param_set *hps, struct picture *p,
                             int CtDepth, int x0, int y0) {
-    struct sps *sps = hps->sps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int availableL =
         process_zscan_order_block_availablity(slice, hps, x0, y0, x0 - 1, y0);
     int availableA =
@@ -6380,6 +6431,10 @@ int get_split_cu_flag_ctxInc(struct slice_segment_header *slice,
 int get_cu_skip_flag_ctxInc(struct slice_segment_header *slice, struct picture *p,
                             struct hevc_param_set *hps,
                             int x0, int y0) {
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+
     int availableL =
         process_zscan_order_block_availablity(slice, hps, x0, y0, x0 - 1, y0);
     int availableA =
@@ -6387,10 +6442,10 @@ int get_cu_skip_flag_ctxInc(struct slice_segment_header *slice, struct picture *
     int condL = 0;
     int condA = 0;
 
-    if (availableL && (get_CuPredMode(hps->sps, p, x0 - 1, y0)==MODE_SKIP)) {
+    if (availableL && (get_CuPredMode(sps, p, x0 - 1, y0)==MODE_SKIP)) {
         condL = 1;
     }
-    if (availableA && (get_CuPredMode(hps->sps, p, x0, y0 - 1)==MODE_SKIP)) {
+    if (availableA && (get_CuPredMode(sps, p, x0, y0 - 1)==MODE_SKIP)) {
         condA = 1;
     }
     return ((condL && availableL) + (condA && availableA));
@@ -6407,9 +6462,10 @@ static void parse_coding_unit(cabac_dec *d, struct ctu *ctu,
     struct cu *cu = &cum;
     struct slice_segment_header *slice = hslice->slice;
     struct hevc_nalu_header *headr = hslice->nalu;
-    struct vps *vps = hps->vps;
-    struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
 
     // nCbS specify the size of current coding block, number of samples
     int nCbS = (1<< log2CbSize);
@@ -6788,9 +6844,11 @@ coding_quadtree(cabac_dec *d, struct ctu *ctu, struct hevc_slice *hslice,
                 int y0, int log2CbSize, int cqtDepth, struct picture *p)
 {
     struct slice_segment_header *slice = hslice->slice;
-    struct vps *vps = hps->vps;
-    struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     uint8_t split_cu_flag = 0;
 
     if (x0 + (1 << log2CbSize) <= (int)sps->pic_width_in_luma_samples &&
@@ -6836,9 +6894,11 @@ static struct ctu *coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
                                     int CtbAddrInRs, int SliceAddrRs,
                                     int *TileId, struct picture *p) {
     struct slice_segment_header *slice = hslice->slice;
-    struct vps *vps = hps->vps;
-    struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
     struct ctu *ctu = calloc(1, sizeof(*ctu));
     ctu->CtbAddrInTs = CtbAddrInTs;
     ctu->slice_id = slice->idx;
@@ -6866,9 +6926,10 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 {
     struct slice_segment_header *slice = hslice->slice;
     struct hevc_nalu_header *headr = hslice->nalu;
-    struct vps *vps = hps->vps;
-    struct sps *sps = hps->sps;
-    struct pps *pps = hps->pps;
+
+    struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
 
     uint8_t end_of_slice_segment_flag = 0;
 
@@ -6907,7 +6968,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             first_ctu_in_tile = false;
             first_ctu_in_slice_segment = false;
             d = cabac_dec_init(v);
-        } else if ((CtbAddrInRs % sps->PicWidthInCtbsY == 0) && pps->entropy_coding_sync_enabled_flag) {
+        } else if ((xCtb == 0) && pps->entropy_coding_sync_enabled_flag) {
             //load cabac context with upper-right CTU if it is avaibale and at the start of a line
             int availableFlagT = process_zscan_order_block_availablity(slice, hps, xCtb, yCtb, xCtb + sps->CtbSizeY, yCtb - sps->CtbSizeY);
             if (availableFlagT) {
@@ -6926,9 +6987,9 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         // see Figure 9-4
         if (pps->entropy_coding_sync_enabled_flag &&
             (CtbAddrInRs % sps->PicWidthInCtbsY == 1 ||
-                (CtbAddrInRs > 1 &&
-                pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]] !=
-                                        pps->TileId[CtbAddrInTs]))) {
+             (CtbAddrInRs > 1 &&
+              pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]] !=
+                  pps->TileId[CtbAddrInTs]))) {
             VDBG(hevc, "storage process for cabac context");
             storage_process_for_cabac_context(StatCoeff);
         }
@@ -6937,16 +6998,16 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
         // bits_vec_dump(v);
         CtbAddrInTs++;
-        if (CtbAddrInTs < sps->PicSizeInCtbsY) {
-            printf("CtbAddrInTs %d, PicSizeInCtbsY %d\n", CtbAddrInTs, sps->PicSizeInCtbsY);
+        // if (CtbAddrInTs < sps->PicSizeInCtbsY) {
+            // printf("CtbAddrInTs %d, PicSizeInCtbsY %d\n", CtbAddrInTs, sps->PicSizeInCtbsY);
             CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
-        } else {
-            CtbAddrInRs = sps->PicSizeInCtbsY;
-            if (!end_of_slice_segment_flag) {
-                printf("error !\n");
-                exit(-1);
-            }
-        }
+        // } else {
+        //     CtbAddrInRs = sps->PicSizeInCtbsY;
+        //     if (!end_of_slice_segment_flag) {
+        //         printf("error !\n");
+        //         exit(-1);
+        //     }
+        // }
 
         VDBG(hevc, "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
              "CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
@@ -7122,18 +7183,22 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                       struct hevc_param_set *hps,
                                       uint8_t **pixels) {
     uint32_t SliceAddrRs;
-    struct sps *sps = hps->sps;
     struct hevc_slice hslice = {
         .nalu = headr,
     };
 
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
-    VDBG(hevc, "scaling_list_enabled_flag %d", hps->sps->scaling_list_enabled_flag);
-    if (hps->sps->scaling_list_enabled_flag) {
-        if (hps->pps->pps_scaling_list_data_present_flag) {
-            init_scaling_factor(hslice.slice, sps, &hps->pps->list_data);
-        } else if (hps->sps->sps_scaling_list_data_present_flag) {
-            init_scaling_factor(hslice.slice, sps, hps->sps->list_data);
+
+    struct pps *pps = hps->pps[hslice.slice->slice_pic_parameter_set_id];
+    struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+
+    VDBG(hevc, "scaling_list_enabled_flag %d", sps->scaling_list_enabled_flag);
+    if (sps->scaling_list_enabled_flag) {
+        if (pps->pps_scaling_list_data_present_flag) {
+            init_scaling_factor(hslice.slice, sps, &pps->list_data);
+        } else if (sps->sps_scaling_list_data_present_flag) {
+            init_scaling_factor(hslice.slice, sps, sps->list_data);
         }
     }
     // bits_vec_dump(v);
@@ -7160,8 +7225,7 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     p.IntraPredModeC =
         calloc(PicWidthInMinPUs * PicHeightInMinPUs, sizeof(uint8_t));
 
-    p.info = calloc(hps->sps->PicWidthInMinCbsY *
-                        hps->sps->PicHeightInMinCbsY,
+    p.info = calloc(sps->PicWidthInMinCbsY * sps->PicHeightInMinCbsY,
                     sizeof(struct cu_info));
 
     int PicWidthInTbsY = sps->PicWidthInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
@@ -7178,7 +7242,7 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         rbsp_trailing_bits(v);
     }
 
-    inloop_filter(hslice.slice, hps->pps, sps, &p);
+    inloop_filter(hslice.slice, pps, sps, &p);
 
     YUV420_to_BGRA32_16bit(
         *pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel, p.pixel+p.size, p.pixel+p.size * 3/2,
@@ -7218,6 +7282,9 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
     VDBG(hevc, "len %d f %d type %d, layer id %d, temp id %d", len, h.forbidden_zero_bit,
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id);
     assert(h.forbidden_zero_bit == 0);
+    struct vps *new_vps;
+    struct sps *new_sps;
+    struct pps *new_pps;
 
     uint8_t *rbsp = malloc(len - 2);
 
@@ -7248,19 +7315,22 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
         parse_slice_segment_layer(&h, v, &hps, pixels);
         break;
     case VPS_NUT:
-        hps.vps = parse_vps(v);
+        new_vps = parse_vps(v);
+        hps.vps[hps.vps_num++] = new_vps;
         break;
     case SPS_NUT:
-        hps.sps = parse_sps(&h, v, hps.vps);
-        if (!hps.sps) {
+        new_sps = parse_sps(&h, v, new_vps);
+        if (!new_sps) {
             VABORT(hevc, "can no parse sps correctly");
         }
+        hps.sps[hps.sps_num++] = new_sps;
         break;
     case PPS_NUT:
-        hps.pps = parse_pps(v);
-        if (!hps.pps) {
+        new_pps = parse_pps(v);
+        if (!new_pps) {
             VABORT(hevc, "can no parse pps correctly");
         }
+        hps.pps[hps.pps_num++] = new_pps;
         break;
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
@@ -7275,41 +7345,47 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
 }
 
 void free_hevc_param_set(void) {
-    if (hps.pps) {
-        if (hps.pps->pps_3d_ext)
-            free(hps.pps->pps_3d_ext);
-        if (hps.pps->pps_multilayer_ext)
-            free(hps.pps->pps_multilayer_ext);
-        free(hps.pps->column_width_minus1);
-        free(hps.pps->row_height_minus1);
-        free(hps.pps->CtbAddrTsToRs);
-        free(hps.pps->CtbAddrRsToTs);
-        free(hps.pps->TileId);
-        free(hps.pps);
-        hps.pps = NULL;
+    for (int i = 0; i < hps.pps_num; i++) {
+        if (hps.pps[i]) {
+            if (hps.pps[i]->pps_3d_ext)
+                free(hps.pps[i]->pps_3d_ext);
+            if (hps.pps[i]->pps_multilayer_ext)
+                free(hps.pps[i]->pps_multilayer_ext);
+            free(hps.pps[i]->column_width_minus1);
+            free(hps.pps[i]->row_height_minus1);
+            free(hps.pps[i]->CtbAddrTsToRs);
+            free(hps.pps[i]->CtbAddrRsToTs);
+            free(hps.pps[i]->TileId);
+            free(hps.pps[i]);
+            hps.pps[i] = NULL;
+        }
     }
-    if (hps.sps) {
-        if (hps.sps->list_data)
-            free(hps.sps->list_data);
-        if (hps.sps->pcm)
-            free(hps.sps->pcm);
-        if (hps.sps->sps_st_ref)
-            free(hps.sps->sps_st_ref);
-        if (hps.sps->sps_lt_ref)
-            free(hps.sps->sps_lt_ref);
-        if (hps.sps->vui)
-            free(hps.sps->vui);
-        free(hps.sps);
-        hps.sps = NULL;
+    for (int i = 0; i < hps.sps_num; i++) {
+        if (hps.sps[i]) {
+            if (hps.sps[i]->list_data)
+                free(hps.sps[i]->list_data);
+            if (hps.sps[i]->pcm)
+                free(hps.sps[i]->pcm);
+            if (hps.sps[i]->sps_st_ref)
+                free(hps.sps[i]->sps_st_ref);
+            if (hps.sps[i]->sps_lt_ref)
+                free(hps.sps[i]->sps_lt_ref);
+            if (hps.sps[i]->vui)
+                free(hps.sps[i]->vui);
+            free(hps.sps[i]);
+            hps.sps[i] = NULL;
+        }
     }
-    if (hps.vps) {
-        if (hps.vps->vps_timing_info)
-            free(hps.vps->vps_timing_info);
-        if (hps.vps->vps_ext)
-            free(hps.vps->vps_ext);
-        if (hps.vps->vps_3d_ext)
-            free(hps.vps->vps_3d_ext);
-        free(hps.vps);
-        hps.vps = NULL;
+    for (int i = 0; i < hps.vps_num; i++) {
+        if (hps.vps[i]) {
+            if (hps.vps[i]->vps_timing_info)
+                free(hps.vps[i]->vps_timing_info);
+            if (hps.vps[i]->vps_ext)
+                free(hps.vps[i]->vps_ext);
+            if (hps.vps[i]->vps_3d_ext)
+                free(hps.vps[i]->vps_3d_ext);
+            free(hps.vps[i]);
+            hps.vps[i] = NULL;
+        }
     }
 }

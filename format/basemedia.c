@@ -357,6 +357,7 @@ static int
 read_ispe_box(FILE *f, struct ispe_box *b)
 {
     fread(b, 20, 1, f);
+    assert(b->type == FOURCC2UINT('i', 's', 'p', 'e'));
     b->size = SWAP(b->size);
     b->image_height = SWAP(b->image_height);
     b->image_width = SWAP(b->image_width);
@@ -381,6 +382,7 @@ read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
     struct pixi_box *pixi;
     fread(b, 8, 1, f);
     b->size = SWAP(b->size);
+    assert(b->type == FOURCC2UINT('i', 'p', 'c', 'o'));
     int s = b->size - 8;
     int n = 0;
     while (s > 0) {
@@ -422,6 +424,7 @@ static void
 read_ipma_box(FILE *f, struct ipma_box *b)
 {
     fread(b, 16, 1, f);
+    assert(b->type == FOURCC2UINT('i', 'p', 'm', 'a'));
     b->size = SWAP(b->size);
     b->entry_count = SWAP(b->entry_count);
     b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
@@ -451,6 +454,7 @@ void
 read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb)
 {
     fread(b, 8, 1, f);
+    assert(b->type == FOURCC2UINT('i', 'p', 'r', 'p'));
     b->size = SWAP(b->size);
     read_ipco_box(f, &b->ipco, cb);
     read_ipma_box(f, &b->ipma);
@@ -571,10 +575,9 @@ void read_stsd_box(FILE *f, struct stsd_box *b)
         fread(b->entries+i, 4, 2, f);
         b->entries[i].size = SWAP(b->entries[i].size);
         printf("sample entry %s: %d\n", type2name(b->entries[i].type), b->size);
-        // fread(b->entries[i].reserved, 1, 6, f);
-        // fread(&b->entries[i].data_reference_index, 2, 1, f);
-        // b->entries[i].data_reference_index = SWAP(b->entries[i].data_reference_index);
-        // printf("data_ref_index %d\n", b->entries[i].data_reference_index);
+        if (b->entries[i].type == FOURCC2UINT('h', 'v', 'c', '1')) {
+            //decode_hvc1();
+        }
         fseek(f, b->entries[i].size - 8, SEEK_CUR);
     }
 }
@@ -636,6 +639,10 @@ void read_stsc_box(FILE *f, struct stsc_box *b)
         fread(b->first_chunk + i, 4, 1, f);
         fread(b->sample_per_chunk + i, 4, 1, f);
         fread(b->sample_description_index + i, 4, 1, f);
+        b->first_chunk[i] = SWAP(b->first_chunk[i]);
+        b->sample_per_chunk[i] = SWAP(b->sample_per_chunk[i]);
+        b->sample_description_index[i] = SWAP(b->sample_description_index[i]);
+        printf("first chunk %d, sample per chunk %d, sample description index %d\n", b->first_chunk[i], b->sample_per_chunk[i], b->sample_description_index[i]);
     }
 }
 
@@ -652,6 +659,7 @@ void read_stco_box(FILE *f, struct stco_box *b)
     b->chunk_offset = malloc(4 * b->entry_count);
     for (int i = 0; i < b->entry_count; i++) {
         fread(b->chunk_offset + i, 4, 1, f);
+        b->chunk_offset[i] = SWAP(b->chunk_offset[i]);
     }
 }
 
@@ -690,6 +698,75 @@ void read_stss_box(FILE *f, struct stss_box *b)
     }
 }
 
+void read_SampleGroupEntry(FILE *f, struct SampleGroupEntry *e, int len)
+{
+    uint32_t grouping_type;
+    fread(&grouping_type, 4, 1, f);
+    printf("SampleGroupEntry %d: %d\n", (grouping_type), len);
+    fseek(f, len - 4, SEEK_CUR);
+}
+
+void read_sgpd_box(FILE *f, struct sgpd_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 'g', 'p', 'd'));
+    b->size = SWAP(b->size);
+    fread(&b->grouping_type, 4, 1, f);
+    // b->grouping_type = SWAP(b->grouping_type);
+    if (b->version == 1) {
+        fread(&b->default_length, 4, 1, f);
+        b->default_length = SWAP(b->default_length);
+    } else if (b->version >= 2) {
+        fread(&b->default_sample_description_index, 4, 1, f);
+        b->default_sample_description_index = SWAP(b->default_sample_description_index);
+    }
+    printf("version %d, name %s, default_length %d\n", b->version,
+           type2name(b->grouping_type), b->default_length);
+
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type),
+           b->entry_count);
+    b->description_length = malloc(b->entry_count * 4);
+    b->entries = malloc(sizeof(struct SampleGroupEntry) * b->entry_count);
+    for (int i = 0; i < b->entry_count; i++) {
+        if (b->version == 1) {
+            if (b->default_length == 0) {
+                fread(b->description_length+i, 4, 1, f);
+                b->description_length[i] = SWAP(b->description_length[i]);
+            } else {
+                b->description_length[i] = b->default_length;
+            }
+        }
+        // SampleGroupEntry
+        read_SampleGroupEntry(f, b->entries + i, b->description_length[i]);
+    }
+}
+
+void read_sbgp_box(FILE *f, struct sbgp_box *b)
+{
+    fread(b, 4, 3, f);
+    assert(b->type == FOURCC2UINT('s', 'b', 'g', 'p'));
+    b->size = SWAP(b->size);
+    fread(&b->grouping_type, 4, 1, f);
+    if (b->version == 1) {
+        fread(&b->grouping_type_parameter, 4, 1, f);
+    }
+    fread(&b->entry_count, 4, 1, f);
+    b->entry_count = SWAP(b->entry_count);
+    printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type), b->entry_count);
+    if (b->entry_count) {
+        b->sample_count = malloc(4 * b->entry_count);
+        b->group_description_index = malloc(4 * b->entry_count);
+        for (int i = 0; i < b->entry_count; i++) {
+            fread(b->sample_count+i, 4, 1, f);
+            fread(b->group_description_index+i, 4, 1, f);
+            b->sample_count[i] = SWAP(b->sample_count[i]);
+            b->group_description_index[i] = b->group_description_index[i];
+        }
+    }
+}
+
 void read_stbl_box(FILE *f, struct stbl_box *b)
 {
     fread(b, 4, 2, f);
@@ -697,7 +774,7 @@ void read_stbl_box(FILE *f, struct stbl_box *b)
     b->size = SWAP(b->size);
     read_stsd_box(f, &b->stsd);
     int s = b->size - 8 - b->stsd.size;
-    while (s) {
+    while (s > 0) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
         printf("%s, stbl left %d\n", type2name(type), s);
@@ -725,6 +802,12 @@ void read_stbl_box(FILE *f, struct stbl_box *b)
         case FOURCC2UINT('s', 't', 's', 's'):
             read_stss_box(f, &b->stss);
             break;
+        case FOURCC2UINT('s', 'g', 'p', 'd'):
+            read_sgpd_box(f, &b->sgpd);
+            break;
+        case FOURCC2UINT('s', 'b', 'g', 'p'):
+            read_sbgp_box(f, &b->sbgp);
+            break;
         default:
             fseek(f, p.size, SEEK_CUR);
             break;
@@ -738,10 +821,10 @@ void read_minf_box(FILE *f, struct minf_box *b)
     assert(b->type == FOURCC2UINT('m', 'i', 'n', 'f'));
     b->size = SWAP(b->size);
     int s = b->size - 8;
-    while (s) {
+    while (s > 0) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
-        printf("%s\n", type2name(type));
+        printf("%s: left %d\n", type2name(type), s);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
         case FOURCC2UINT('v', 'm', 'h', 'd'):
@@ -770,7 +853,6 @@ void read_minf_box(FILE *f, struct minf_box *b)
             break;
         }
         s -= (p.size);
-
     }
 }
 
@@ -789,7 +871,7 @@ void read_mdia_box(FILE *f, struct mdia_box *b)
         // read_elng_box (f, &b->elng);
     }
     read_minf_box(f, &b->minf);
-
+    assert(b->size - b->minf.size - b->mdhd.size - b->hdlr.size == 8);
 }
 
 void read_trak_box(FILE *f, struct trak_box *b)
@@ -836,11 +918,11 @@ read_moov_box(FILE *f, struct moov_box *b)
     read_mvhd_box(f, &b->mvhd);
 
     int s = b->size - b->mvhd.size - 8;
-    printf("moov left size %d\n", s);
+    // printf("moov left size %d\n", s);
     while (s) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
-        printf("%s\n", type2name(type));
+        printf("%s: moov left %d\n", type2name(type), s);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
             case FOURCC2UINT('t', 'r', 'a', 'k'):

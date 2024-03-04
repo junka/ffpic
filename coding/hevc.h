@@ -1328,13 +1328,13 @@ struct ctu {
 
 struct hevc_param_set {
     int vps_num;
-    struct vps *vps;
+    struct vps *vps[16];
 
     int sps_num;
-    struct sps *sps; // for a sequence of a video
+    struct sps *sps[16]; // for a sequence of a video
 
     int pps_num;
-    struct pps *pps; // for several pictures
+    struct pps *pps[64]; // for several pictures
 };
 
 struct hevc_slice {

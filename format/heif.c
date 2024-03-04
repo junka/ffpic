@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
@@ -40,7 +41,7 @@ HEIF_probe(const char *filename)
     }
     fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
-        printf("len %d minor_version %s\n", len , type2name(h.minor_version));
+        // printf("len %d minor_version %s\n", len , type2name(h.minor_version));
         if (len > 12 && (h.minor_version == TYPE2UINT("mif1")||h.minor_version == TYPE2UINT("msf1"))) {
             for (int j = 0; j < (len -12)>>2; j ++) {
                 for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
@@ -71,6 +72,7 @@ read_hvcc_box(FILE *f, struct box **bn)
         *bn = (struct box *)b;
     }
     fread(b, 8, 1, f);
+    assert(b->type == FOURCC2UINT('h', 'v', 'c', 'C'));
     b->size = SWAP(b->size);
 
     fread(&b->configurationVersion, 23, 1, f);
@@ -96,6 +98,7 @@ read_hvcc_box(FILE *f, struct box **bn)
             b->nal_arrays[i].nals[j].nal_units = malloc(b->nal_arrays[i].nals[j].unit_length);
             fread(b->nal_arrays[i].nals[j].nal_units, 1, b->nal_arrays[i].nals[j].unit_length, f);
             parse_nalu(b->nal_arrays[i].nals[j].nal_units, b->nal_arrays[i].nals[j].unit_length, NULL);
+            free(b->nal_arrays[i].nals[j].nal_units);
         }
     }
     return b->size;
@@ -193,8 +196,7 @@ HEIF_load_one(FILE *f, int width, int height, uint8_t *data, int length) {
     p->height = height;
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
-    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5)
-               << 2;
+    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = malloc(p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGB888;
     decode_hvc1(h, data, length, (uint8_t **)&p->pixels);
@@ -241,6 +243,22 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     return num;
 }
 
+static int
+decode_moov(HEIF *h, FILE *f, struct moov_box *b)
+{
+    uint32_t offset, size;
+    for (int i = 0; i <b->trak_num; i++) {
+        int count = b->trak[i].mdia.minf.stbl.stco.entry_count;
+        for (int j = 0; j < count; j++) {
+            offset = b->trak[i].mdia.minf.stbl.stco.chunk_offset[j];
+            size = b->trak[i].mdia.minf.stbl.stsz.entry_size[j];
+            fseek(f, offset, SEEK_SET);
+            // fread();
+        }
+    }
+    return 0;
+}
+
 static struct pic*
 HEIF_load(const char *filename, int skip_flag)
 {
@@ -264,6 +282,7 @@ HEIF_load(const char *filename, int skip_flag)
         case FOURCC2UINT('m', 'o', 'o', 'v'):
             h->moov = realloc(h->moov, (h->moov_num + 1)*sizeof(struct moov_box));
             read_moov_box(f, h->moov + h->moov_num);
+            h->moov_num++;
             break;
         case FOURCC2UINT('m', 'd', 'a', 't'):
             h->mdat_num ++;
@@ -305,6 +324,9 @@ HEIF_load(const char *filename, int skip_flag)
     p->format = CS_PIXELFORMAT_RGB888;
     int n = decode_items(h, f, p);
 
+    for (int i = 0; i < h->moov_num; i++) {
+        decode_moov(h, f, h->moov+i);
+    }
     fclose(f);
     if (n  == 1) {
         return p;
@@ -339,9 +361,9 @@ HEIF_free(struct pic *p)
             if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
                 struct hvcC_box *hvcc = (struct hvcC_box *)m->iprp.ipco.property[i];
                 for (int j = 0; j < hvcc->num_of_arrays; j ++) {
-                    for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
-                        free(hvcc->nal_arrays[j].nals[k].nal_units);
-                    }
+                    // for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
+                    //     free(hvcc->nal_arrays[j].nals[k].nal_units);
+                    // }
                     free(hvcc->nal_arrays[j].nals);
                 }
                 free(hvcc->nal_arrays);
@@ -362,6 +384,9 @@ HEIF_free(struct pic *p)
             free(m->iref.refs[i].to_item_ids);
         }
         free(m->iref.refs);
+    }
+    if (h->moov_num) {
+        free(h->moov);
     }
 
     if (h->items) {
@@ -479,7 +504,7 @@ HEIF_info(FILE *f, struct pic* p)
                 fprintf(f, "completeness %d, nal_unit_type %d", hvcc->nal_arrays[j].array_completeness, hvcc->nal_arrays[j].nal_unit_type);
                 for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
                     fprintf(f, ", unit_length %d\n", hvcc->nal_arrays[j].nals[k].unit_length);
-                    hexdump(f, "\t\t\t\tnalu: ", "\t\t\t\t", hvcc->nal_arrays[j].nals[k].nal_units, hvcc->nal_arrays[j].nals[k].unit_length);
+                    // hexdump(f, "\t\t\t\tnalu: ", "\t\t\t\t", hvcc->nal_arrays[j].nals[k].nal_units, hvcc->nal_arrays[j].nals[k].unit_length);
                 }
                 fprintf(f, "\n");
             }
@@ -512,7 +537,31 @@ HEIF_info(FILE *f, struct pic* p)
         }
         fprintf(f, "\n");
     }
-    
+    if (h->moov_num) {
+        for (int i = 0; i < h->moov_num; i++) {
+            fprintf(f, "\t");
+            struct moov_box *m = h->moov+i;
+            print_box(f, m);
+            fprintf(f, "\n");
+            fprintf(f, "\ttrak num %d\n", m->trak_num);
+            for (int i = 0; i < m->trak_num; i++) {
+                fprintf(f, "\t\t");
+                print_box(f, m->trak + i);
+                fprintf(f, "\n\t\t");
+                print_box(f, &m->trak[i].mdia);
+                fprintf(f, "\n\t\t");
+                fprintf(f, "\thandler type \"%s\"", type2name(m->trak[i].mdia.hdlr.handler_type));
+                fprintf(f, ": %s\n\t\t", m->trak[i].mdia.hdlr.name);
+                print_box(f, &m->trak[i].mdia.minf.stbl);
+                fprintf(f, "\n\t\tchunk count: %d\n", m->trak[i].mdia.minf.stbl.stco.entry_count);
+                for (int j = 0; j< m->trak[i].mdia.minf.stbl.stco.entry_count; j++) {
+                    fprintf(f, "\t\toffset: 0x%x\n", m->trak[i].mdia.minf.stbl.stco.chunk_offset[j]);
+                    fprintf(f, "\t\tsize: 0x%x\n", m->trak[i].mdia.minf.stbl.stsz.entry_size[j]);
+
+                }
+            }
+        }
+    }
 }
 
 

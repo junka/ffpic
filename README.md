@@ -10,24 +10,9 @@ We should learn the picture format following the order:
 ```
 bmp -> png -> jpeg -> webp -> heif
 ```
-if you would like to know gif/pnm/tiff/tga, this could be learned before jpeg. These raw data are not compressed-coded.
+See the tutorial on [Wiki](https://github.com/junka/ffpic/wiki)
 
-### FFPic Layers
-
-    -----------------------
-    |   file format        |
-    -----------------------
-    |   decode/            |
-    -----------------------
-    |   dislay buffer      |
-    -----------------------
-
-- first layer for file operations like load/free/info callback.
-this will include format probe 
-
-- second layer for data decoding and encoding.
-
-- third layer for real buffer maniplate. for now, choose sdl2 as a frame for dispaly
+If you would like to know gif/pnm/tiff/tga, this could be learned before jpeg.
 
 #### File Format
 supported file formart is:
@@ -52,9 +37,7 @@ supported file formart is:
 
 ### display rgb data
 Tips on display:
-after decoding, usually we get rgb data from least significant byte, But
-for sdl display, the data need to be  ```BGRA``` from least significant byte.
-So, a reorder is need for display.
+After decoding, usually we get rgb data from least significant byte, But for sdl display, the data need to be  ```BGRA``` from least significant byte. So, a reorder is need for display.
 
 Or we can use YUV data to display directly via sdl api.
 

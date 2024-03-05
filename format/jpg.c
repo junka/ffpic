@@ -303,7 +303,7 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
             buf[zigzag[i++]] = ac;
         }
     }
-#if 1
+#if 0
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
             fprintf(vlog_get_stream(), "%d ", buf[i*8+j]);
@@ -332,8 +332,8 @@ init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
     struct huffman_symbol *acsym = huffman_symbol_alloc(j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
     huffman_build_lookup_table(dc_tree, dc_ht_id, dcsym);
     huffman_build_lookup_table(ac_tree, ac_ht_id, acsym);
-    huffman_dump_table(vlog_get_stream(), dc_tree);
-    huffman_dump_table(vlog_get_stream(), ac_tree);
+    // huffman_dump_table(vlog_get_stream(), dc_tree);
+    // huffman_dump_table(vlog_get_stream(), ac_tree);
 
     d->prev_dc = 0;
     d->dc = dc_tree;
@@ -369,10 +369,10 @@ JPG_decode_image(JPG* j)
     int len = j->data_len;
     j->data = NULL;
     // each component owns a decoder, could be CMYK
-    struct jpg_decoder *d[4];
     const struct dct_ops *dct = get_dct_ops(16);
     const struct cs_ops *cs_bgr = get_cs_ops(16);
 
+    struct jpg_decoder *d[4];
     //components_num is 1 or 3
     for (int i = 0; i < j->sof.components_num; i ++) {
         d[i] = malloc(sizeof(struct jpg_decoder));
@@ -398,19 +398,21 @@ JPG_decode_image(JPG* j)
 
     int16_t Y[3][64*4], *Cr, *Cb;
     int16_t dummy[64] = {0};
-
+    uint8_t table_cid[4] = {0};
     for (uint8_t i = 0; i < j->sof.components_num; ++i) {
         int v = j->sof.colors[i].vertical;
         int h = j->sof.colors[i].horizontal;
+        table_cid[j->sof.colors[i].cid] = i;
         assert(h * v <= 4);
     }
     for (int y = 0; y < height; y += ystride) {
         ptr = j->data + y * pitch;
         for (int x = 0; x < width; x += xstride) {
             // for YUV420, get 4 DCU for Y and 1 DCU for U and 1 DCU for V
-            for (uint8_t i = 0; i < j->sof.components_num; ++i) {
-                int v = j->sof.colors[i].vertical;
-                int h = j->sof.colors[i].horizontal;
+            for (uint8_t i = 0; i < j->sos.nums; ++i) {
+                int cid = j->sos.comps[i].component_selector;
+                int v = j->sof.colors[table_cid[cid]].vertical;
+                int h = j->sof.colors[table_cid[cid]].horizontal;
                 for (int vi = 0; vi < v && y + vi * 8 < height; vi ++) {
                     for (int hi = 0; hi < h && x + hi * 8 < width; hi ++) {
                         VDBG(jpg, "decode at (%d, %d) [%d, %d] for %d", x, y, hi, vi, i);
@@ -419,7 +421,7 @@ JPG_decode_image(JPG* j)
                             VDBG(jpg, "fail at (%d, %d) [%d, %d] for %d", x, y, hi, vi, i);
                             continue;
                         }
-                        dct->idct_8x8(&Y[i][64 * (vi * h + hi)], 8);
+                        dct->idct_8x8(&Y[cid-1][64 * (vi * h + hi)], 8);
                     }
                 }
             }
@@ -459,14 +461,14 @@ JPG_decode_image(JPG* j)
 }
 
 static void
-read_compressed_image(JPG* j, FILE *f)
+read_compressed_scan(JPG* j, FILE *f)
 {
     size_t pos = ftell(f);
     while (1) {
         uint8_t c = fgetc(f);
         if (c == 0xFF) {
             c = fgetc(f);
-            if (c == 0xD9) {
+            if (c == 0xD9 || c == 0xC4 || c == 0xDA) {
                 break;
             }
         }
@@ -510,15 +512,21 @@ read_compressed_image(JPG* j, FILE *f)
     j->data_len = l;
 }
 
-
-void 
-read_sos(JPG* j, FILE *f)
+static void
+read_sos(JPG* j, FILE *f, bool skip_flag)
 {
     fread(&j->sos, 3, 1, f);
     fread(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
+    VDBG(jpg, "component %d", j->sos.nums);
     fread(&j->sos.predictor_start, 3, 1, f);
-    read_compressed_image(j, f);
-
+    VDBG(jpg, "sos spectual selection start %d, end %d", j->sos.predictor_start,
+         j->sos.predictor_end);
+    VDBG(jpg, "sos successive approximation bits high %d, low %d", j->sos.approx_bits_h,
+         j->sos.approx_bits_l);
+    read_compressed_scan(j, f);
+    if (!skip_flag) {
+        JPG_decode_image(j);
+    }
 }
 
 void
@@ -651,7 +659,9 @@ JPG_load_one(FILE *f, int skip_flag)
     while (m != EOI && m != 0 && m != 0xFFFF) {
         switch (m) {
         case SOF0:
-            VDBG(jpg, "SOF0");
+        case SOF1:
+        case SOF2:
+            VDBG(jpg, "SOFn");
             read_sof(j, f);
             break;
         case APP0:
@@ -668,7 +678,7 @@ JPG_load_one(FILE *f, int skip_flag)
             break;
         case SOS:
             VDBG(jpg, "SOS");
-            read_sos(j, f);
+            read_sos(j, f, skip_flag);
             break;
         case COM:
             VDBG(jpg, "COM");
@@ -695,9 +705,7 @@ JPG_load_one(FILE *f, int skip_flag)
         m = read_marker_skip_null(f);
     }
     VDBG(jpg, "done one image %lu", ftell(f));
-    if (!skip_flag) {
-        JPG_decode_image(j);
-    }
+
     p->width = ((j->sof.width + 7) >> 3) << 3;
     p->height = j->sof.height;
     p->depth = 32;
@@ -816,7 +824,10 @@ JPG_info(FILE *f, struct pic* p)
         fprintf(f, "\t component id %d DC %d, AC %d\n", j->sos.comps[i].component_selector,
              j->sos.comps[i].DC_entropy, j->sos.comps[i].AC_entropy);
     }
-    fprintf(f, "\t start %d, end %d\n", j->sos.predictor_start, j->sos.predictor_end);
+    fprintf(f, "\t spectral selection start %d, end %d\n", j->sos.predictor_start,
+            j->sos.predictor_end);
+    fprintf(f, "\t successive approximation bit high %d, low %d\n",
+            j->sos.approx_bits_h, j->sos.approx_bits_l);
     if (j->dri.interval) {
         fprintf(f, "-----------------------\n");
         fprintf(f, "\tDRI interval %d\n", j->dri.interval);

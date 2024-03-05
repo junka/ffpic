@@ -28,9 +28,6 @@ struct cu_info {
 #pragma pack(pop)
 
 struct picture {
-    // int16_t *Y;
-    // int16_t *U;
-    // int16_t *V;
     int16_t *pixel;
     int size;
     int y_stride;
@@ -4634,7 +4631,7 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
                            disableIntraBoundaryFilter,
                            sps->BitDepthY);
     }
-#if 0
+#if 1
     VDBG(hevc, "predication %d (%d, %d)-(%d, %d) %d", nTbS, xTbCmp, yTbCmp,
          xTbY, yTbY, predModeIntra);
     for (int j = 0; j < nTbS; j++) {
@@ -6173,9 +6170,9 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
     struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
     struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
 
-    // VDBG(hevc, "parse_transform_tree %d (%d, %d) (%d, %d) parent %d, %d",
-    //       1 << log2TrafoSize, x0, y0, xBase, yBase, parent_cbf_cb,
-    //       parent_cbf_cr);
+    VDBG(hevc, "parse_transform_tree %d (%d, %d) (%d, %d) parent %d, %d",
+          1 << log2TrafoSize, x0, y0, xBase, yBase, parent_cbf_cb,
+          parent_cbf_cr);
     struct trans_tree *tt = &cu->tt;
     int split_transform_flag = 0;
     int cbf_cb = -1, cbf_cr = -1; // bit 0: top block, bit 1: bottom block
@@ -6194,14 +6191,14 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
         }
     }
     if (split_transform_flag) {
-        // VDBG(hevc, "split_transform_flag(%d, %d, %d) %d", x0, y0, trafoDepth, split_transform_flag);
+        VDBG(hevc, "split_transform_flag(%d, %d, %d) %d", x0, y0, trafoDepth, split_transform_flag);
         set_split_transform_flag(sps, p, x0, y0, trafoDepth, split_transform_flag);
     }
     if ((log2TrafoSize > 2 && sps->ChromaArrayType != 0) || sps->ChromaArrayType == 3) {
         if (trafoDepth == 0 || parent_cbf_cb) {
             //[trafoDepth][x0][y0]
             cbf_cb = CABAC(d, CTX_TYPE_TU_CBF_CBCR + trafoDepth);
-            // VDBG(hevc, "cbf_cb %d, ChromaArrayType %d", cbf_cb, sps->ChromaArrayType);
+            VDBG(hevc, "cbf_cb %d, ChromaArrayType %d", cbf_cb, sps->ChromaArrayType);
             if (sps->ChromaArrayType == 2 &&
                 (!split_transform_flag || log2TrafoSize == 3)) {
                 //[trafoDepth][x0][y0 + (1 << (log2TrafoSize - 1))]
@@ -6212,11 +6209,11 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
         if (trafoDepth == 0 || parent_cbf_cr) {
             //[trafoDepth][x][y]
             cbf_cr = CABAC(d, CTX_TYPE_TU_CBF_CBCR + trafoDepth);
-            // VDBG(hevc, "cbf_cr %d", cbf_cr);
+            VDBG(hevc, "cbf_cr %d", cbf_cr);
             if (sps->ChromaArrayType == 2 && (!split_transform_flag || log2TrafoSize == 3)) {
                 //[trafoDepth][x][y + (1 << (log2TrafoSize - 1))]
                 cbf_cr |= (CABAC(d, CTX_TYPE_TU_CBF_CBCR + trafoDepth) << 1);
-                // VDBG(hevc, "cbf_cr %d", cbf_cr);
+                VDBG(hevc, "cbf_cr %d", cbf_cr);
             }
         }
     }
@@ -6258,7 +6255,7 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
              (cbf_cb & 0x2 || cbf_cr & 0x2))) {
             cbf_luma =
                 CABAC(d, CTX_TYPE_TU_CBF_LUMA + ((trafoDepth == 0) ? 1 : 0));
-            // VDBG(hevc, "cbf_luma %d", cbf_luma);
+            VDBG(hevc, "cbf_luma %d", cbf_luma);
         }
         parse_transform_unit(d, cu, slice, hps, x0, y0, xBase, yBase,
                              log2TrafoSize, trafoDepth, blkIdx, p, cbf_luma,

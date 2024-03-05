@@ -15,22 +15,28 @@ extern "C" {
 
 #define MARKER(v) _MARKER(0xFF, v)
 
-//baseline DCT-based JPEG
+// baseline DCT-based JPEG, huffman
 #define SOF0 MARKER(0xC0)
+// extended sequential DCT
 #define SOF1 MARKER(0xC1)
-/* usually unsupported below */
-//Progressive DCT-based JPEG
+// Progressive DCT-based JPEG
 #define SOF2 MARKER(0xC2)
+
+/* usually unsupported below */
+// lossless sequential
 #define SOF3 MARKER(0xC3)
 
+// differential, huffman coding
 #define SOF5 MARKER(0xC5)
 #define SOF6 MARKER(0xC6)
 #define SOF7 MARKER(0xC7)
 
+// non-differential, arithmetic codding
 #define SOF9 MARKER(0xC9)
 #define SOF10 MARKER(0xCA)
 #define SOF11 MARKER(0xCB)
 
+// differential, arithmetic codding
 #define SOF13 MARKER(0xCD)
 #define SOF14 MARKER(0xCE)
 #define SOF15 MARKER(0xCF)

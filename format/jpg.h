@@ -215,7 +215,8 @@ typedef struct {
     struct dri dri;
     struct comment_segment comment;
 
-    int data_len; //compressed huffman data len
+    int16_t *yuv[3];
+    int data_len; // compressed huffman data len
     uint8_t *data;
 }JPG;
 

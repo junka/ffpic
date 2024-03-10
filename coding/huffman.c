@@ -8,7 +8,7 @@
 #include "bitstream.h"
 #include "vlog.h"
 
-VLOG_REGISTER(huffman, DEBUG)
+VLOG_REGISTER(huffman, INFO)
 
 huffman_tree* 
 huffman_tree_init(void)

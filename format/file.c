@@ -111,11 +111,22 @@ struct pic *pic_alloc(size_t size)
 {
     struct pic *p = calloc(1, sizeof(struct pic));
     p->pic = calloc(1, size);
+    p->refcnt = 0;
+    return p;
+}
+
+struct pic *pic_ref(struct pic * p)
+{
+    p->refcnt++;
     return p;
 }
 
 void pic_free(struct pic *p)
 {
-    free(p->pic);
-    free(p);
+    if (p->refcnt == 0) {
+        free(p->pic);
+        free(p);
+    } else {
+        p->refcnt--;
+    }
 }

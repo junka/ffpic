@@ -35,13 +35,16 @@ struct pic {
     int depth;
     int pitch;  //bytes per line
     int format;
+    int refcnt;
     void *pic;
 };
 
 struct pic *pic_alloc(size_t size);
 void pic_free(struct pic *p);
 
-void file_ops_register(struct file_ops* ops);
+struct pic *pic_ref(struct pic *p);
+
+void file_ops_register(struct file_ops *ops);
 
 struct file_ops* file_probe(const char *filename);
 

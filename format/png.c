@@ -28,11 +28,8 @@ PNG_probe(const char* filename)
         return -ENOENT;
     }
     struct png_file_header sig;
-    size_t len = fread(&sig, sizeof(struct png_file_header), 1, f);
-    if (len < 1) {
-        fclose(f);
-        return -EBADF;
-    }
+    FFREAD(&sig, sizeof(struct png_file_header), 1, f);
+
     fclose(f);
     const uint8_t png_signature[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
     if (!memcmp(&sig, png_signature, sizeof(png_signature))){
@@ -231,7 +228,7 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
 static uint32_t
 read_ihdr(PNG *b, FILE *f, uint32_t crc32)
 {
-    fread(&b->ihdr, 1, sizeof(struct png_ihdr), f);
+    FFREAD(&b->ihdr, 1, sizeof(struct png_ihdr), f);
     crc32 = update_crc(crc32, (uint8_t *)&b->ihdr, sizeof(struct png_ihdr));
     b->ihdr.width = SWAP(b->ihdr.width);
     b->ihdr.height = SWAP(b->ihdr.height);
@@ -242,7 +239,7 @@ static uint32_t
 read_plte(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 {
     b->palette = malloc(length);
-    fread(b->palette, sizeof(struct color), length / sizeof(struct color), f);
+    FFREAD(b->palette, sizeof(struct color), length / sizeof(struct color), f);
     crc32 = update_crc(crc32, (uint8_t *)b->palette, length);
     return crc32;
 }
@@ -250,7 +247,7 @@ read_plte(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 static uint32_t
 read_gama(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 {
-    fread(&b->gamma, sizeof(uint32_t), 1, f);
+    FFREAD(&b->gamma, sizeof(uint32_t), 1, f);
     crc32 = update_crc(crc32, (uint8_t *)&b->gamma, length);
     b->gamma = SWAP(b->gamma);
     return crc32;
@@ -268,7 +265,7 @@ read_iccp(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
     b->icc.compression_method = fgetc(f);
     crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_method, 1);
     b->icc.compression_profile = malloc(length - i - 1);
-    fread(&b->icc.compression_profile, length - i - 1, 1, f);
+    FFREAD(&b->icc.compression_profile, length - i - 1, 1, f);
     crc32 = update_crc(crc32, (uint8_t *)&b->icc.compression_profile,
                        length - i - 1);
     return crc32;
@@ -277,7 +274,7 @@ read_iccp(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 static uint32_t
 read_chrm(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 {
-    fread(&b->cwp, sizeof(struct chromaticities_white_point), 1, f);
+    FFREAD(&b->cwp, sizeof(struct chromaticities_white_point), 1, f);
     crc32 = update_crc(crc32, (uint8_t *)&b->cwp, length);
     b->cwp.white_x = SWAP(b->cwp.white_x);
     b->cwp.white_y = SWAP(b->cwp.white_y);
@@ -304,7 +301,7 @@ read_text(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
         memcpy((b->textual + b->n_text - 1)->keyword, keybuff, i);
         if (length - i) {
             (b->textual + b->n_text - 1)->text = malloc(length - i);
-            fread((b->textual + b->n_text - 1)->text, 1, length - i, f);
+            FFREAD((b->textual + b->n_text - 1)->text, 1, length - i, f);
             crc32 =
                 update_crc(crc32, (uint8_t *)(b->textual + b->n_text - 1)->text,
                            length - i);
@@ -317,7 +314,7 @@ read_text(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
         memcpy(b->textual->keyword, keybuff, i);
         if (length - i) {
             b->textual->text = malloc(length - i);
-            fread(b->textual->text, 1, length - i, f);
+            FFREAD(b->textual->text, 1, length - i, f);
             crc32 = update_crc(crc32, (uint8_t *)b->textual->text, length - i);
         } else {
             b->textual->text = NULL;
@@ -359,7 +356,7 @@ read_itxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
         }
         if (length - i - j - k) {
             (b->itextual + b->n_itext - 1)->text = malloc(length - i - j - k);
-            fread((b->itextual + b->n_itext - 1)->text, 1, length - i - j - k,
+            FFREAD((b->itextual + b->n_itext - 1)->text, 1, length - i - j - k,
                   f);
             crc32 = update_crc(crc32,
                                (uint8_t *)(b->itextual + b->n_itext - 1)->text,
@@ -391,7 +388,7 @@ read_itxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
         }
         if (length - i - j - k) {
             b->itextual->text = malloc(length - i - j - k);
-            fread(b->itextual->text, 1, length - i - j - k, f);
+            FFREAD(b->itextual->text, 1, length - i - j - k, f);
             crc32 = update_crc(crc32, (uint8_t *)b->itextual->text,
                                length - i - j - k);
         } else {
@@ -422,7 +419,7 @@ read_ztxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
         if (length - i - 1) {
             (b->ctextual + b->n_ctext - 1)->compressed_text =
                 malloc(length - i - 1);
-            fread((b->ctextual + b->n_ctext - 1)->compressed_text, 1,
+            FFREAD((b->ctextual + b->n_ctext - 1)->compressed_text, 1,
                   length - i - 1, f);
             crc32 = update_crc(
                 crc32,
@@ -440,7 +437,7 @@ read_ztxt(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
             update_crc(crc32, (uint8_t *)&(b->ctextual->compression_method), 1);
         if (length - i - 1) {
             b->ctextual->compressed_text = malloc(length - i - 1);
-            fread(b->ctextual->compressed_text, 1, length - i - 1, f);
+            FFREAD(b->ctextual->compressed_text, 1, length - i - 1, f);
             crc32 = update_crc(crc32, (uint8_t *)(b->ctextual->compressed_text),
                                length - i - 1);
         } else {
@@ -455,7 +452,7 @@ static uint32_t
 read_hist(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 {
     b->freqs = malloc(length);
-    fread(b->freqs, 2, length / 2, f);
+    FFREAD(b->freqs, 2, length / 2, f);
     crc32 = update_crc(crc32, (uint8_t *)b->freqs, length);
     return crc32;
 }
@@ -466,18 +463,18 @@ read_bkgd(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
     VDBG(png, "color %d, length %d", b->ihdr.color_type, length);
     if (b->ihdr.color_type == GREYSCALE ||
         b->ihdr.color_type == GREYSCALE_ALPHA) {
-        fread(&b->bcolor, 2, 1, f);
+        FFREAD(&b->bcolor, 2, 1, f);
         crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
         b->bcolor.greyscale = SWAP(b->bcolor.greyscale);
     } else if (b->ihdr.color_type == TRUECOLOR ||
                b->ihdr.color_type == TRUECOLOR_ALPHA) {
-        fread(&b->bcolor, 6, 1, f);
+        FFREAD(&b->bcolor, 6, 1, f);
         crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
         b->bcolor.rgb.red = SWAP(b->bcolor.rgb.red);
         b->bcolor.rgb.green = SWAP(b->bcolor.rgb.green);
         b->bcolor.rgb.blue = SWAP(b->bcolor.rgb.blue);
     } else if (b->ihdr.color_type == INDEXEDCOLOR) {
-        fread(&b->bcolor, 1, 1, f);
+        FFREAD(&b->bcolor, 1, 1, f);
         crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
     }
     return crc32;
@@ -486,9 +483,38 @@ read_bkgd(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 static uint32_t
 read_time(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
 {
-    fread(&b->last_mod, sizeof(struct last_modification), 1, f);
+    FFREAD(&b->last_mod, sizeof(struct last_modification), 1, f);
     crc32 = update_crc(crc32, (uint8_t *)&(b->last_mod), length);
     return crc32;
+}
+
+static uint32_t
+read_idat(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
+{
+    if ((uint32_t)b->compressed_size == 0) {
+        b->compressed_size = length;
+        b->compressed = malloc(b->compressed_size);
+        FFREAD(b->compressed, length, 1, f);
+        crc32 = update_crc(crc32, (uint8_t *)b->compressed, length);
+    } else {
+        b->compressed_size += length;
+        b->compressed = realloc(b->compressed, b->compressed_size);
+        FFREAD(b->compressed + b->compressed_size - length, length, 1, f);
+        crc32 = update_crc(crc32, (uint8_t *)b->compressed + b->compressed_size - length, length);
+    }
+    return crc32;
+}
+
+static int
+read_iend(FILE *f)
+{
+    uint32_t crc32, crc;
+    uint32_t chunk_type = (uint32_t)CHARS2UINT("IEND");
+    crc32 = init_crc32((uint8_t *)&chunk_type, sizeof(uint32_t));
+    FFREAD(&crc, sizeof(uint32_t), 1, f);
+    crc32 = finish_crc32(crc32);
+    CRC_ASSER(crc32, crc);
+    return 0;
 }
 
 static struct pic* 
@@ -507,8 +533,7 @@ PNG_load(const char* filename, int skip_flag)
     uint32_t chunk_type = 0;
     uint32_t length;
 
-    uint8_t *data = NULL, *compressed = NULL;
-    int compressed_size = 0;
+    uint8_t *data = NULL;
     uint32_t crc32, crc;
 
     if (READ_FAIL(&length, sizeof(uint32_t), 1, f)) {
@@ -530,18 +555,8 @@ PNG_load(const char* filename, int skip_flag)
                 crc32 = read_plte(b, f, crc32, length);
                 break;
             case CHUNK_TYPE_IDAT:
-                compressed_size += length;
-                if ((uint32_t)compressed_size == length) {
-                  compressed = malloc(compressed_size);
-                  fread(compressed, length, 1, f);
-                  crc32 = update_crc(crc32, (uint8_t *)compressed, length);
-                } else {
-                  compressed = realloc(compressed, compressed_size);
-                  fread(compressed + compressed_size - length, length, 1, f);
-                  crc32 = update_crc(
-                      crc32, (uint8_t *)compressed + compressed_size - length,
-                      length);
-                } break;
+                crc32 = read_idat(b, f, crc32, length);
+                break;
             case CHUNK_TYPE_GAMA:
                 crc32 = read_gama(b, f, crc32, length);
                 break;
@@ -590,22 +605,21 @@ PNG_load(const char* filename, int skip_flag)
         fread(&chunk_type, sizeof(uint32_t), 1, f);
     }
     /* check iEND chunk */
-    crc32 = init_crc32((uint8_t*)&chunk_type, sizeof(uint32_t));
-    fread(&crc, sizeof(uint32_t), 1, f);
-    crc32 = finish_crc32(crc32);
-    CRC_ASSER(crc32, crc);
+    read_iend(f);
     fclose(f);
     b->size = calc_image_raw_size(b);
-    VDBG(png, "compressed size %d, pre allocate %d\n", compressed_size, b->size);
+    VDBG(png, "compressed size %d, pre allocate %d\n", b->compressed_size, b->size);
 
     if (!skip_flag) {
         uint8_t* udata = malloc(b->size);
-        int a = deflate_decode(compressed, compressed_size, udata, &b->size);
+        int a = deflate_decode(b->compressed, b->compressed_size, udata, &b->size);
 #if 0
         hexdump(stdout, "png raw data", "", compressed, 32);
         hexdump(stdout, "png decompress data", "", udata, 32);
 #endif
-        free(compressed);
+        free(b->compressed);
+        b->compressed = NULL;
+        b->compressed_size = 0;
         b->data = (uint8_t*)malloc(b->size);
         VDBG(png, "ret %d, size %d\n", a, b->size);
 

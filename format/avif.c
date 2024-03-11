@@ -11,6 +11,7 @@
 #include "vlog.h"
 #include "file.h"
 #include "avif.h"
+#include "utils.h"
 
 VLOG_REGISTER(avif, DEBUG)
 
@@ -23,11 +24,8 @@ AVIF_probe(const char *filename)
         return -ENOENT;
     }
     struct ftyp_box h;
-    int len = fread(&h, sizeof(h), 1, f);
-    if (len < 1) {
-        fclose(f);
-        return -EBADF;
-    }
+    FFREAD(&h, sizeof(h), 1, f);
+
     fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
         if(h.minor_version == TYPE2UINT("avif"))
@@ -501,7 +499,7 @@ int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx)
 }
 
 
-static int
+int
 read_av1c_box(FILE *f, struct box **bn)
 {
     struct av1C_box *b = malloc(sizeof(struct av1C_box));
@@ -512,14 +510,14 @@ read_av1c_box(FILE *f, struct box **bn)
     if (*bn == NULL) {
         *bn = (struct box *)b;
     }
-    fread(b, 8, 1, f);
+    FFREAD(b, 8, 1, f);
     b->size = SWAP(b->size);
 
-    fread(&b->type + 4, 4, 1, f);
+    FFREAD(&b->type + 4, 4, 1, f);
 
     VDBG(avif, "size %d", b->size);
     uint8_t *data = malloc(b->size - 12);
-    fread(data, b->size - 12, 1, f);
+    FFREAD(data, b->size - 12, 1, f);
     struct bits_vec *v = bits_vec_alloc(data, b->size - 12, BITS_LSB);
     
     // configOBUs field contains zero or more OBUs. Any OBU may be present provided that the following procedures produce compliant AV1 bitstreams:
@@ -552,49 +550,6 @@ read_av1c_box(FILE *f, struct box **bn)
     return b->size;
 }
 
-static void
-read_meta_box(FILE *f, struct av1_meta_box *meta)
-{
-    struct box b;
-    uint32_t type = read_full_box(f, meta, -1);
-    if (type != TYPE2UINT("meta")) {
-        VERR(avif, "error, it is not a meta after ftyp");
-        return;
-    }
-    int size = meta->size -= 12;
-    while (size) {
-        type = read_box(f, &b, size);
-        fseek(f, -8, SEEK_CUR);
-        VDBG(avif, "type (%s), size %d", UINT2TYPE(type), b.size);
-        switch (type) {
-        case FOURCC2UINT('h', 'd', 'l', 'r'):
-            read_hdlr_box(f, &meta->hdlr);
-            break;
-        case FOURCC2UINT('p', 'i', 't', 'm'):
-            read_pitm_box(f, &meta->pitm);
-            break;
-        case FOURCC2UINT('i', 'l', 'o', 'c'):
-            read_iloc_box(f, &meta->iloc);
-            break;
-        case FOURCC2UINT('i', 'i', 'n', 'f'):
-            read_iinf_box(f, &meta->iinf);
-            break;
-        case FOURCC2UINT('i', 'r', 'e', 'f'):
-            read_iref_box(f, &meta->iref);
-            break;
-        case FOURCC2UINT('i', 'p', 'r', 'p'):
-            read_iprp_box(f, &meta->iprp, &read_av1c_box);
-            break;
-        default:
-            fseek(f, b.size, SEEK_CUR);
-            break;
-        }
-        size -= b.size;
-        VDBG(avif, "%s, left %d", UINT2TYPE(type), size);
-    }
-    
-}
-
 void decode_av01(AVIF *h, uint8_t *data, uint64_t len, uint8_t **pixels)
 {
     // hexdump(stdout, "coded ", "", data, 256);
@@ -609,13 +564,13 @@ void decode_av01(AVIF *h, uint8_t *data, uint64_t len, uint8_t **pixels)
     }
 }
 
-static void pre_read_item(AVIF *h, FILE *f, uint32_t idx) {
+static int pre_read_item(AVIF *h, FILE *f, uint32_t idx) {
     // for now make sure, extent_count = 1 work
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
         h->items[idx].data = malloc(h->items[idx].length);
         fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET);
-        fread(h->items[idx].data, h->items[idx].length, 1, f);
+        FFREAD(h->items[idx].data, h->items[idx].length, 1, f);
     } else {
         h->items[idx].data = malloc(1);
         uint64_t total = 0;
@@ -623,11 +578,12 @@ static void pre_read_item(AVIF *h, FILE *f, uint32_t idx) {
             h->items[idx].data = realloc(h->items[idx].data,
                         h->items[idx].item->extents[i].extent_length);
             fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET);
-            fread(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
+            FFREAD(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
             total += h->items[idx].item->extents[i].extent_length;
         }
         h->items[idx].length = total;
     }
+    return 0;
 }
 
 static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
@@ -801,7 +757,7 @@ AVIF_info(FILE *f, struct pic* p)
     fprintf(f, "\t");
     print_box(f, &h->meta.iprp.ipco);
     fprintf(f, "\n\t");
-    for (int i = 0; i < h->meta.iprp.ipco.n_prop; i ++) {
+    for (int i = 0; i < h->meta.iprp.ipco.n_property; i ++) {
         fprintf(f, "\t\t");
         print_box(f, h->meta.iprp.ipco.property[i]);
         if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {

@@ -500,9 +500,9 @@ struct tref_box {
 //see 8.11.12
 struct itemtype_ref_box {
     BOX_ST;
-    uint16_t from_item_id;
+    uint32_t from_item_id;//large 32, other 16 bits
     uint16_t ref_count;
-    uint16_t* to_item_ids;
+    uint32_t *to_item_ids; // large 32, other 16 bits
 };
 
 /* item reference box */
@@ -542,7 +542,7 @@ struct pixi_box {
 struct ipco_box {
     BOX_ST;
     struct box *property[4];
-    int n_prop;
+    int n_property;
 };
 
 
@@ -565,6 +565,9 @@ struct iprp_box {
     BOX_ST;
     struct ipco_box ipco;
     struct ipma_box ipma;
+    // struct hvcC_box hvcC;
+    struct ispe_box ispe;
+    struct pixi_box pixi;
 };
 
 struct trak_box {
@@ -590,6 +593,25 @@ struct moov_box {
     struct udta_box *udta; //zero or one
 };
 
+struct idat_box {
+    BOX_ST;
+    uint8_t *data;
+};
+
+/* see 8.11.1 */
+struct meta_box {
+    FULL_BOX_ST;
+    struct hdlr_box hdlr; // exactly one
+    struct dinf_box dinf; // optional or one
+    struct pitm_box pitm; // zero or one
+    struct iloc_box iloc; // zero or one
+    struct ipro_box ipro; // zero or one
+    struct iinf_box iinf; // zero or one
+    struct iprp_box iprp;
+    struct idat_box idat; // zero or one
+    struct iref_box iref; // zero or one
+};
+
 #pragma pack(pop)
 
 uint32_t read_box(FILE *f, void * d, int len);
@@ -599,30 +621,41 @@ int read_ftyp(FILE *f, void *d);
 
 void print_box(FILE *f, void *d);
 
-void read_mvhd_box(FILE *f, struct mvhd_box *b);
+int read_mvhd_box(FILE *f, struct mvhd_box *b);
 
-void read_hdlr_box(FILE *f, struct hdlr_box *b);
+int read_hdlr_box(FILE *f, struct hdlr_box *b);
 
-void read_iloc_box(FILE *f, struct iloc_box *b);
+int read_iloc_box(FILE *f, struct iloc_box *b);
 
-void read_pitm_box(FILE *F, struct pitm_box *b);
+int read_pitm_box(FILE *F, struct pitm_box *b);
 
-void read_iinf_box(FILE *f, struct iinf_box *b);
+int read_iinf_box(FILE *f, struct iinf_box *b);
 
-void read_sinf_box(FILE *f, struct sinf_box *b);
+int read_sinf_box(FILE *f, struct sinf_box *b);
 
-void read_iref_box(FILE *f, struct iref_box *b);
+int read_iref_box(FILE *f, struct iref_box *b);
 
-void read_dinf_box(FILE *f, struct dinf_box *b);
+int read_dinf_box(FILE *f, struct dinf_box *b);
 
-typedef int (* read_box_callback)(FILE *f, struct box **b);
-
-void read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb);
+int read_iprp_box(FILE *f, struct iprp_box *b);
 
 /* read mdat */
-void read_mdat_box(FILE *f, struct mdat_box *b);
+int read_mdat_box(FILE *f, struct mdat_box *b);
 
-void read_moov_box(FILE *f, struct moov_box *b);
+int read_moov_box(FILE *f, struct moov_box *b);
+
+int read_meta_box(FILE *f, struct meta_box *meta);
+
+#define FFREAD_BOX_ST(b, f, fourcc) \
+    FFREAD(b, 4, 2, f); \
+    assert(b->type == fourcc); \
+    b->size = SWAP(b->size);
+
+#define FFREAD_BOX_FULL(b, f, fourcc) \
+    FFREAD(b, 4, 3, f); \
+    assert(b->type == fourcc); \
+    b->size = SWAP(b->size)
+
 
 #ifdef __cplusplus
 }

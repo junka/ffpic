@@ -386,16 +386,6 @@ struct av1C_box {
 
 #pragma pack(pop)
 
-struct av1_meta_box {
-    FULL_BOX_ST;
-    struct hdlr_box hdlr;
-    struct pitm_box pitm;
-    struct iloc_box iloc;
-    struct iinf_box iinf;
-    struct iprp_box iprp;
-    struct iref_box iref;
-};
-
 struct avif_item {
     const struct item_location *item;
     uint32_t type;
@@ -405,7 +395,7 @@ struct avif_item {
 
 typedef struct {
     struct ftyp_box ftyp;
-    struct av1_meta_box meta;
+    struct meta_box meta;
     int mdat_num;
     // struct mdat_box *mdat;
 

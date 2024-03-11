@@ -163,6 +163,9 @@ typedef struct PNG {
     int size;
     uint8_t *data;
 
+    int compressed_size;
+    uint8_t *compressed;
+
     union background_color bcolor;
     struct chromaticities_white_point cwp;
     uint32_t gamma;

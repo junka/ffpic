@@ -9,6 +9,7 @@
 #include "exr.h"
 #include "file.h"
 #include "vlog.h"
+#include "utils.h"
 
 VLOG_REGISTER(exr, INFO)
 
@@ -21,11 +22,8 @@ EXR_probe(const char* filename)
         return -ENOENT;
     }
     uint32_t magic;
-    int len = fread(&magic, sizeof(magic), 1, f);
-    if (len < 1) {
-        fclose(f);
-        return -EBADF;
-    }
+    FFREAD(&magic, sizeof(magic), 1, f);
+
     fclose(f);
     if (SWAP(magic) == 0x762f3101) {
         return 0;

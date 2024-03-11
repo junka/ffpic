@@ -114,6 +114,7 @@ read_bits(struct bits_vec *v, int n)
 
 int bits_vec_read_bit(struct bits_vec *v) {
   if (v->ptr - v->start > (long)v->len) {
+    printf("bits longer than expect\n");
     exit(-1);
     return -1;
   }

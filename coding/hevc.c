@@ -1002,7 +1002,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     sps->sps_seq_parameter_set_id = GOL_UE(v);
     //less than 16
     VDBG(hevc, "sps: sps_seq_parameter_set_id %d", sps->sps_seq_parameter_set_id);
-    
+
     if (MultiLayerExtSpsFlag) {
         // uint8_t update_rep_format_flag = READ_BIT(v);
         if (READ_BIT(v)) {
@@ -1090,6 +1090,9 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     }
     sps->num_short_term_ref_pic_sets = GOL_UE(v);
     // should be less than 64
+    assert(sps->num_short_term_ref_pic_sets < 64);
+    printf("num_short_term_ref_pic_sets %d\n",
+           sps->num_short_term_ref_pic_sets);
     if (sps->num_short_term_ref_pic_sets) {
         sps->sps_st_ref = calloc(sps->num_short_term_ref_pic_sets, sizeof(struct st_ref_pic_set));
         for (uint32_t i = 0; i < sps->num_short_term_ref_pic_sets; i++) {
@@ -1102,6 +1105,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->sps_lt_ref = calloc(1, sizeof(struct lt_ref_pic_set));
         parse_lt_ref_set(v, sps, sps->sps_lt_ref);
     }
+    printf("aaaaa\n");
     sps->sps_temporal_mvp_enabled_flag = READ_BIT(v);
     sps->strong_intra_smoothing_enabled_flag = READ_BIT(v);
     sps->vui_parameters_present_flag = READ_BIT(v);
@@ -6995,16 +6999,16 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         VDBG(hevc, "end_of_slice_segment_flag %d", end_of_slice_segment_flag);
         // bits_vec_dump(v);
         CtbAddrInTs++;
-        // if (CtbAddrInTs < sps->PicSizeInCtbsY) {
-            // printf("CtbAddrInTs %d, PicSizeInCtbsY %d\n", CtbAddrInTs, sps->PicSizeInCtbsY);
+        if (CtbAddrInTs < sps->PicSizeInCtbsY) {
+            printf("CtbAddrInTs %d, PicSizeInCtbsY %d\n", CtbAddrInTs, sps->PicSizeInCtbsY);
             CtbAddrInRs = pps->CtbAddrTsToRs[CtbAddrInTs];
-        // } else {
-        //     CtbAddrInRs = sps->PicSizeInCtbsY;
-        //     if (!end_of_slice_segment_flag) {
-        //         printf("error !\n");
-        //         exit(-1);
-        //     }
-        // }
+        } else {
+            CtbAddrInRs = sps->PicSizeInCtbsY;
+            if (!end_of_slice_segment_flag) {
+                printf("error !\n");
+                exit(-1);
+            }
+        }
 
         VDBG(hevc, "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
              "CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
@@ -7318,14 +7322,16 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
     case SPS_NUT:
         new_sps = parse_sps(&h, v, new_vps);
         if (!new_sps) {
-            VABORT(hevc, "can no parse sps correctly");
+            VERR(hevc, "can no parse sps correctly");
+            exit(-1);
         }
         hps.sps[hps.sps_num++] = new_sps;
         break;
     case PPS_NUT:
         new_pps = parse_pps(v);
         if (!new_pps) {
-            VABORT(hevc, "can no parse pps correctly");
+            VERR(hevc, "can no parse pps correctly");
+            exit(-1);
         }
         hps.pps[hps.pps_num++] = new_pps;
         break;

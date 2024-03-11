@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +6,7 @@
 
 #include "byteorder.h"
 #include "basemedia.h"
+#include "utils.h"
 
 
 uint8_t
@@ -17,7 +19,9 @@ uint16_t
 read_u16(FILE *f)
 {
     uint16_t a;
-    fread(&a, 2, 1, f);
+    if (fread(&a, 2, 1, f)!= 1) {
+        return -1;
+    }
     a = SWAP(a);
     return a;
 }
@@ -26,7 +30,9 @@ uint32_t
 read_u32(FILE *f)
 {
     uint32_t a;
-    fread(&a, 4, 1, f);
+    if (fread(&a, 4, 1, f)!=1) {
+        return -1;
+    }
     a = SWAP(a);
     return a;
 }
@@ -35,7 +41,9 @@ uint64_t
 read_u64(FILE *f)
 {
     uint64_t a;
-    fread(&a, 4, 1, f);
+    if (fread(&a, 4, 1, f)!= 1) {
+        return -1;
+    }
     a = SWAP(a);
     return a;
 }
@@ -58,7 +66,7 @@ uint32_t
 read_box(FILE *f, void * d, int blen)
 {
     struct box* b = (struct box*)d;
-    fread(b, sizeof(struct box), 1, f);
+    FFREAD(b, sizeof(struct box), 1, f);
     b->size = SWAP(b->size);
     if (b->size == 1) {
         //large size
@@ -117,57 +125,56 @@ print_box(FILE *f, void *d)
 }
 
 
-void
+int
 read_mvhd_box(FILE *f, struct mvhd_box *b)
 {
-    fread(b, 4, 3, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('m', 'v', 'h', 'd'));
     printf("mvhd size %d, version %d\n", b->size, b->version);
     if (b->version == 0) {
-        fread(&b->ctime, 4, 1, f);
-        fread(&b->mtime, 4, 1, f);
-        fread(&b->timescale, 4, 1, f);
-        fread(&b->duration, 4, 1, f);
+        b->ctime = read_u32(f);
+        b->mtime = read_u32(f);
+        b->timescale = read_u32(f);
+        b->duration = read_u32(f);
     } else if (b->version == 1) {
-        fread(&b->ctime, 28, 1, f);
+        b->ctime = read_u64(f);
+        b->mtime = read_u64(f);
+        b->timescale = read_u32(f);
+        b->duration = read_u64(f);
     }
-    fread(&b->rate, 4, 1, f);
-    fread(&b->volume, 2, 1, f);
-    fread(&b->reserved, 2, 1, f);
-    fread(b->rsd, 4, 2, f);
-    fread(b->matrix, 4, 9, f);
-    fread(b->pre_defined, 4, 6, f);
-    fread(&b->next_track_id, 4, 1, f);
 
-    b->rate = SWAP(b->rate);
-    b->volume = SWAP(b->volume);
-    b->next_track_id = SWAP(b->next_track_id);
+    b->rate = read_u32(f);
+    b->volume = read_u16(f);
+    b->reserved = read_u16(f);
+    FFREAD(b->rsd, 4, 2, f);
+    FFREAD(b->matrix, 4, 9, f);
+    FFREAD(b->pre_defined, 4, 6, f);
+    b->next_track_id = read_u32(f);
     printf("rate %d, volume %d, trak_id %d\n", b->rate, b->volume, b->next_track_id);
+    return b->size;
 }
 
 
-void
+int
 read_hdlr_box(FILE *f, struct hdlr_box *b)
 {
-    fread(b, 4, 8, f);
-    assert(b->type == FOURCC2UINT('h', 'd', 'l', 'r'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('h', 'd', 'l', 'r'));
+    b->pre_defined = read_u32(f);
+    FFREAD(&b->handler_type, 4, 1, f);
+    FFREAD(b->reserved, 4, 3, f);
     if (b->size - 32 - 1) {
         b->name = malloc(b->size - 32 -1);
-        fread(b->name, b->size - 32, 1, f);
+        FFREAD(b->name, 1, b->size - 32, f);
     } else {
         fseek(f, 1, SEEK_CUR);
         b->name = NULL;
     }
+    return b->size;
 }
 
-
-void
+int
 read_iloc_box(FILE *f, struct iloc_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('i', 'l', 'o', 'c'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'l', 'o', 'c'));
     uint8_t a = read_u8(f);
     b->offset_size = a >> 4;
     b->length_size = a & 0xf;
@@ -176,6 +183,7 @@ read_iloc_box(FILE *f, struct iloc_box *b)
     b->index_size = a & 0xf;
 
     b->item_count = read_u16(f);
+    printf("iloc: item count %d\n", b->item_count);
 
     b->items = malloc(sizeof(struct item_location) * b->item_count);
     for (int i = 0; i < b->item_count; i ++) {
@@ -211,16 +219,18 @@ read_iloc_box(FILE *f, struct iloc_box *b)
             }
         }
     }
+    return b->size;
 }
 
 
 
-void
+int
 read_pitm_box(FILE *f, struct pitm_box *b)
 {
-    fread(b, 14, 1, f);
-    b->size = SWAP(b->size);
-    b->item_id = SWAP(b->item_id);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('p', 'i', 't', 'm'));
+    b->item_id = read_u16(f);
+    printf("PITM: primary %d\n", b->item_id);
+    return b->size;
 }
 
 int
@@ -241,27 +251,26 @@ read_till_null(FILE *f, char *str)
 static int
 read_infe_box(FILE *f, struct infe_box *b)
 {
-    fread(b, 12, 1, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'n', 'f', 'e'));
     if (b->version == 0 || b->version == 1) {
-        fread(&b->item_id, 2, 1, f);
-        b->item_id = SWAP(b->item_id);
-        fread(&b->item_protection_index, 2, 1, f);
-        b->item_protection_index = SWAP(b->item_protection_index);
+        b->item_id = read_u16(f);
+        b->item_protection_index = read_u16(f);
         read_till_null(f, b->item_name);
         read_till_null(f, b->content_type);
+        read_till_null(f, b->content_encoding);
     }
     if (b->version == 1) {
-        fread(&b->item_type, 4, 1, f);
-        b->item_type = SWAP(b->item_type);
-
-    } else if (b->version == 2) {
-        fread(&b->item_id, 2, 1, f);
-        b->item_id = SWAP(b->item_id);
-        fread(&b->item_protection_index, 2, 1, f);
-        b->item_protection_index = SWAP(b->item_protection_index);
-        fread(&b->item_type, 4, 1, f);
+        FFREAD(&b->item_type, 4, 1, f);
+    } else if (b->version >= 2) {
+        if (b->version == 2) {
+            b->item_id = read_u16(f);
+        } else if (b->version == 3) {
+            b->item_id = read_u32(f);
+        }
+        b->item_protection_index = read_u16(f);
+        FFREAD(&b->item_type, 4, 1, f);
         int l = read_till_null(f, b->item_name);
+        printf("infe name %s, type %s, id %d\n", b->item_name, type2name(b->item_type), b->item_id);
         if (b->item_type == TYPE2UINT("mime")) {
             int m = read_till_null(f, b->content_type);
             b->content_encoding = malloc(b->size - 20 - l - m);
@@ -269,86 +278,114 @@ read_infe_box(FILE *f, struct infe_box *b)
             // fgetc(f);
         } else if (b->item_type == TYPE2UINT("uri ")) {
             read_till_null(f, b->content_type);
+        } else {
+            if ((b->size > 20 + l) && b->version == 2) {
+                fseek(f, b->size - 20 -l, SEEK_CUR);
+            } else if ((b->size > 22 + l) && b->version == 3){
+                fseek(f, b->size - 22 -l, SEEK_CUR);
+            }
         }
     }
     return b->size;
 }
 
-void
+int
 read_iinf_box(FILE *f, struct iinf_box *b)
 {
-    fread(b, 12, 1, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'i', 'n', 'f'));
     if (b->version > 0) {
-        fread(&b->entry_count, 4, 1, f);
-        b->entry_count = SWAP(b->entry_count);
+        b->entry_count = read_u32(f);
     } else {
-        uint16_t count;
-        fread(&count, 2, 1, f);
-        b->entry_count = SWAP(count);
+        b->entry_count = read_u16(f);
     }
     b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
+    printf("IINF: entry_count %d\n", b->entry_count);
     for (uint32_t i = 0; i < b->entry_count; i ++) {
         read_infe_box(f, b->item_infos + i);
     }
+    return b->size;
 }
 
+static int
+read_frma_box(FILE *f, struct frma_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('f', 'r', 'm', 'a'));
+    b->data_format = read_u32(f);
+    return b->size;
+}
 
-void
+static int
+read_schm_box(FILE *f, struct schm_box *b)
+{
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 'c', 'h', 'm'));
+    b->scheme_type = read_u32(f);
+    b->scheme_version = read_u32(f);
+    b->scheme_uri = malloc(b->size - 20);
+    FFREAD(b->scheme_uri, 1, b->size - 20, f);
+    return b->size;
+}
+
+int
 read_sinf_box(FILE *f, struct sinf_box *b)
 {
-    fread(b, 8, 1, f);
-    b->size = SWAP(b->size);
-    fread(&b->original_format, 12, 1, f);
-    b->original_format.size = SWAP(b->original_format.size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('s', 'i', 'n', 'f'));
+    read_frma_box(f, &b->original_format);
 
     // fread(&b->IPMP_descriptors, 12, 1, f);
     // b->IPMP_descriptors.size = SWAP(b->IPMP_descriptors.size);
     // b->IPMP_descriptors.ipmp_descs = malloc(b->IPMP_descriptors.size - 12);
     // fread(b->IPMP_descriptors.ipmp_descs, b->IPMP_descriptors.size - 12, 1, f);
-
-    fread(&b->scheme_type_box, 20, 1, f);
-    b->scheme_type_box.size = SWAP(b->scheme_type_box.size);
-    if (b->scheme_type_box.size - 20) {
-        b->scheme_type_box.scheme_uri = malloc(b->scheme_type_box.size - 20);
-        fread(b->scheme_type_box.scheme_uri, 1, b->scheme_type_box.size - 20, f);
-    }
+    read_schm_box(f,&b->scheme_type_box);
 
     // fread(b->info)
     // read_box()
+    return b->size;
 }
 
 static int
-read_itemtype_box(FILE *f, struct itemtype_ref_box *b)
+read_itemtype_box(FILE *f, struct itemtype_ref_box *b, int version)
 {
-    fread(b, 12, 1, f);
+    FFREAD(b, 4, 2, f);
     b->size = SWAP(b->size);
-    b->from_item_id = SWAP(b->from_item_id);
-    b->ref_count = SWAP(b->ref_count);
-    b->to_item_ids = malloc(b->ref_count * 2);
-    fread(b->to_item_ids, b->ref_count * 2, 1, f);
-    for (uint32_t i = 0; i < b->ref_count; i ++) {
-        b->to_item_ids[i] = SWAP(b->to_item_ids[i]);
+    if (version == 0) {
+        b->from_item_id = read_u16(f);
+    } else if (version == 1) {
+        b->from_item_id = read_u32(f);
+    }
+    b->ref_count = read_u16(f);
+    printf("itemtype count %d\n", b->ref_count);
+    b->to_item_ids = malloc(b->ref_count * sizeof(uint32_t));
+    for (uint16_t i = 0; i < b->ref_count; i ++) {
+        if (version == 0) {
+            b->to_item_ids[i] = read_u16(f);
+        } else if (version == 1) {
+            b->to_item_ids[i] = read_u32(f);
+        }
+        printf("itemtype to_item_ids %d\n", b->to_item_ids[i]);
     }
 
     return b->size;
 }
 
-void
+int
 read_iref_box(FILE *f, struct iref_box *b)
 {
-    fread(b, 12, 1, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'r', 'e', 'f'));
     int sz = b->size - 12;
     int n = 1;
-    b->refs = malloc(sizeof(struct itemtype_ref_box));
+
     while (sz) {
-        b->refs = realloc(b->refs, sizeof(struct itemtype_ref_box) * n);
-        int l = read_itemtype_box(f, b->refs);
+        if (b->refs_count == 0) {
+            b->refs = malloc(sizeof(struct itemtype_ref_box));
+        } else {
+            b->refs = realloc(b->refs, sizeof(struct itemtype_ref_box) *
+                                           (b->refs_count+1));
+        }
+        int l = read_itemtype_box(f, b->refs + b->refs_count, b->version);
+        b->refs_count++;
         sz -= l;
-        n ++;
     }
-    b->refs_count = n - 1;
+    return b->size;
 }
 
 
@@ -356,47 +393,68 @@ read_iref_box(FILE *f, struct iref_box *b)
 static int
 read_ispe_box(FILE *f, struct ispe_box *b)
 {
-    fread(b, 20, 1, f);
-    assert(b->type == FOURCC2UINT('i', 's', 'p', 'e'));
-    b->size = SWAP(b->size);
-    b->image_height = SWAP(b->image_height);
-    b->image_width = SWAP(b->image_width);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 's', 'p', 'e'));
+    b->image_width = read_u32(f);
+    b->image_height = read_u32(f);
+    printf("ISPE: width %d, height %d\n", b->image_width, b->image_height);
     return b->size;
 }
 
 static int
 read_pixi_box(FILE *f, struct pixi_box *b)
 {
-    fread(b, 13, 1, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('p', 'i', 'x', 'i'));
+    b->num_channels = read_u8(f);
     b->bits_per_channel = malloc(b->num_channels);
-    fread(b->bits_per_channel, b->num_channels, 1, f);
+    FFREAD(b->bits_per_channel, 1, b->num_channels, f);
     return b->size;
 }
 
 static int
-read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
+read_colr_box(FILE *f, struct colr_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
+    FFREAD(&b->color_type, 4, 1, f);
+    if (b->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
+        // on screen colors
+        b->color_primaries = read_u16(f);
+        b->transfer_characteristics = read_u16(f);
+        b->matrix_coefficients = read_u16(f);
+        b->full_range_flag = fgetc(f) >> 7;
+    } else if (b->color_type == FOURCC2UINT('r', 'I', 'C', 'C')) {
+        // restricted ICC profile
+    } else if (b->color_type == FOURCC2UINT('p', 'r', 'o', 'f')) {
+        //  unrestricted ICC profile
+    }
+    return b->size;
+}
+
+extern int read_hvcc_box(FILE *f, struct box **bn);
+extern int read_av1c_box(FILE *f, struct box **bn);
+
+static int
+read_ipco_box(FILE *f, struct ipco_box *b)
 {
     struct box * cc = NULL;
     struct ispe_box *ispe;
     struct pixi_box *pixi;
-    fread(b, 8, 1, f);
-    b->size = SWAP(b->size);
-    assert(b->type == FOURCC2UINT('i', 'p', 'c', 'o'));
+    struct colr_box *colr;
+
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'p', 'c', 'o'));
     int s = b->size - 8;
     int n = 0;
     while (s > 0) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
-        // printf("type %s, size %d\n", UINT2TYPE(type), p.size);
+        printf("IPCO: type %s, size %d\n", UINT2TYPE(type), p.size);
         fseek(f, -8, SEEK_CUR);
         switch (type) {
             case FOURCC2UINT('h', 'v', 'c', 'C'):
-                s -= cb(f, &cc);
+                s -= read_hvcc_box(f, &cc);
                 b->property[n++] = cc;
                 break;
             case FOURCC2UINT('a', 'v', '1', 'C'):
-                s -= cb(f, &cc);
+                s -= read_av1c_box(f, &cc);
                 b->property[n++] = cc;
                 break;
             case FOURCC2UINT('i', 's', 'p', 'e'):
@@ -409,170 +467,197 @@ read_ipco_box(FILE *f, struct ipco_box *b, read_box_callback cb)
                 s -= read_pixi_box(f, pixi);
                 b->property[n++] = (struct box *)pixi;
                 break;
+            case FOURCC2UINT('c', 'o', 'l', 'r'):
+                colr = malloc(sizeof(struct colr_box));
+                s -= read_colr_box(f, colr);
+                b->property[n++] = (struct box *)colr;
+                break;
             default:
-                // assert(0);
                 s -= (p.size);
                 fseek(f, p.size, SEEK_CUR);
                 break;
         }
     }
-    b->n_prop = n;
+    b->n_property = n;
     return b->size;
 }
 
-static void
+static int
 read_ipma_box(FILE *f, struct ipma_box *b)
 {
-    fread(b, 16, 1, f);
-    assert(b->type == FOURCC2UINT('i', 'p', 'm', 'a'));
-    b->size = SWAP(b->size);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'p', 'm', 'a'));
+    b->entry_count = read_u32(f);
     b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
+    printf("IPMA: entry_count %d\n", b->entry_count);
     for (uint32_t i = 0; i < b->entry_count; i ++) {
         if (b->version < 1) {
-            fread(b->entries + i, 2, 1, f);
+            b->entries[i].item_id = read_u16(f);
         } else {
-            fread(b->entries + i, 4, 1, f);
+            b->entries[i].item_id = read_u32(f);
         }
-        b->entries[i].association_count = fgetc(f);
+        b->entries[i].association_count = read_u8(f);
         b->entries[i].association = malloc(2 * b->entries[i].association_count);
         for (int j = 0; j < b->entries[i].association_count; j ++) {
             if (b->flags & 0x1) {
-                fread(b->entries[i].association + j, 2, 1, f);
-                b->entries[i].association[j] = SWAP(b->entries[i].association[j]);
+                b->entries[i].association[j] = read_u16(f);
             } else {
-                b->entries[i].association[j] = fgetc(f);
+                b->entries[i].association[j] = read_u8(f);
                 if (b->entries[i].association[j] & 0x80) {
                     b->entries[i].association[j] = (0x8000 | (b->entries[i].association[j] & 0x7F));
                 }
             }
         }
     }
+    return b->size;
 }
 
-void
-read_iprp_box(FILE *f, struct iprp_box *b, read_box_callback cb)
+int
+read_iprp_box(FILE *f, struct iprp_box *b)
 {
-    fread(b, 8, 1, f);
-    assert(b->type == FOURCC2UINT('i', 'p', 'r', 'p'));
-    b->size = SWAP(b->size);
-    read_ipco_box(f, &b->ipco, cb);
-    read_ipma_box(f, &b->ipma);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'p', 'r', 'p'));
+    int s = b->size - 8;
+    struct box *cc = NULL;
+
+    while (s > 0) {
+        struct box p;
+        uint32_t type = read_box(f, &p, s);
+        printf("IPRP: type %s, size %d\n", UINT2TYPE(type), p.size);
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+            case FOURCC2UINT('i', 'p', 'c', 'o'):
+                s -= read_ipco_box(f, &b->ipco);
+                break;
+            case FOURCC2UINT('i', 'p', 'm', 'a'):
+                s -= read_ipma_box(f, &b->ipma);
+                break;
+            // case FOURCC2UINT('h', 'v', 'c', 'C'):
+            //     s -= read_hvcc_box(f, &cc);
+            //     break;
+            case FOURCC2UINT('i', 's', 'p', 'e'):
+                s -= read_ispe_box(f, &b->ispe);
+                break;
+            case FOURCC2UINT('p', 'i', 'x', 'i'):
+                s -= read_pixi_box(f, &b->pixi);
+                break;
+            default:
+                s -= (p.size);
+                fseek(f, p.size, SEEK_CUR);
+                break;
+        }
+    }
+    return b->size;
 }
 
 
-void
+int
 read_mdat_box(FILE *f, struct mdat_box *b)
 {
-    fread(b, 8, 1, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'd', 'a', 't'));
     // fseek(f, b->size - 8, SEEK_CUR);
     b->data = malloc(b->size - 8);
     // printf("mdat size %d\n", b->size - 8);
-    fread(b->data, 1, b->size - 8, f);
+    FFREAD(b->data, 1, b->size - 8, f);
     // hexdump(stdout, "mdat ", "", b->data, 256);
+    return b->size;
 }
 
-void read_dref_box(FILE *f, struct dref_box *b)
+int read_dref_box(FILE *f, struct dref_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == TYPE2UINT("dref"));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('d', 'r', 'e', 'f'));
+    b->entry_count = read_u32(f);
     // printf("dinf %d, dref %d, count %d\n", b->size, b->size, b->entry_count);
     b->entries = malloc(b->entry_count * sizeof(struct DataEntryBox));
     for (int i = 0; i < (int)b->entry_count; i++) {
-        fread(b->entries + i, 12, 1, f);
+        FFREAD(b->entries + i, 4, 3, f);
         b->entries[i].size = SWAP(b->entries[i].size);
         // printf("data entry size %d, type %s\n", b->entries[i].size,
         //        type2name(b->entries[i].type));
         if (b->entries[i].type == TYPE2UINT("url ")) {
             b->entries[i].location = malloc(b->entries[i].size - 12);
             // printf("%s\n", b->entries[i].location);
-            fread(b->entries[i].location, b->entries[i].size - 12, 1,
-                  f);
+            FFREAD(b->entries[i].location, 1, b->entries[i].size - 12, f);
         } else if (b->entries[i].type == TYPE2UINT("urn ")) {
             b->entries[i].name = malloc(b->entries[i].size - 12);
-            fread(b->entries[i].name, b->entries[i].size - 12, 1, f);
+            FFREAD(b->entries[i].name, 1, b->entries[i].size - 12, f);
         }
     }
+    return b->size;
 }
 
-void read_dinf_box(FILE *f, struct dinf_box *b)
+int read_dinf_box(FILE *f, struct dinf_box *b)
 {
-    fread(b, 8, 1, f);
-    assert(b->type == TYPE2UINT("dinf"));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('d', 'i', 'n', 'f'));
     read_dref_box(f, &b->dref);
+    return b->size;
 }
 
-static void
+static int
 read_tkhd_box(FILE *f, struct tkhd_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('t', 'k', 'h', 'd'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('t', 'k', 'h', 'd'));
     if (b->version == 0) {
-        fread(&b->creation_time, 4, 1, f);
-        fread(&b->modification_time, 4, 1, f);
-        fread(&b->track_id, 4, 1, f);
-        fread(&b->reserved, 4, 1, f);
-        fread(&b->duration, 4, 1, f);
+        b->creation_time = read_u32(f);
+        b->modification_time = read_u32(f);
+        b->track_id = read_u32(f);
+        b->reserved = read_u32(f);
+        b->duration = read_u32(f);
     } else {
-        fread(&b->creation_time, 32, 1, f);
+        b->creation_time = read_u64(f);
+        b->modification_time = read_u64(f);
+        b->track_id = read_u32(f);
+        b->reserved = read_u32(f);
+        b->duration = read_u64(f);
     }
-    fread(b->rsd, 4, 2, f);
-    fread(&b->layer, 2, 1, f);
-    fread(&b->alternate_group, 2, 1, f);
-    fread(&b->volume, 2, 1, f);
-    fread(&b->reserved0, 2, 1, f);
-    fread(&b->matrix, 4, 9, f);
-    fread(&b->width, 4, 1, f);
-    fread(&b->height, 4, 1, f);
-    b->width = SWAP(b->width);
-    b->height = SWAP(b->height);
+    FFREAD(b->rsd, 4, 2, f);
+    b->layer = read_u16(f);
+    b->alternate_group = read_u16(f);
+    b->volume = read_u16(f);
+    FFREAD(&b->reserved0, 2, 1, f);
+    FFREAD(&b->matrix, 4, 9, f);
+    b->width = read_u32(f);
+    b->height = read_u32(f);
     printf("width %d, height %d\n",b->width, b->height);
+    return b->size;
 }
 
-void read_vmhd_box(FILE *f, struct vmhd_box *b)
+int read_vmhd_box(FILE *f, struct vmhd_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('v', 'm', 'h', 'd'));
-    b->size = SWAP(b->size);
-    fread(&b->graphicsmode, 2, 1, f);
-    b->graphicsmode = SWAP(b->graphicsmode);
-    fread(b->opcolor, 2, 3, f);
-}
-
-void read_mdhd_box(FILE *f, struct mdhd_box *b)
-{
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('m', 'd', 'h', 'd'));
-    b->size = SWAP(b->size);
-    if (b->version == 0) {
-        fread(&b->creation_time, 4, 1, f);
-        fread(&b->modification_time, 4, 1, f);
-        fread(&b->timescale, 4, 1, f);
-        fread(&b->duration, 4, 1, f);
-    } else {
-        fread(&b->creation_time, 28, 1, f);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('v', 'm', 'h', 'd'));
+    b->graphicsmode = read_u16(f);
+    for (int i = 0; i < 3; i++) {
+        b->opcolor[i] = read_u16(f);
     }
-    fread(&b->lan, 2, 1, f);
-    fread(&b->pre_defined, 2, 1, f);
+    return b->size;
 }
 
-void read_stsd_box(FILE *f, struct stsd_box *b)
+int
+read_mdhd_box(FILE *f, struct mdhd_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 's', 'd'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('m', 'd', 'h', 'd'));
+    if (b->version == 0) {
+        b->creation_time = read_u32(f);
+        b->modification_time = read_u32(f);
+        b->timescale = read_u32(f);
+        b->duration = read_u32(f);
+    } else {
+        b->creation_time = read_u64(f);
+        b->modification_time = read_u64(f);
+        b->timescale = read_u32(f);
+        b->duration = read_u64(f);
+    }
+    b->lan = read_u16(f);
+    b->pre_defined = read_u16(f);
+    return b->size;
+}
+
+int read_stsd_box(FILE *f, struct stsd_box *b)
+{
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 'd'));
+    b->entry_count = read_u32(f);
     // printf("stsd entry_count %d\n", b->entry_count);
     b->entries = malloc(sizeof(struct SampleEntry) * b->entry_count);
     for (int i = 0; i < b->entry_count; i++) {
-        fread(b->entries+i, 4, 2, f);
+        FFREAD(b->entries + i, 4, 2, f);
         b->entries[i].size = SWAP(b->entries[i].size);
         printf("sample entry %s: %d\n", type2name(b->entries[i].type), b->size);
         if (b->entries[i].type == FOURCC2UINT('h', 'v', 'c', '1')) {
@@ -580,55 +665,48 @@ void read_stsd_box(FILE *f, struct stsd_box *b)
         }
         fseek(f, b->entries[i].size - 8, SEEK_CUR);
     }
+    return b->size;
 }
 
-void read_stdp_box(FILE *f, struct stdp_box *b)
+int read_stdp_box(FILE *f, struct stdp_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 'd', 'p'));
-    b->size = SWAP(b->size);
-
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 'd', 'p'));
+    return b->size;
 }
 
-void read_stts_box(FILE *f, struct stts_box *b)
+int read_stts_box(FILE *f, struct stts_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 't', 's'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 't', 's'));
+    b->entry_count = read_u32(f);
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size, b->entry_count);
     if (b->entry_count) {
         b->sample_count = malloc(4 * b->entry_count);
         b->sample_delta = malloc(4 * b->entry_count);
         for (int i = 0; i < b->entry_count; i++) {
-            fread(b->sample_count + i, 4, 1, f);
-            fread(b->sample_delta + i, 4, 1, f);
+            b->sample_count[i] = read_u32(f);
+            b->sample_delta[i] = read_u32(f);
         }
     }
+    return b->size;
 }
 
-void read_ctts_box(FILE *f, struct ctts_box *b) {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('c', 't', 't', 's'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+int read_ctts_box(FILE *f, struct ctts_box *b)
+{
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('c', 't', 't', 's'));
+    b->entry_count = read_u32(f);
     b->sample_count = malloc(4 * b->entry_count);
     b->sample_offset = malloc(4 * b->entry_count);
     for (int i = 0; i < b->entry_count; i++) {
-        fread(b->sample_count + i, 4, 1, f);
-        fread(b->sample_offset + i, 4, 1, f);
+        b->sample_count[i] = read_u32(f);
+        b->sample_offset[i] = read_u32(f);
     }
+    return b->size;
 }
 
-void read_stsc_box(FILE *f, struct stsc_box *b)
+int read_stsc_box(FILE *f, struct stsc_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 's', 'c'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 'c'));
+    b->entry_count = read_u32(f);
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
            b->entry_count);
 
@@ -636,95 +714,79 @@ void read_stsc_box(FILE *f, struct stsc_box *b)
     b->sample_per_chunk = malloc(4 * b->entry_count);
     b->sample_description_index = malloc(4 * b->entry_count);
     for (int i = 0; i < b->entry_count; i++) {
-        fread(b->first_chunk + i, 4, 1, f);
-        fread(b->sample_per_chunk + i, 4, 1, f);
-        fread(b->sample_description_index + i, 4, 1, f);
-        b->first_chunk[i] = SWAP(b->first_chunk[i]);
-        b->sample_per_chunk[i] = SWAP(b->sample_per_chunk[i]);
-        b->sample_description_index[i] = SWAP(b->sample_description_index[i]);
+        b->first_chunk[i] = read_u32(f);
+        b->sample_per_chunk[i] = read_u32(f);
+        b->sample_description_index[i] = read_u32(f);
         printf("first chunk %d, sample per chunk %d, sample description index %d\n", b->first_chunk[i], b->sample_per_chunk[i], b->sample_description_index[i]);
     }
+    return b->size;
 }
 
-void read_stco_box(FILE *f, struct stco_box *b)
+int read_stco_box(FILE *f, struct stco_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 'c', 'o'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 'c', 'o'));
+    b->entry_count = read_u32(f);
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
            b->entry_count);
 
     b->chunk_offset = malloc(4 * b->entry_count);
     for (int i = 0; i < b->entry_count; i++) {
-        fread(b->chunk_offset + i, 4, 1, f);
-        b->chunk_offset[i] = SWAP(b->chunk_offset[i]);
+        b->chunk_offset[i] = read_u32(f);
     }
+    return b->size;
 }
 
-void read_stsz_box(FILE *f, struct stsz_box *b)
+int read_stsz_box(FILE *f, struct stsz_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 's', 'z'));
-    b->size = SWAP(b->size);
-    fread(&b->sample_size, 4, 1, f);
-    b->sample_size = SWAP(b->sample_size);
-    fread(&b->sample_count, 4, 1, f);
-    b->sample_count = SWAP(b->sample_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 'z'));
+    b->sample_size = read_u32(f);
+    b->sample_count = read_u32(f);
     printf("%s size %d, sample_size %d, sample_count %d\n", type2name(b->type), b->size,
            b->sample_size, b->sample_count);
     if (b->sample_size == 0) {
         b->entry_size = malloc(4 * b->sample_count);
         for (int i = 0; i < b->sample_count; i++) {
-            fread(b->entry_size + i, 4, 1, f);
-            b->entry_size[i] = SWAP(b->entry_size[i]);
+            b->entry_size[i] = read_u32(f);
             // printf("entry size %d\n", b->entry_size[i]);
         }
     }
+    return b->size;
 }
 
-void read_stss_box(FILE *f, struct stss_box *b)
+int read_stss_box(FILE *f, struct stss_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 't', 's', 's'));
-    b->size = SWAP(b->size);
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 's'));
+    b->entry_count = read_u32(f);
     b->sample_number = malloc(b->entry_count * 4);
     for (int i = 0; i < b->entry_count; i++) {
-        fread(b->sample_number+i, 4, 1, f);
-        b->sample_number[i] = SWAP(b->sample_number[i]);
+        b->sample_number[i] = read_u32(f);
     }
+    return b->size;
 }
 
-void read_SampleGroupEntry(FILE *f, struct SampleGroupEntry *e, int len)
+int read_SampleGroupEntry(FILE *f, struct SampleGroupEntry *e, int len)
 {
     uint32_t grouping_type;
-    fread(&grouping_type, 4, 1, f);
+    FFREAD(&grouping_type, 4, 1, f);
     printf("SampleGroupEntry %d: %d\n", (grouping_type), len);
     fseek(f, len - 4, SEEK_CUR);
+    return 0;
 }
 
-void read_sgpd_box(FILE *f, struct sgpd_box *b)
+int read_sgpd_box(FILE *f, struct sgpd_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 'g', 'p', 'd'));
-    b->size = SWAP(b->size);
-    fread(&b->grouping_type, 4, 1, f);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 'g', 'p', 'd'));
+    FFREAD(&b->grouping_type, 4, 1, f);
     // b->grouping_type = SWAP(b->grouping_type);
     if (b->version == 1) {
-        fread(&b->default_length, 4, 1, f);
-        b->default_length = SWAP(b->default_length);
+        b->default_length = read_u32(f);
     } else if (b->version >= 2) {
-        fread(&b->default_sample_description_index, 4, 1, f);
-        b->default_sample_description_index = SWAP(b->default_sample_description_index);
+        b->default_sample_description_index = read_u32(f);
     }
     printf("version %d, name %s, default_length %d\n", b->version,
            type2name(b->grouping_type), b->default_length);
 
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    b->entry_count = read_u32(f);
     printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type),
            b->entry_count);
     b->description_length = malloc(b->entry_count * 4);
@@ -732,8 +794,7 @@ void read_sgpd_box(FILE *f, struct sgpd_box *b)
     for (int i = 0; i < b->entry_count; i++) {
         if (b->version == 1) {
             if (b->default_length == 0) {
-                fread(b->description_length+i, 4, 1, f);
-                b->description_length[i] = SWAP(b->description_length[i]);
+                b->description_length[i] = read_u32(f);
             } else {
                 b->description_length[i] = b->default_length;
             }
@@ -741,37 +802,32 @@ void read_sgpd_box(FILE *f, struct sgpd_box *b)
         // SampleGroupEntry
         read_SampleGroupEntry(f, b->entries + i, b->description_length[i]);
     }
+    return b->size;
 }
 
-void read_sbgp_box(FILE *f, struct sbgp_box *b)
+int read_sbgp_box(FILE *f, struct sbgp_box *b)
 {
-    fread(b, 4, 3, f);
-    assert(b->type == FOURCC2UINT('s', 'b', 'g', 'p'));
-    b->size = SWAP(b->size);
-    fread(&b->grouping_type, 4, 1, f);
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 'b', 'g', 'p'));
+    b->grouping_type = read_u32(f);
     if (b->version == 1) {
-        fread(&b->grouping_type_parameter, 4, 1, f);
+        b->grouping_type_parameter = read_u32(f);
     }
-    fread(&b->entry_count, 4, 1, f);
-    b->entry_count = SWAP(b->entry_count);
+    b->entry_count = read_u32(f);
     printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type), b->entry_count);
     if (b->entry_count) {
         b->sample_count = malloc(4 * b->entry_count);
         b->group_description_index = malloc(4 * b->entry_count);
         for (int i = 0; i < b->entry_count; i++) {
-            fread(b->sample_count+i, 4, 1, f);
-            fread(b->group_description_index+i, 4, 1, f);
-            b->sample_count[i] = SWAP(b->sample_count[i]);
-            b->group_description_index[i] = b->group_description_index[i];
+            b->sample_count[i] = read_u32(f);
+            b->group_description_index[i] = read_u32(f);
         }
     }
+    return b->size;
 }
 
-void read_stbl_box(FILE *f, struct stbl_box *b)
+int read_stbl_box(FILE *f, struct stbl_box *b)
 {
-    fread(b, 4, 2, f);
-    assert(b->type == FOURCC2UINT('s', 't', 'b', 'l'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('s', 't', 'b', 'l'));
     read_stsd_box(f, &b->stsd);
     int s = b->size - 8 - b->stsd.size;
     while (s > 0) {
@@ -814,12 +870,12 @@ void read_stbl_box(FILE *f, struct stbl_box *b)
         }
         s -= (p.size);
     }
+    return b->size;
 }
-void read_minf_box(FILE *f, struct minf_box *b)
+
+int read_minf_box(FILE *f, struct minf_box *b)
 {
-    fread(b, 4, 2, f);
-    assert(b->type == FOURCC2UINT('m', 'i', 'n', 'f'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'i', 'n', 'f'));
     int s = b->size - 8;
     while (s > 0) {
         struct box p;
@@ -854,13 +910,12 @@ void read_minf_box(FILE *f, struct minf_box *b)
         }
         s -= (p.size);
     }
+    return b->size;
 }
 
-void read_mdia_box(FILE *f, struct mdia_box *b)
+int read_mdia_box(FILE *f, struct mdia_box *b)
 {
-    fread(b, 4, 2, f);
-    assert(b->type == FOURCC2UINT('m', 'd', 'i', 'a'));
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'd', 'i', 'a'));
     read_mdhd_box(f, &b->mdhd);
     read_hdlr_box(f, &b->hdlr);
     int s = b->size - b->mdhd.size - b->hdlr.size - 8;
@@ -872,12 +927,66 @@ void read_mdia_box(FILE *f, struct mdia_box *b)
     }
     read_minf_box(f, &b->minf);
     assert(b->size - b->minf.size - b->mdhd.size - b->hdlr.size == 8);
+    return b->size;
 }
 
-void read_trak_box(FILE *f, struct trak_box *b)
+int read_idat_box(FILE *f, struct idat_box *b)
 {
-    fread(b, 4, 2, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'd', 'a', 't'));
+    b->data = malloc(b->size - 8);
+    FFREAD(b->data, 1, b->size - 8, f);
+    return b->size;
+}
+
+int
+read_meta_box(FILE *f, struct meta_box *meta)
+{
+    FFREAD_BOX_FULL(meta, f, FOURCC2UINT('m', 'e', 't', 'a'));
+    assert(meta->type == TYPE2UINT("meta"));
+    int size = meta->size -= 12;
+    while (size > 0) {
+        struct box b;
+        uint32_t type = read_box(f, &b, size);
+        printf("META: %s, size %d\n", UINT2TYPE(type), b.size);
+        fseek(f, -8, SEEK_CUR);
+        switch (type) {
+        case FOURCC2UINT('h', 'd', 'l', 'r'):
+            read_hdlr_box(f, &meta->hdlr);
+            break;
+        case FOURCC2UINT('p', 'i', 't', 'm'):
+            read_pitm_box(f, &meta->pitm);
+            break;
+        case FOURCC2UINT('i', 'l', 'o', 'c'):
+            read_iloc_box(f, &meta->iloc);
+            break;
+        case FOURCC2UINT('i', 'i', 'n', 'f'):
+            read_iinf_box(f, &meta->iinf);
+            break;
+        case FOURCC2UINT('i', 'p', 'r', 'p'):
+            read_iprp_box(f, &meta->iprp);
+            break;
+        case FOURCC2UINT('i', 'r', 'e', 'f'):
+            read_iref_box(f, &meta->iref);
+            break;
+        case FOURCC2UINT('d', 'i', 'n', 'f'):
+            read_dinf_box(f, &meta->dinf);
+            break;
+        case FOURCC2UINT('i', 'd', 'a', 't'):
+            read_idat_box(f, &meta->idat);
+            break;
+        default:
+            fseek(f, b.size, SEEK_CUR);
+            break;
+        }
+        size -= b.size;
+        printf("META: %s, read %d, left %d\n", UINT2TYPE(type), b.size, size);
+    }
+    return meta->size;
+}
+
+int read_trak_box(FILE *f, struct trak_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('t', 'r', 'a', 'k'));
     read_tkhd_box(f, &b->tkhd);
     int s = b->size - 8 - b->tkhd.size;
     while (s) {
@@ -908,13 +1017,13 @@ void read_trak_box(FILE *f, struct trak_box *b)
         }
         s -= (p.size);
     }
+    return b->size;
 }
 
-void
+int
 read_moov_box(FILE *f, struct moov_box *b)
 {
-    fread(b, 4, 2, f);
-    b->size = SWAP(b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'o', 'o', 'v'));
     read_mvhd_box(f, &b->mvhd);
 
     int s = b->size - b->mvhd.size - 8;
@@ -936,4 +1045,5 @@ read_moov_box(FILE *f, struct moov_box *b)
         }
         s -= (p.size);
     }
+    return b->size;
 }

@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include <stdio.h>
+#include <errno.h>
 
 #define UNUSED __attribute__((unused))
 #define LIKELY(CONDITION) __builtin_expect(!!(CONDITION), 1)
@@ -53,6 +54,14 @@ static inline int clip3(int minv, int maxv, int v)
     (type *)( (char *)__mptr - OFFSET_OF(type, member) );})
 
 #define DIV_ROUND_UP(num, den) (((num) + (den)-1) / (den))
+
+#define FFREAD(ptr, size, nitems, stream)                                      \
+  do {                                                                         \
+    if (nitems != fread(ptr, size, nitems, stream)) {                          \
+      fclose(stream);                                                          \
+      return -EBADF;                                                           \
+    }                                                                          \
+  } while (0)
 
 #ifdef __cplusplus
 }

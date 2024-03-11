@@ -91,17 +91,6 @@ struct hvcC_box {
 
 #pragma pack(pop)
 
-/* see 8.11.1 */
-struct meta_box {
-    FULL_BOX_ST;
-    struct hdlr_box hdlr;
-    struct pitm_box pitm;
-    struct iloc_box iloc;
-    struct iinf_box iinf;
-    struct iprp_box iprp;
-    struct iref_box iref;
-};
-
 
 struct heif_item {
     const struct item_location *item;
@@ -121,8 +110,6 @@ typedef struct {
 
     struct heif_item *items;
 } HEIF;
-
-
 
 void HEIF_init(void);
 

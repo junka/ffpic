@@ -185,7 +185,7 @@ read_iloc_box(FILE *f, struct iloc_box *b)
     b->item_count = read_u16(f);
     printf("iloc: item count %d\n", b->item_count);
 
-    b->items = malloc(sizeof(struct item_location) * b->item_count);
+    b->items = calloc(b->item_count, sizeof(struct item_location));
     for (int i = 0; i < b->item_count; i ++) {
         b->items[i].item_id = read_u16(f);
         if (b->version == 1) {
@@ -198,7 +198,7 @@ read_iloc_box(FILE *f, struct iloc_box *b)
             b->items[i].base_offset =  read_u64(f);
         }
         b->items[i].extent_count = read_u16(f);
-        b->items[i].extents = malloc(sizeof(struct item_extent) * b->items[i].extent_count);
+        b->items[i].extents = calloc(b->items[i].extent_count, sizeof(struct item_extent));
         for (int j = 0; j < b->items[i].extent_count; j ++) {
             if (b->version == 1 && b->index_size > 0) {
                 if (b->index_size == 4) {
@@ -298,7 +298,7 @@ read_iinf_box(FILE *f, struct iinf_box *b)
     } else {
         b->entry_count = read_u16(f);
     }
-    b->item_infos = malloc(sizeof(struct infe_box) * b->entry_count);
+    b->item_infos = calloc(b->entry_count, sizeof(struct infe_box));
     printf("IINF: entry_count %d\n", b->entry_count);
     for (uint32_t i = 0; i < b->entry_count; i ++) {
         read_infe_box(f, b->item_infos + i);
@@ -353,8 +353,9 @@ read_itemtype_box(FILE *f, struct itemtype_ref_box *b, int version)
         b->from_item_id = read_u32(f);
     }
     b->ref_count = read_u16(f);
-    printf("itemtype count %d\n", b->ref_count);
-    b->to_item_ids = malloc(b->ref_count * sizeof(uint32_t));
+    printf("from_item_id %d, itemtype count %d\n",
+           b->from_item_id, b->ref_count);
+    b->to_item_ids = calloc(b->ref_count, sizeof(uint32_t));
     for (uint16_t i = 0; i < b->ref_count; i ++) {
         if (version == 0) {
             b->to_item_ids[i] = read_u16(f);
@@ -376,7 +377,7 @@ read_iref_box(FILE *f, struct iref_box *b)
 
     while (sz) {
         if (b->refs_count == 0) {
-            b->refs = malloc(sizeof(struct itemtype_ref_box));
+            b->refs = calloc(1, sizeof(struct itemtype_ref_box));
         } else {
             b->refs = realloc(b->refs, sizeof(struct itemtype_ref_box) *
                                            (b->refs_count+1));
@@ -415,16 +416,22 @@ read_colr_box(FILE *f, struct colr_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
     FFREAD(&b->color_type, 4, 1, f);
+    printf("COLR: %s\n", type2name(b->color_type));
     if (b->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
         // on screen colors
         b->color_primaries = read_u16(f);
         b->transfer_characteristics = read_u16(f);
         b->matrix_coefficients = read_u16(f);
         b->full_range_flag = fgetc(f) >> 7;
-    } else if (b->color_type == FOURCC2UINT('r', 'I', 'C', 'C')) {
-        // restricted ICC profile
-    } else if (b->color_type == FOURCC2UINT('p', 'r', 'o', 'f')) {
-        //  unrestricted ICC profile
+    } else if (b->color_type == FOURCC2UINT('r', 'I', 'C', 'C') || b->color_type == FOURCC2UINT('p', 'r', 'o', 'f')) {
+        // ICC profile
+        int len = b->size - 4 - 8;
+        printf("profile len %d\n", len);
+        // uint8_t *data = malloc(len);
+        // fread(data, 1, len, f);
+        // hexdump(stdout, "icc profile", "", data, len);
+        // free(data);
+        fseek(f, len, SEEK_CUR);
     }
     return b->size;
 }
@@ -443,6 +450,7 @@ read_ipco_box(FILE *f, struct ipco_box *b)
     FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'p', 'c', 'o'));
     int s = b->size - 8;
     int n = 0;
+    printf("IPCO: total length %d\n", s);
     while (s > 0) {
         struct box p;
         uint32_t type = read_box(f, &p, s);
@@ -458,17 +466,17 @@ read_ipco_box(FILE *f, struct ipco_box *b)
                 b->property[n++] = cc;
                 break;
             case FOURCC2UINT('i', 's', 'p', 'e'):
-                ispe = malloc(sizeof(struct ispe_box));
+                ispe = calloc(1, sizeof(struct ispe_box));
                 s -= read_ispe_box(f, ispe);
                 b->property[n++] = (struct box *)ispe;
                 break;
             case FOURCC2UINT('p', 'i', 'x', 'i'):
-                pixi = malloc(sizeof(struct pixi_box));
+                pixi = calloc(1, sizeof(struct pixi_box));
                 s -= read_pixi_box(f, pixi);
                 b->property[n++] = (struct box *)pixi;
                 break;
             case FOURCC2UINT('c', 'o', 'l', 'r'):
-                colr = malloc(sizeof(struct colr_box));
+                colr = calloc(1, sizeof(struct colr_box));
                 s -= read_colr_box(f, colr);
                 b->property[n++] = (struct box *)colr;
                 break;
@@ -487,7 +495,7 @@ read_ipma_box(FILE *f, struct ipma_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'p', 'm', 'a'));
     b->entry_count = read_u32(f);
-    b->entries = malloc(b->entry_count * sizeof(struct ipma_item));
+    b->entries = calloc(b->entry_count, sizeof(struct ipma_item));
     printf("IPMA: entry_count %d\n", b->entry_count);
     for (uint32_t i = 0; i < b->entry_count; i ++) {
         if (b->version < 1) {
@@ -496,16 +504,22 @@ read_ipma_box(FILE *f, struct ipma_box *b)
             b->entries[i].item_id = read_u32(f);
         }
         b->entries[i].association_count = read_u8(f);
-        b->entries[i].association = malloc(2 * b->entries[i].association_count);
+        printf("IPMA: item_id %d, association_count %d\n", b->entries[i].item_id, b->entries[i].association_count);
+        b->entries[i].property_index = calloc(b->entries[i].association_count, 2);
         for (int j = 0; j < b->entries[i].association_count; j ++) {
+            //inculding one bit for essential
             if (b->flags & 0x1) {
-                b->entries[i].association[j] = read_u16(f);
+                b->entries[i].property_index[j] = read_u16(f);
             } else {
-                b->entries[i].association[j] = read_u8(f);
-                if (b->entries[i].association[j] & 0x80) {
-                    b->entries[i].association[j] = (0x8000 | (b->entries[i].association[j] & 0x7F));
+                b->entries[i].property_index[j] = read_u8(f);
+                if (b->entries[i].property_index[j] & 0x80) {
+                    b->entries[i].property_index[j] =
+                        (0x8000 | (b->entries[i].property_index[j] & 0x7F));
                 }
             }
+            printf("IPMA: essential %d, association %d\n",
+                   b->entries[i].property_index[j] >> 15,
+                   b->entries[i].property_index[j] & 0x7FFF);
         }
     }
     return b->size;
@@ -566,7 +580,7 @@ int read_dref_box(FILE *f, struct dref_box *b)
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('d', 'r', 'e', 'f'));
     b->entry_count = read_u32(f);
     // printf("dinf %d, dref %d, count %d\n", b->size, b->size, b->entry_count);
-    b->entries = malloc(b->entry_count * sizeof(struct DataEntryBox));
+    b->entries = calloc(b->entry_count, sizeof(struct DataEntryBox));
     for (int i = 0; i < (int)b->entry_count; i++) {
         FFREAD(b->entries + i, 4, 3, f);
         b->entries[i].size = SWAP(b->entries[i].size);
@@ -655,7 +669,7 @@ int read_stsd_box(FILE *f, struct stsd_box *b)
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 'd'));
     b->entry_count = read_u32(f);
     // printf("stsd entry_count %d\n", b->entry_count);
-    b->entries = malloc(sizeof(struct SampleEntry) * b->entry_count);
+    b->entries = calloc(b->entry_count, sizeof(struct SampleEntry));
     for (int i = 0; i < b->entry_count; i++) {
         FFREAD(b->entries + i, 4, 2, f);
         b->entries[i].size = SWAP(b->entries[i].size);
@@ -680,8 +694,8 @@ int read_stts_box(FILE *f, struct stts_box *b)
     b->entry_count = read_u32(f);
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size, b->entry_count);
     if (b->entry_count) {
-        b->sample_count = malloc(4 * b->entry_count);
-        b->sample_delta = malloc(4 * b->entry_count);
+        b->sample_count = calloc(b->entry_count, 4);
+        b->sample_delta = calloc(b->entry_count, 4);
         for (int i = 0; i < b->entry_count; i++) {
             b->sample_count[i] = read_u32(f);
             b->sample_delta[i] = read_u32(f);
@@ -694,8 +708,8 @@ int read_ctts_box(FILE *f, struct ctts_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('c', 't', 't', 's'));
     b->entry_count = read_u32(f);
-    b->sample_count = malloc(4 * b->entry_count);
-    b->sample_offset = malloc(4 * b->entry_count);
+    b->sample_count = calloc(b->entry_count, 4);
+    b->sample_offset = calloc(b->entry_count, 4);
     for (int i = 0; i < b->entry_count; i++) {
         b->sample_count[i] = read_u32(f);
         b->sample_offset[i] = read_u32(f);
@@ -710,9 +724,9 @@ int read_stsc_box(FILE *f, struct stsc_box *b)
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
            b->entry_count);
 
-    b->first_chunk = malloc(4 * b->entry_count);
-    b->sample_per_chunk = malloc(4 * b->entry_count);
-    b->sample_description_index = malloc(4 * b->entry_count);
+    b->first_chunk = calloc(b->entry_count, 4);
+    b->sample_per_chunk = calloc(b->entry_count, 4);
+    b->sample_description_index = calloc(b->entry_count, 4);
     for (int i = 0; i < b->entry_count; i++) {
         b->first_chunk[i] = read_u32(f);
         b->sample_per_chunk[i] = read_u32(f);
@@ -729,7 +743,7 @@ int read_stco_box(FILE *f, struct stco_box *b)
     printf("%s size %d, entry_count %d\n", type2name(b->type), b->size,
            b->entry_count);
 
-    b->chunk_offset = malloc(4 * b->entry_count);
+    b->chunk_offset = calloc(b->entry_count, 4);
     for (int i = 0; i < b->entry_count; i++) {
         b->chunk_offset[i] = read_u32(f);
     }
@@ -744,7 +758,7 @@ int read_stsz_box(FILE *f, struct stsz_box *b)
     printf("%s size %d, sample_size %d, sample_count %d\n", type2name(b->type), b->size,
            b->sample_size, b->sample_count);
     if (b->sample_size == 0) {
-        b->entry_size = malloc(4 * b->sample_count);
+        b->entry_size = calloc(b->sample_count, 4);
         for (int i = 0; i < b->sample_count; i++) {
             b->entry_size[i] = read_u32(f);
             // printf("entry size %d\n", b->entry_size[i]);
@@ -757,7 +771,7 @@ int read_stss_box(FILE *f, struct stss_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 's'));
     b->entry_count = read_u32(f);
-    b->sample_number = malloc(b->entry_count * 4);
+    b->sample_number = calloc(b->entry_count, 4);
     for (int i = 0; i < b->entry_count; i++) {
         b->sample_number[i] = read_u32(f);
     }
@@ -789,8 +803,8 @@ int read_sgpd_box(FILE *f, struct sgpd_box *b)
     b->entry_count = read_u32(f);
     printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type),
            b->entry_count);
-    b->description_length = malloc(b->entry_count * 4);
-    b->entries = malloc(sizeof(struct SampleGroupEntry) * b->entry_count);
+    b->description_length = calloc(b->entry_count, 4);
+    b->entries = calloc(b->entry_count, sizeof(struct SampleGroupEntry));
     for (int i = 0; i < b->entry_count; i++) {
         if (b->version == 1) {
             if (b->default_length == 0) {
@@ -815,8 +829,8 @@ int read_sbgp_box(FILE *f, struct sbgp_box *b)
     b->entry_count = read_u32(f);
     printf("size %d, name %s, count %d\n", b->size, type2name(b->grouping_type), b->entry_count);
     if (b->entry_count) {
-        b->sample_count = malloc(4 * b->entry_count);
-        b->group_description_index = malloc(4 * b->entry_count);
+        b->sample_count = calloc(b->entry_count, 4);
+        b->group_description_index = calloc(b->entry_count, 4);
         for (int i = 0; i < b->entry_count; i++) {
             b->sample_count[i] = read_u32(f);
             b->group_description_index[i] = read_u32(f);

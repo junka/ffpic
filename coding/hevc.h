@@ -963,8 +963,8 @@ struct nal_arr {
     uint8_t reserved:1;
     uint8_t nal_unit_type:6;
 #endif
-    uint16_t numNalus;
-    struct nalus * nals;
+    // uint16_t numNalus;
+    // struct nalus * nals;
 };
 
 

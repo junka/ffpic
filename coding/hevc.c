@@ -1105,7 +1105,6 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->sps_lt_ref = calloc(1, sizeof(struct lt_ref_pic_set));
         parse_lt_ref_set(v, sps, sps->sps_lt_ref);
     }
-    printf("aaaaa\n");
     sps->sps_temporal_mvp_enabled_flag = READ_BIT(v);
     sps->strong_intra_smoothing_enabled_flag = READ_BIT(v);
     sps->vui_parameters_present_flag = READ_BIT(v);

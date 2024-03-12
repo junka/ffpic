@@ -67,41 +67,105 @@ HEIF_probe(const char *filename)
 int
 read_hvcc_box(FILE *f, struct box **bn)
 {
-    struct hvcC_box *b = malloc(sizeof(struct hvcC_box));
+    struct hvcC_box *b = calloc(1, sizeof(struct hvcC_box));
     if (*bn == NULL) {
         *bn = (struct box *)b;
     }
+    int l = 8 + 23;
     FFREAD_BOX_ST(b, f, FOURCC2UINT('h', 'v', 'c', 'C'))
-
-    fread(&b->configurationVersion, 23, 1, f);
+    printf("hvcC: size %d\n", b->size);
+    // b->configurationVersion = fgetc(f);
+    FFREAD(&b->configurationVersion, 23, 1, f);
     
     b->general_profile_compatibility_flags = SWAP(b->general_profile_compatibility_flags);
-    b->general_constraint_indicator_flags_h = SWAP(b->general_constraint_indicator_flags_h);
-    b->general_constraint_indicator_flags_l = SWAP(b->general_constraint_indicator_flags_l);
     b->avgframerate = SWAP(b->avgframerate);
-    b->nal_arrays = malloc(b->num_of_arrays * sizeof(struct nal_arr));
+
+    b->nal_arrays = calloc(b->num_of_arrays, sizeof(struct nal_arr));
 
     VDBG(heif, "hvcC: general_profile_idc %d, flags 0x%x", b->general_profile_idc,
                 b->general_profile_compatibility_flags);
     VDBG(heif, "hvcC: num_of_arrays %d", b->num_of_arrays);
     for (int i = 0; i < b->num_of_arrays; i ++) {
-        fread(b->nal_arrays + i, 1, 1, f);
-        fread(&b->nal_arrays[i].numNalus, 2, 1, f);
-        b->nal_arrays[i].numNalus = SWAP(b->nal_arrays[i].numNalus);
-        VDBG(heif, "nalu: numNalus %d, type %d", b->nal_arrays[i].numNalus, b->nal_arrays[i].nal_unit_type);
-        b->nal_arrays[i].nals = malloc(b->nal_arrays[i].numNalus * sizeof(struct nalus));
-        for (int j = 0; j < b->nal_arrays[i].numNalus; j ++) {
-            fread(&b->nal_arrays[i].nals[j].unit_length, 2, 1, f);
-            b->nal_arrays[i].nals[j].unit_length = SWAP(b->nal_arrays[i].nals[j].unit_length);
-            b->nal_arrays[i].nals[j].nal_units = malloc(b->nal_arrays[i].nals[j].unit_length);
-            fread(b->nal_arrays[i].nals[j].nal_units, 1, b->nal_arrays[i].nals[j].unit_length, f);
-            parse_nalu(b->nal_arrays[i].nals[j].nal_units, b->nal_arrays[i].nals[j].unit_length, NULL);
-            free(b->nal_arrays[i].nals[j].nal_units);
+        FFREAD(b->nal_arrays + i, 1, 1, f);
+        l += 1;
+        uint16_t numNalus;
+        FFREAD(&numNalus, 2, 1, f);
+        numNalus = SWAP(numNalus);
+        l += 2;
+        VDBG(heif, "nalu: numNalus %d, type %d", numNalus, b->nal_arrays[i].nal_unit_type);
+        struct nalus *nals = calloc(numNalus, sizeof(struct nalus));
+        for (int j = 0; j < numNalus; j++) {
+            FFREAD(&nals[j].unit_length, 2, 1, f);
+            l += 2;
+            nals[j].unit_length = SWAP(nals[j].unit_length);
+            nals[j].nal_units = malloc(nals[j].unit_length);
+            l += nals[j].unit_length;
+            FFREAD(nals[j].nal_units, 1, nals[j].unit_length, f);
+            parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL);
+            free(nals[j].nal_units);
+            printf("hvcc: left %d\n", b->size-l);
         }
+        free(nals);
     }
     return b->size;
 }
 
+struct heif_item *
+find_item_by_id(HEIF *h, int id)
+{
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        if (h->items[i].item->item_id == id) {
+            return h->items+i;
+        }
+    }
+    return NULL;
+}
+
+struct box *
+find_property_from_item_id(HEIF *h, int id)
+{
+    for (int i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
+        for (int j = 0; j < h->meta.iprp.ipma.entries[i].association_count; j++) {
+            if (h->meta.iprp.ipma.entries[i].item_id == id) {
+                for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
+                    int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
+                    int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
+                    if (essential) {
+                        return (struct box *)h->meta.iprp.ipco.property[property_index-1];
+                    }
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+int get_primary_item_id(HEIF *h)
+{
+    //if no pitm, then return -1;
+    if (h->meta.pitm.type != FOURCC2UINT('p', 'i', 't', 'm')) {
+        return -1;
+    }
+    return h->meta.pitm.item_id;
+}
+
+struct ispe_box * get_ispe_by_item_id(HEIF *h, int id)
+{
+    for (int i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
+        if (h->meta.iprp.ipma.entries[i].item_id == id) {
+            for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
+                // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
+                int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
+                struct box *bb = h->meta.iprp.ipco.property[property_index - 1];
+                if (bb->type == FOURCC2UINT('i', 's', 'p', 'e')) {
+                    return (struct ispe_box *)bb;
+                }
+            }
+            break;
+        }
+    }
+    return NULL;
+}
 
 static void
 pre_read_item(HEIF * h, FILE *f, uint32_t idx)
@@ -110,6 +174,7 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
         h->items[idx].data = malloc(h->items[idx].length);
+        printf("read item %d, length %"PRIu64"\n", idx, h->items[idx].length);
         if (h->items[idx].item->construct_method == 0) {//file offset
             fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET),
             fread(h->items[idx].data, h->items[idx].length, 1, f);
@@ -164,23 +229,93 @@ HEIF_load_one(FILE *f, int width, int height, uint8_t *data, int length) {
 static int
 decode_items(HEIF *h, FILE *f, struct pic *p)
 {
-    uint16_t primary_id = h->meta.pitm.item_id;
-    VINFO(heif, "primary id %d", h->meta.pitm.item_id);
-    for (int i = 0; i < (int)h->meta.iloc.item_count; i++) {
-        if (h->meta.iloc.items[i].item_id == primary_id) {
-            VINFO(heif, "primary loc at %" PRIu64,
-                  h->meta.iloc.items[i].base_offset);
+    int num = 0;
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        pre_read_item(h, f, i);
+    }
+    uint16_t primary_id = get_primary_item_id(h);
+    VINFO(heif, "primary id %d", primary_id);
+    int i = 0;
+    for (i = 0; i < (int)h->meta.iloc.item_count; i++) {
+        if (h->items[i].item->item_id == primary_id) {
+            VINFO(heif, "primary loc at %" PRIu64, h->items[i].item->base_offset);
             break;
         }
     }
-    int num = 0;
+    if (i < h->meta.iloc.item_count) {
+        // we have PITM box, start from it
+        if (h->items[i].type == TYPE2UINT("grid")) {
+            //grid must have iref and decode the refered data
+            struct grid ig;
+            ig.version = h->items[i].data[0];
+            ig.flags = h->items[i].data[1];
+            ig.row_minus_one = h->items[i].data[2];
+            ig.columns_minus_one = h->items[i].data[3];
+            if ((ig.flags & 1) == 0) {
+                assert(h->items[i].length == 8);
+                uint16_t width = *(uint16_t *)(h->items[i].data + 4);
+                uint16_t height = *(uint16_t *)(h->items[i].data + 6);
+                ig.output_width = SWAP(width);
+                ig.output_height = SWAP(height);
+            } else {
+                assert(h->items[i].length == 12);
+                uint32_t width = *(uint32_t *)(h->items[i].data + 4);
+                uint32_t height = *(uint32_t *)(h->items[i].data + 8);
+                ig.output_width = SWAP(width);
+                ig.output_height = SWAP(height);
+            }
+            printf("grid rows %d, columns %d, width %d, height %d\n", ig.row_minus_one+1, ig.columns_minus_one+1, 
+                    ig.output_width, ig.output_height);
+            
+            for (int j = 0; j < h->meta.iref.refs_count; j++) {
+                if (h->meta.iref.refs[j].from_item_id == h->items[i].item->item_id) {
+                    assert(h->meta.iref.refs[j].ref_count == (ig.row_minus_one + 1) * (ig.columns_minus_one + 1));
+                    for (int k = 0; k < h->meta.iref.refs[j].ref_count; k++) {
+                        struct heif_item *item = find_item_by_id(h, h->meta.iref.refs[j].to_item_ids[k]);
+                        decode_hvc1(h, item->data, item->length,
+                                    (uint8_t **)&p->pixels);
+                        num ++;
+                    }
+                }
+            }
+        } else if (h->items[i].type == TYPE2UINT("hvc1")) {
+            struct box *bb = find_property_from_item_id(h, h->items[i].item->item_id);
+            printf("property %s\n", type2name(bb->type));
+            decode_hvc1(h, h->items[i].data, h->items[i].length, (uint8_t **)&p->pixels);
+            num ++;
+        }
+        return num;
+    }
+    if (h->meta.iref.refs_count) {
+        for (int i = 0; i < h->meta.iref.refs_count; i++) {
+            int from_id = h->meta.iref.refs[i].from_item_id;
+            printf("from_id %d\n", from_id);
+            for (int j = 0; j < h->meta.iref.refs[i].ref_count; j++) {
+                int id = h->meta.iref.refs[i].to_item_ids[j];
+                for (int k = 0; k < h->meta.iloc.item_count; k ++) {
+                    const struct item_location *it = h->items[k].item;
+                    if (it->item_id == id) {
+                        printf(
+                            "item_id %d, construct_method %d, extent_count %d, "
+                            "ref_id %d, base %lld, offset %lld, length %lld\n",
+                            it->item_id, it->construct_method, it->extent_count,
+                            it->data_ref_id, it->base_offset, it->extents[0].extent_offset,
+                            it->extents[0].extent_length);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         printf("decoding %s\n", type2name(h->items[i].type));
         pre_read_item(h, f, i);
-        if (h->items[i].type == TYPE2UINT("mime")) {
+        if (h->items[i].type == TYPE2UINT("Exif")) {
+            VDBG(heif, "exif %" PRIu64, h->items[i].length);
+        } else if (h->items[i].type == TYPE2UINT("mime")) {
             // exif mime, skip it
             // hexdump(stdout, "exif:", "", h->items[i].data, h->items[i].length);
-            VDBG(heif, "exif %" PRIu64, h->items[i].length);
+            VDBG(heif, "mime %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
@@ -197,11 +332,26 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             }
             num++;
         } else if (h->items[i].type == TYPE2UINT("grid")) {
-            assert(h->items[i].length == 8);
+            struct grid ig;
+            ig.version = h->items[i].data[0];
+            ig.flags = h->items[i].data[1];
+            ig.row_minus_one = h->items[i].data[2];
+            ig.columns_minus_one = h->items[i].data[3];
             // 8 bytes, top, left, width, height in 2 bytes
-            uint16_t width = *(uint16_t *)(h->items[i].data+4);
-            uint16_t height = *(uint16_t *)(h->items[i].data+6);
-            printf("grid width %d, height %d\n", SWAP(width), SWAP(height));
+            if ((ig.flags & 1) == 0) {
+                assert(h->items[i].length == 8);
+                uint16_t width = *(uint16_t *)(h->items[i].data+4);
+                uint16_t height = *(uint16_t *)(h->items[i].data+6);
+                ig.output_width = SWAP(width);
+                ig.output_height = SWAP(height);
+            } else {
+                assert(h->items[i].length == 12);
+                uint32_t width = *(uint32_t *)(h->items[i].data + 4);
+                uint32_t height = *(uint32_t *)(h->items[i].data + 8);
+                ig.output_width = SWAP(width);
+                ig.output_height = SWAP(height);
+            }
+            printf("grid width %d, height %d\n", ig.output_width, ig.output_height);
         }
     }
     return num;
@@ -261,20 +411,28 @@ HEIF_load(const char *filename, int skip_flag)
     }
 
     // extract some info from meta box
-    for (int i = 0; i < h->meta.iprp.ipco.n_property; i++) {
-        printf("iprp ipco %s\n", type2name(h->meta.iprp.ipco.property[i]->type));
-        if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
-            p->width = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width;
-            p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
-        }
+    if (get_primary_item_id(h) != -1) {
+        struct ispe_box *ispe = get_ispe_by_item_id(h, get_primary_item_id(h));
+        p->height = ispe->image_height;
+        p->width = ispe->image_width;
+        printf("width %d, height %d\n", p->width, p->height);
     }
-    h->items = malloc(h->meta.iloc.item_count * sizeof(struct heif_item));
+    // for (int i = 0; i < h->meta.iprp.ipco.n_property; i++) {
+    //     printf("iprp ipco %s\n", type2name(h->meta.iprp.ipco.property[i]->type));
+    //     if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
+    //         p->width = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width;
+    //         p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
+    //         printf("width %d, height %d\n", p->width, p->height);
+    //     }
+    // }
+    h->items = calloc(h->meta.iloc.item_count, sizeof(struct heif_item));
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         h->items[i].item = &h->meta.iloc.items[i];
         for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
             if (h->meta.iinf.item_infos[j].item_id == h->items[i].item->item_id) {
                 h->items[i].type = h->meta.iinf.item_infos[j].item_type;
-                printf("item %d, type %s\n", i, type2name(h->items[i].type));
+                printf("item %d, type %s\n", h->items[i].item->item_id,
+                       type2name(h->items[i].type));
             }
         }
     }
@@ -286,7 +444,10 @@ HEIF_load(const char *filename, int skip_flag)
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = malloc(p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGB888;
-    int n = decode_items(h, f, p);
+    int n = 0;
+    if (!skip_flag) {
+        n = decode_items(h, f, p);
+    }
 
     for (int i = 0; i < h->moov_num; i++) {
         decode_moov(h, f, h->moov+i);
@@ -324,13 +485,15 @@ HEIF_free(struct pic *p)
         for (int i = 0; i < h->meta.iprp.ipco.n_property; i++) {
             if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
                 struct hvcC_box *hvcc = (struct hvcC_box *)m->iprp.ipco.property[i];
-                for (int j = 0; j < hvcc->num_of_arrays; j ++) {
+                // for (int j = 0; j < hvcc->num_of_arrays; j ++) {
                     // for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
                     //     free(hvcc->nal_arrays[j].nals[k].nal_units);
                     // }
-                    free(hvcc->nal_arrays[j].nals);
+                    // free(hvcc->nal_arrays[j].nals);
+                // }
+                if (hvcc->num_of_arrays) {
+                    free(hvcc->nal_arrays);
                 }
-                free(hvcc->nal_arrays);
             }
             free(m->iprp.ipco.property[i]);
         }
@@ -338,7 +501,7 @@ HEIF_free(struct pic *p)
 
     if (m->iprp.ipma.entries) {
         for (int i = 0; i < (int)m->iprp.ipma.entry_count; i++) {
-            free(m->iprp.ipma.entries[i].association);
+            free(m->iprp.ipma.entries[i].property_index);
         }
         free(m->iprp.ipma.entries);
     }
@@ -389,7 +552,7 @@ HEIF_info(FILE *f, struct pic* p)
 
     fprintf(f, "\t");
     print_box(f, &h->meta.pitm);
-    fprintf(f, " item_id=%d", h->meta.pitm.item_id);
+    fprintf(f, " item_id=%d", get_primary_item_id(h));
     fprintf(f, "\n");
 
     fprintf(f, "\t");
@@ -400,12 +563,9 @@ HEIF_info(FILE *f, struct pic* p)
         if (h->meta.iloc.version == 1) {
             fprintf(f, "construct_method=%d,", h->meta.iloc.items[i].construct_method);
         }
-        fprintf(f,
-                "item_id=%d,data_ref_id=%d,base_offset=%"PRIu64",extent_count=%d\n",
-                h->meta.iloc.items[i].item_id,
-                h->meta.iloc.items[i].data_ref_id,
-                h->meta.iloc.items[i].base_offset,
-                h->meta.iloc.items[i].extent_count);
+        fprintf(f, "item_id=%d,data_ref_id=%d,base_offset=%"PRIu64",extent_count=%d\n",
+                h->meta.iloc.items[i].item_id, h->meta.iloc.items[i].data_ref_id,
+                h->meta.iloc.items[i].base_offset, h->meta.iloc.items[i].extent_count);
         for (int j = 0; j < h->meta.iloc.items[i].extent_count; j ++) {
             fprintf(f, "\t\t\t");
             if (h->meta.iloc.version == 1) {
@@ -449,15 +609,19 @@ HEIF_info(FILE *f, struct pic* p)
 
             fprintf(f, " config version %d, profile_space %d, tier_flag %d, profile_idc %d\n", hvcc->configurationVersion,
                     hvcc->general_profile_space, hvcc->general_tier_flag, hvcc->general_profile_idc);
-            uint16_t min_spatial_segmentation_idc = hvcc->min_spatial_segmentation_idc1 << 8 | hvcc->min_spatial_segmentation_idc2;
+            uint16_t min_spatial_segmentation_idc = hvcc->min_spatial_segmentation_idc;
             fprintf(f, "\t\t\t\tgeneral_profile_compatibility_flags 0x%x\n",
                 hvcc->general_profile_compatibility_flags);
             fprintf(f, "\t\t\t\tmin_spatial_segmentation_idc %d, general_level_idc %d\n",
                 min_spatial_segmentation_idc, hvcc->general_level_idc);
             fprintf(
                 f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%" PRIx64 "\n",
-                (uint64_t)hvcc->general_constraint_indicator_flags_h << 16 |
-                    hvcc->general_constraint_indicator_flags_l);
+                (uint64_t)hvcc->general_constraint_indicator_flags[0] << 40 |
+                    (uint64_t)hvcc->general_constraint_indicator_flags[1] << 32 |
+                    hvcc->general_constraint_indicator_flags[2] << 24 |
+                    hvcc->general_constraint_indicator_flags[3] << 16 |
+                    hvcc->general_constraint_indicator_flags[4] << 8 |
+                    hvcc->general_constraint_indicator_flags[5]);
 
             fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
                 hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);
@@ -466,10 +630,10 @@ HEIF_info(FILE *f, struct pic* p)
             for (int j = 0; j < hvcc->num_of_arrays; j ++) {
                 fprintf(f, "\t\t\t\t");
                 fprintf(f, "completeness %d, nal_unit_type %d", hvcc->nal_arrays[j].array_completeness, hvcc->nal_arrays[j].nal_unit_type);
-                for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
-                    fprintf(f, ", unit_length %d\n", hvcc->nal_arrays[j].nals[k].unit_length);
+                // for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
+                    // fprintf(f, ", unit_length %d\n", hvcc->nal_arrays[j].nals[k].unit_length);
                     // hexdump(f, "\t\t\t\tnalu: ", "\t\t\t\t", hvcc->nal_arrays[j].nals[k].nal_units, hvcc->nal_arrays[j].nals[k].unit_length);
-                }
+                // }
                 fprintf(f, "\n");
             }
         }
@@ -482,7 +646,7 @@ HEIF_info(FILE *f, struct pic* p)
         struct ipma_item *ipma = &h->meta.iprp.ipma.entries[i];
         fprintf(f, "\t\titem %d: association_count %d\n", ipma->item_id, ipma->association_count);
         for (int j = 0; j < ipma->association_count; j ++) {
-            fprintf(f, "\t\t\tessential %d, id %d \n", ipma->association[j] >> 15, ipma->association[j] & 0x7fff);
+            fprintf(f, "\t\t\tessential %d, id %d \n", ipma->property_index[j] >> 15, ipma->property_index[j] & 0x7fff);
         }
     }
     fprintf(f, "\n");

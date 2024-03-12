@@ -1,6 +1,7 @@
 #ifndef _BASEMEDIA_H_
 #define _BASEMEDIA_H_
 
+#include "png.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -252,6 +253,11 @@ struct colr_box {
     uint8_t reserved:7;
 #endif
 };
+
+// struct icc_profile {
+//     uint32_t type;
+//     uint8_t *data;
+// };
 
 //see 8.3.2 track header box
 struct tkhd_box {
@@ -550,7 +556,10 @@ struct ipco_box {
 struct ipma_item {
     uint32_t item_id;
     uint8_t association_count;
-    uint16_t* association; // could be 1 byte or 2 bytes width, highest bit is always for seential
+    uint16_t *property_index; // could be 1 byte or 2 bytes width,
+                              // highest bit is always for essential
+                              // 15 bits or 7 bits property_index, 0 indicating no property
+                              // or it means the index of iprp box, starting from 1 based
 };
 
 struct ipma_box {
@@ -596,6 +605,15 @@ struct moov_box {
 struct idat_box {
     BOX_ST;
     uint8_t *data;
+};
+
+struct grid {
+    uint8_t version;
+    uint8_t flags; // ((flags & 1) + 1) * 16
+    uint8_t row_minus_one;
+    uint8_t columns_minus_one;
+    uint32_t output_width; // 16 or 32 bits
+    uint32_t output_height; // 16 or 32 bits
 };
 
 /* see 8.11.1 */

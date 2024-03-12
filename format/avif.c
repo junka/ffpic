@@ -793,7 +793,7 @@ AVIF_info(FILE *f, struct pic* p)
         struct ipma_item *ipma = &h->meta.iprp.ipma.entries[i];
         fprintf(f, "\t\titem %d: association_count %d\n", ipma->item_id, ipma->association_count);
         for (int j = 0; j < ipma->association_count; j ++) {
-            fprintf(f, "\t\t\tessential %d, id %d \n", ipma->association[j] >> 15, ipma->association[j] & 0x7fff);
+            fprintf(f, "\t\t\tessential %d, id %d \n", ipma->property_index[j] >> 15, ipma->property_index[j] & 0x7fff);
         }
     }
     fprintf(f, "\n");

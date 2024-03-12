@@ -102,7 +102,7 @@ struct international_textual_data {
 //     uint32_t crc;
 // };
 
-struct icc_profile {
+struct png_icc_profile {
     char *name;
     uint8_t compression_method;
     uint8_t* compression_profile;
@@ -169,7 +169,7 @@ typedef struct PNG {
     union background_color bcolor;
     struct chromaticities_white_point cwp;
     uint32_t gamma;
-    struct icc_profile icc;
+    struct png_icc_profile icc;
 
     int n_text;
     struct textual_data *textual;

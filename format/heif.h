@@ -27,19 +27,16 @@ struct hvcC_box {
 #endif
     uint32_t general_profile_compatibility_flags;
 
-    uint32_t general_constraint_indicator_flags_h;
-    uint16_t general_constraint_indicator_flags_l;
+    uint8_t general_constraint_indicator_flags[6];
 
     uint8_t general_level_idc;
 #if BYTE_ORDER == LITTLE_ENDIAN
-    uint8_t min_spatial_segmentation_idc1:4;
-    uint8_t reserved:4;
+    uint16_t min_spatial_segmentation_idc:12;
+    uint16_t reserved:4;
 #else
     uint8_t reserved:4;
-    uint8_t min_spatial_segmentation_idc1:4;
+    uint8_t min_spatial_segmentation_idc1:12;
 #endif
-
-    uint8_t min_spatial_segmentation_idc2;
 
 #if BYTE_ORDER == LITTLE_ENDIAN
     uint8_t parallelismType:2;

@@ -76,10 +76,11 @@ void free_hvcc_box(struct box *bn)
 int
 read_hvcc_box(FILE *f, struct box **bn)
 {
-    struct hvcC_box *b = calloc(1, sizeof(struct hvcC_box));
     if (*bn == NULL) {
-        *bn = (struct box *)b;
+        *bn = (struct box *)calloc(1, sizeof(struct hvcC_box));
     }
+    struct hvcC_box *b = (struct hvcC_box *)(*bn);
+
     FFREAD_BOX_ST(b, f, FOURCC2UINT('h', 'v', 'c', 'C'));
     VDBG(heif, "hvcC: size %" PRIu64 "", b->size);
     // b->configurationVersion = fgetc(f);
@@ -118,10 +119,10 @@ read_hvcc_box(FILE *f, struct box **bn)
 
 int read_auxc_box(FILE *f, struct box **bn)
 {
-    struct auxC_box *b = calloc(1, sizeof(struct auxC_box));
     if (*bn == NULL) {
-        *bn = (struct box *)b;
+        *bn = (struct box *)calloc(1, sizeof(struct auxC_box));
     }
+    struct auxC_box *b = (struct auxC_box *) *bn;
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('a', 'u', 'x', 'C'));
     int l = read_till_null(f, &b->aux_type);
     b->aux_subtype = malloc(b->size - l - 12);
@@ -129,6 +130,27 @@ int read_auxc_box(FILE *f, struct box **bn)
     FFREAD(b->aux_subtype, 1, b->size -l - 12, f);
     // VDBG(heif, "aux_subtype %s", b->aux_subtype);
     return b->size;
+}
+
+void free_auxc_box(struct auxC_box *b)
+{
+    if (b->aux_type)
+        free(b->aux_type);
+    if (b->aux_subtype)
+        free(b->aux_subtype);
+}
+
+int read_HEVCSampleEntry(FILE *f, struct SampleEntry **b)
+{
+    if (*b == NULL) {
+        *b = calloc(1, sizeof(struct HEVCSampleEntry));
+    }
+    struct HEVCSampleEntry *e = (struct HEVCSampleEntry *)*b;
+    read_VisualSampleEntry(f, &e->sample);
+    assert(e->sample.entry.type == FOURCC2UINT('h', 'v', 'c', '1') ||
+           e->sample.entry.type == FOURCC2UINT('h', 'e', 'v', '1'));
+    read_hvcc_box(f, (struct box **)(&e->config));
+    return 0;
 }
 
 struct heif_item *
@@ -381,17 +403,34 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
 static int
 decode_moov(HEIF *h, FILE *f, struct moov_box *b)
 {
+    int n = 0;
     uint32_t offset, size;
     for (int i = 0; i <b->trak_num; i++) {
-        int count = b->trak[i].mdia.minf.stbl.stco.entry_count;
-        for (int j = 0; j < count; j++) {
+        // chunk coun
+        int chunk_count = b->trak[i].mdia.minf.stbl.stco.entry_count;
+        int width = (int)fix16_16(b->trak[i].tkhd.width);
+        int height = (int)fix16_16(b->trak[i].tkhd.height);
+        assert(chunk_count == b->trak[i].mdia.minf.stbl.stsc.entry_count);
+        // printf("width %d, height %d, chunk count %d\n", width, height, chunk_count);
+        for (int j = 0; j < chunk_count; j++) {
             offset = b->trak[i].mdia.minf.stbl.stco.chunk_offset[j];
-            size = b->trak[i].mdia.minf.stbl.stsz.entry_size[j];
+            int sample_num = b->trak[i].mdia.minf.stbl.stsc.sample_per_chunk[j];
+            // printf("sample num %d\n", sample_num);
+            n += sample_num;
+            int first = b->trak[i].mdia.minf.stbl.stsc.first_chunk[j];
             fseek(f, offset, SEEK_SET);
-            // fread();
+            for (int k = 0; k < sample_num; k++) {
+                size = b->trak[i].mdia.minf.stbl.stsz.entry_size[k];
+                uint8_t *data = malloc(size);
+                fread(data, size, 1, f);
+                // printf("load one for %d, length %d\n", k, size);
+                struct pic *p1 = HEIF_load_one(f, width, height, data,size);
+                file_enqueue_pic(p1);
+                // free(data);
+            }
         }
     }
-    return 0;
+    return n;
 }
 
 static struct pic*
@@ -476,7 +515,7 @@ HEIF_load(const char *filename, int skip_flag)
         n = decode_items(h, f, p);
 
         for (int i = 0; i < h->moov_num; i++) {
-            decode_moov(h, f, h->moov + i);
+            n += decode_moov(h, f, h->moov + i);
         }
     }
 

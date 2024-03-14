@@ -93,6 +93,12 @@ struct auxC_box {
     uint8_t* aux_subtype; // zero or more bytes until the end of the box
 };
 
+// 14496-15 8.4
+struct HEVCSampleEntry {
+    struct VisualSampleEntry sample;
+    struct hvcC_box config;
+    //MPEG4ExtensionDescriptorsBox; // optional
+};
 
 #pragma pack(pop)
 

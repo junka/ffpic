@@ -301,10 +301,29 @@ struct SampleEntry {
     uint16_t data_reference_index;
 };
 
+struct VisualSampleEntry {
+    struct SampleEntry entry;
+    uint16_t pre_defined;
+    uint16_t reserved;
+    uint32_t pre_defined1[3];
+    uint16_t width;
+    uint16_t height;
+    uint32_t horizresolution;
+    uint32_t vertresolution;
+    uint32_t reserved1;
+    uint16_t frame_count;
+    uint8_t compressorname[32];
+    uint16_t depth;
+    int16_t pre_defined2;
+    // other boxes from derived specifications
+    // clap; //optional
+    // pasp; //optional
+};
+
 struct stsd_box {
     FULL_BOX_ST;
     uint32_t entry_count;
-    struct SampleEntry *entries;
+    struct SampleEntry *entries[16];
 };
 
 struct stdp_box {
@@ -396,9 +415,9 @@ struct stbl_box {
         struct stsz_box stsz;
         struct stz2_box stz2; // either one of these
     };
-    struct stts_box stts;
-    struct stsc_box stsc;
-    struct stco_box stco;
+    struct stts_box stts; // one
+    struct stsc_box stsc; // one
+    struct stco_box stco; // exact one, this or co64
     struct stss_box stss; //zero or one
 
     struct ctts_box ctts; //zero or one
@@ -547,7 +566,7 @@ struct pixi_box {
 /* for avif may have av1C, ispe, pixi, psap */
 struct ipco_box {
     BOX_ST;
-    struct box *property[8];
+    struct box *property[16];
     int n_property;
 };
 
@@ -600,6 +619,8 @@ struct moov_box {
     int trak_num;
     struct trak_box *trak; //one or more
     struct udta_box *udta; //zero or one
+
+    uint8_t *data;
 };
 
 struct idat_box {
@@ -692,6 +713,8 @@ int read_meta_box(FILE *f, struct meta_box *meta);
 
 void free_meta_box(struct meta_box *b);
 void free_moov_box(struct moov_box *b);
+
+int read_VisualSampleEntry(FILE *f, struct VisualSampleEntry *e);
 
 #ifdef __cplusplus
 }

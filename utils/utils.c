@@ -69,3 +69,9 @@ divceil(uint32_t a, uint32_t div)
 {
     return ((a/div)+((a%div>0)?1:0));
 }
+
+float fix16_16(uint32_t v)
+{
+    float r = v / 65535.0;
+    return r;
+}

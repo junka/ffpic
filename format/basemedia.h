@@ -37,11 +37,11 @@ type2name(uint32_t type)
 #pragma pack(push, 2)
 
 #define BOX_ST \
-    uint32_t size; \
+    uint64_t size; \
     uint32_t type
 
 #define FULL_BOX_ST \
-    uint32_t size;  \
+    uint64_t size;  \
     uint32_t type;  \
     uint32_t version: 8;    \
     uint32_t flags : 24
@@ -151,8 +151,8 @@ struct infe_box {
     uint16_t item_protection_index;
     uint32_t item_type;
 
-    char item_name[32];
-    char content_type[32];
+    char* item_name;
+    char* content_type;
     char* content_encoding;
 };
 
@@ -547,7 +547,7 @@ struct pixi_box {
 /* for avif may have av1C, ispe, pixi, psap */
 struct ipco_box {
     BOX_ST;
-    struct box *property[4];
+    struct box *property[8];
     int n_property;
 };
 
@@ -607,6 +607,23 @@ struct idat_box {
     uint8_t *data;
 };
 
+
+// altr, for alternatives to each other, only one of them should be played
+// ster, for stereo pair suitable for displaying on a stereoscopic display
+struct EntityToGroupBox {
+    FULL_BOX_ST;
+    uint32_t group_id;
+    uint32_t num_entities_in_group;
+    uint32_t *entity_id;
+};
+
+//see ISO/IEC 23008-12, 9.4.2 Groups List Box
+struct grpl_box {
+    BOX_ST;
+    int num_entity;
+    struct EntityToGroupBox *entities[32];
+};
+
 struct grid {
     uint8_t version;
     uint8_t flags; // ((flags & 1) + 1) * 16
@@ -628,12 +645,15 @@ struct meta_box {
     struct iprp_box iprp;
     struct idat_box idat; // zero or one
     struct iref_box iref; // zero or one
+    struct grpl_box grpl; // zero or one
 };
 
 #pragma pack(pop)
 
-uint32_t read_box(FILE *f, void * d, int len);
-uint32_t read_full_box(FILE *f, void * d, int blen);
+int read_till_null(FILE *f, char **str);
+uint32_t read_box(FILE *f, void *d);
+uint32_t read_full_box(FILE *f, void *d);
+uint32_t probe_box(FILE *f, void *d);
 
 int read_ftyp(FILE *f, void *d);
 
@@ -665,15 +685,13 @@ int read_moov_box(FILE *f, struct moov_box *b);
 int read_meta_box(FILE *f, struct meta_box *meta);
 
 #define FFREAD_BOX_ST(b, f, fourcc) \
-    FFREAD(b, 4, 2, f); \
-    assert(b->type == fourcc); \
-    b->size = SWAP(b->size);
+    assert(read_box(f, b) == fourcc)
 
 #define FFREAD_BOX_FULL(b, f, fourcc) \
-    FFREAD(b, 4, 3, f); \
-    assert(b->type == fourcc); \
-    b->size = SWAP(b->size)
+    assert(read_full_box(f, b) == fourcc)
 
+void free_meta_box(struct meta_box *b);
+void free_moov_box(struct moov_box *b);
 
 #ifdef __cplusplus
 }

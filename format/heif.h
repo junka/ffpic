@@ -86,11 +86,19 @@ struct hvcC_box {
     struct nal_arr *nal_arrays;
 };
 
+// see 23008-12
+struct auxC_box {
+    FULL_BOX_ST;
+    char *aux_type; // null-terminated character string of URN
+    uint8_t* aux_subtype; // zero or more bytes until the end of the box
+};
+
+
 #pragma pack(pop)
 
 
 struct heif_item {
-    const struct item_location *item;
+    const struct item_location *item; //just a ref to iloc
     uint32_t type;
     uint64_t length;
     uint8_t *data;
@@ -101,10 +109,13 @@ typedef struct {
     struct meta_box meta;
 
     int moov_num;
-    struct moov_box *moov;
-    int mdat_num;
-    // struct mdat_box *mdat;
+    struct moov_box *moov; //zero or more
 
+    // we don't have to read mdat directly, iloc will tell us
+    // int mdat_num;
+    // struct mdat_box *mdat; //zero or more
+
+    int item_num;
     struct heif_item *items;
 } HEIF;
 

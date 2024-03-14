@@ -24,8 +24,10 @@ HEIF_probe(const char *filename)
     static char* heif_types[] = {
         "heic",
         "heix",
+        "heis",
+        "heim",
         "hevc",
-        "hevx"
+        "hevx",
     };
 
     FILE *f = fopen(filename, "rb");
@@ -41,7 +43,7 @@ HEIF_probe(const char *filename)
     }
     fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
-        // printf("len %d minor_version %s\n", len , type2name(h.minor_version));
+        // VDBG(heif, "len %d minor_version %s", len , type2name(h.minor_version));
         if (len > 12 && (h.minor_version == TYPE2UINT("mif1")||h.minor_version == TYPE2UINT("msf1"))) {
             for (int j = 0; j < (len -12)>>2; j ++) {
                 for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
@@ -63,6 +65,13 @@ HEIF_probe(const char *filename)
     return -EINVAL;
 }
 
+void free_hvcc_box(struct box *bn)
+{
+    struct hvcC_box *b = (struct hvcC_box*)bn;
+    if (b->num_of_arrays) {
+        free(b->nal_arrays);
+    }
+}
 
 int
 read_hvcc_box(FILE *f, struct box **bn)
@@ -71,9 +80,8 @@ read_hvcc_box(FILE *f, struct box **bn)
     if (*bn == NULL) {
         *bn = (struct box *)b;
     }
-    int l = 8 + 23;
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('h', 'v', 'c', 'C'))
-    printf("hvcC: size %d\n", b->size);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('h', 'v', 'c', 'C'));
+    VDBG(heif, "hvcC: size %" PRIu64 "", b->size);
     // b->configurationVersion = fgetc(f);
     FFREAD(&b->configurationVersion, 23, 1, f);
     
@@ -87,26 +95,39 @@ read_hvcc_box(FILE *f, struct box **bn)
     VDBG(heif, "hvcC: num_of_arrays %d", b->num_of_arrays);
     for (int i = 0; i < b->num_of_arrays; i ++) {
         FFREAD(b->nal_arrays + i, 1, 1, f);
-        l += 1;
         uint16_t numNalus;
         FFREAD(&numNalus, 2, 1, f);
         numNalus = SWAP(numNalus);
-        l += 2;
-        VDBG(heif, "nalu: numNalus %d, type %d", numNalus, b->nal_arrays[i].nal_unit_type);
+        VDBG(heif, "nalu: numNalus %d, type %d, completeness %d", numNalus,
+             b->nal_arrays[i].nal_unit_type, b->nal_arrays[i].array_completeness);
         struct nalus *nals = calloc(numNalus, sizeof(struct nalus));
         for (int j = 0; j < numNalus; j++) {
             FFREAD(&nals[j].unit_length, 2, 1, f);
-            l += 2;
+
             nals[j].unit_length = SWAP(nals[j].unit_length);
+            VDBG(heif, "hvcc: nal unit length %d", nals[j].unit_length);
             nals[j].nal_units = malloc(nals[j].unit_length);
-            l += nals[j].unit_length;
             FFREAD(nals[j].nal_units, 1, nals[j].unit_length, f);
             parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL);
             free(nals[j].nal_units);
-            printf("hvcc: left %d\n", b->size-l);
         }
         free(nals);
     }
+    return b->size;
+}
+
+int read_auxc_box(FILE *f, struct box **bn)
+{
+    struct auxC_box *b = calloc(1, sizeof(struct auxC_box));
+    if (*bn == NULL) {
+        *bn = (struct box *)b;
+    }
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('a', 'u', 'x', 'C'));
+    int l = read_till_null(f, &b->aux_type);
+    b->aux_subtype = malloc(b->size - l - 12);
+    VDBG(heif, "aux_type %s", b->aux_type);
+    FFREAD(b->aux_subtype, 1, b->size -l - 12, f);
+    // VDBG(heif, "aux_subtype %s", b->aux_subtype);
     return b->size;
 }
 
@@ -174,7 +195,7 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
         h->items[idx].data = malloc(h->items[idx].length);
-        printf("read item %d, length %"PRIu64"\n", idx, h->items[idx].length);
+        VDBG(heif, "read item %d, length %"PRIu64"", idx, h->items[idx].length);
         if (h->items[idx].item->construct_method == 0) {//file offset
             fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET),
             fread(h->items[idx].data, h->items[idx].length, 1, f);
@@ -230,7 +251,7 @@ static int
 decode_items(HEIF *h, FILE *f, struct pic *p)
 {
     int num = 0;
-    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+    for (int i = 0; i < h->item_num; i++) {
         pre_read_item(h, f, i);
     }
     uint16_t primary_id = get_primary_item_id(h);
@@ -264,7 +285,7 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
                 ig.output_width = SWAP(width);
                 ig.output_height = SWAP(height);
             }
-            printf("grid rows %d, columns %d, width %d, height %d\n", ig.row_minus_one+1, ig.columns_minus_one+1, 
+            VDBG(heif, "grid rows %d, columns %d, width %d, height %d", ig.row_minus_one+1, ig.columns_minus_one+1, 
                     ig.output_width, ig.output_height);
             
             for (int j = 0; j < h->meta.iref.refs_count; j++) {
@@ -280,7 +301,7 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             }
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             struct box *bb = find_property_from_item_id(h, h->items[i].item->item_id);
-            printf("property %s\n", type2name(bb->type));
+            VDBG(heif, "property %s", type2name(bb->type));
             decode_hvc1(h, h->items[i].data, h->items[i].length, (uint8_t **)&p->pixels);
             num ++;
         }
@@ -289,15 +310,15 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     if (h->meta.iref.refs_count) {
         for (int i = 0; i < h->meta.iref.refs_count; i++) {
             int from_id = h->meta.iref.refs[i].from_item_id;
-            printf("from_id %d\n", from_id);
+            VDBG(heif, "from_id %d", from_id);
             for (int j = 0; j < h->meta.iref.refs[i].ref_count; j++) {
                 int id = h->meta.iref.refs[i].to_item_ids[j];
                 for (int k = 0; k < h->meta.iloc.item_count; k ++) {
                     const struct item_location *it = h->items[k].item;
                     if (it->item_id == id) {
-                        printf(
+                        VDBG(heif, 
                             "item_id %d, construct_method %d, extent_count %d, "
-                            "ref_id %d, base %lld, offset %lld, length %lld\n",
+                            "ref_id %d, base %"PRIu64", offset %"PRIu64", length %"PRIu64"",
                             it->item_id, it->construct_method, it->extent_count,
                             it->data_ref_id, it->base_offset, it->extents[0].extent_offset,
                             it->extents[0].extent_length);
@@ -308,7 +329,7 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
         }
     }
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
-        printf("decoding %s\n", type2name(h->items[i].type));
+        VDBG(heif, "decoding %s", type2name(h->items[i].type));
         pre_read_item(h, f, i);
         if (h->items[i].type == TYPE2UINT("Exif")) {
             VDBG(heif, "exif %" PRIu64, h->items[i].length);
@@ -351,7 +372,7 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
                 ig.output_width = SWAP(width);
                 ig.output_height = SWAP(height);
             }
-            printf("grid width %d, height %d\n", ig.output_width, ig.output_height);
+            VDBG(heif, "grid width %d, height %d", ig.output_width, ig.output_height);
         }
     }
     return num;
@@ -380,15 +401,14 @@ HEIF_load(const char *filename, int skip_flag)
     HEIF *h = p->pic;
     FILE *f = fopen(filename, "rb");
     fseek(f, 0, SEEK_END);
-    int size = ftell(f);
+    int64_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
     size -= read_ftyp(f, &h->ftyp);
-    // h->mdat = malloc(sizeof(struct mdat_box));
-    struct box b;
     while (size > 0) {
-        uint32_t type = read_box(f, &b, size);
-        fseek(f, -8, SEEK_CUR);
+        struct box b;
+        uint32_t type = probe_box(f, &b);
+        VDBG(heif, "TOP: %s, left %"PRIu64", box %"PRIu64"", type2name(type), size, b.size);
         switch (type) {
         case FOURCC2UINT('m', 'e', 't', 'a'):
             read_meta_box(f, &h->meta);
@@ -399,15 +419,23 @@ HEIF_load(const char *filename, int skip_flag)
             h->moov_num++;
             break;
         case FOURCC2UINT('m', 'd', 'a', 't'):
-            h->mdat_num ++;
-            // h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
+            // h->mdat_num++;
+            // if (h->mdat_num == 1) {
+            //     h->mdat = calloc(1, sizeof(struct mdat_box));
+            // } else {
+            //     h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
+            // }
             // read_mdat_box(f, h->mdat + h->mdat_num - 1);
+            fseek(f, b.size, SEEK_CUR);
             break;
         default:
+            fseek(f, b.size, SEEK_CUR);
             break;
         }
         size -= b.size;
-        VDBG(heif, "%s, read %d, left %d", UINT2TYPE(type), b.size, size);
+        
+        VDBG(heif, "%s, read %" PRIu64 ", left %" PRIu64 "", UINT2TYPE(type),
+             b.size, size);
     }
 
     // extract some info from meta box
@@ -415,30 +443,29 @@ HEIF_load(const char *filename, int skip_flag)
         struct ispe_box *ispe = get_ispe_by_item_id(h, get_primary_item_id(h));
         p->height = ispe->image_height;
         p->width = ispe->image_width;
-        printf("width %d, height %d\n", p->width, p->height);
+        VDBG(heif, "width %d, height %d", p->width, p->height);
     }
     // for (int i = 0; i < h->meta.iprp.ipco.n_property; i++) {
-    //     printf("iprp ipco %s\n", type2name(h->meta.iprp.ipco.property[i]->type));
+    //     VDBG(heif, "iprp ipco %s", type2name(h->meta.iprp.ipco.property[i]->type));
     //     if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
     //         p->width = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width;
     //         p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
-    //         printf("width %d, height %d\n", p->width, p->height);
+    //         VDBG(heif, "width %d, height %d", p->width, p->height);
     //     }
     // }
+    h->item_num = h->meta.iloc.item_count;
     h->items = calloc(h->meta.iloc.item_count, sizeof(struct heif_item));
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         h->items[i].item = &h->meta.iloc.items[i];
         for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
             if (h->meta.iinf.item_infos[j].item_id == h->items[i].item->item_id) {
                 h->items[i].type = h->meta.iinf.item_infos[j].item_type;
-                printf("item %d, type %s\n", h->items[i].item->item_id,
+                VDBG(heif, "item %d, type %s", h->items[i].item->item_id,
                        type2name(h->items[i].type));
             }
         }
     }
 
-    // process mdata
-    VINFO(heif, "mdat_num %d", h->mdat_num);
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
@@ -447,11 +474,12 @@ HEIF_load(const char *filename, int skip_flag)
     int n = 0;
     if (!skip_flag) {
         n = decode_items(h, f, p);
+
+        for (int i = 0; i < h->moov_num; i++) {
+            decode_moov(h, f, h->moov + i);
+        }
     }
 
-    for (int i = 0; i < h->moov_num; i++) {
-        decode_moov(h, f, h->moov+i);
-    }
     fclose(f);
     if (n  == 1) {
         return p;
@@ -468,56 +496,15 @@ HEIF_free(struct pic *p)
         free(h->ftyp.compatible_brands);
 
     struct meta_box *m = &h->meta;
-    if (m->hdlr.name)
-        free(m->hdlr.name);
-    for (int i = 0; i < m->iloc.item_count; i ++) {
-        free(m->iloc.items[i].extents);
-    }
-    free(m->iloc.items);
+    free_meta_box(m);
 
-    for (int i = 0; i < (int)m->iinf.entry_count; i++) {
-        if (m->iinf.item_infos[i].content_encoding)
-            free(m->iinf.item_infos[i].content_encoding);
+    for (int i = 0; i < h->moov_num; i++) {
+        free_moov_box(h->moov + i);
     }
-    free(m->iinf.item_infos);
-
-    if (h->meta.iprp.ipco.n_property > 0) {
-        for (int i = 0; i < h->meta.iprp.ipco.n_property; i++) {
-            if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("hvcC")) {
-                struct hvcC_box *hvcc = (struct hvcC_box *)m->iprp.ipco.property[i];
-                // for (int j = 0; j < hvcc->num_of_arrays; j ++) {
-                    // for (int k = 0; k < hvcc->nal_arrays[j].numNalus; k ++) {
-                    //     free(hvcc->nal_arrays[j].nals[k].nal_units);
-                    // }
-                    // free(hvcc->nal_arrays[j].nals);
-                // }
-                if (hvcc->num_of_arrays) {
-                    free(hvcc->nal_arrays);
-                }
-            }
-            free(m->iprp.ipco.property[i]);
-        }
-    }
-
-    if (m->iprp.ipma.entries) {
-        for (int i = 0; i < (int)m->iprp.ipma.entry_count; i++) {
-            free(m->iprp.ipma.entries[i].property_index);
-        }
-        free(m->iprp.ipma.entries);
-    }
-
-    if (m->iref.refs) {
-        for (int i = 0; i < m->iref.refs_count; i++) {
-            free(m->iref.refs[i].to_item_ids);
-        }
-        free(m->iref.refs);
-    }
-    if (h->moov_num) {
-        free(h->moov);
-    }
+    free(h->moov);
 
     if (h->items) {
-        for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        for (int i = 0; i < h->item_num; i++) {
             free(h->items[i].data);
         }
         free(h->items);

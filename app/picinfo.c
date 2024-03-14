@@ -10,7 +10,7 @@
 void usage(void)
 {
     printf("\tUsage:\n");
-    printf("\t picinfo [options] image_file\n");
+    printf("\t picinfo [options h|s] image_file\n");
     printf("\t options = help | skip_decode\n");
 }
 
@@ -23,13 +23,17 @@ int main(int argc, char *argv[])
                                {"skip_decode", no_argument, &skip_flag, 1},
                                {0, 0, 0, 0}};
     int option_index = 0;
-    while ((ch = getopt_long(argc, argv, "h", options, &option_index)) !=-1) {
+    while ((ch = getopt_long(argc, argv, "hs", options, &option_index)) !=-1) {
         switch (ch) {
             case 'h':
                 usage();
                 return 0;
-            default:
+            case 's':
+                skip_flag = 1;
                 break;
+            default:
+                usage();
+                return 0;
         }
     }
     if (optind >= argc) {

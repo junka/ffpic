@@ -515,7 +515,7 @@ read_av1c_box(FILE *f, struct box **bn)
 
     FFREAD(&b->type + 4, 4, 1, f);
 
-    VDBG(avif, "size %d", b->size);
+    VDBG(avif, "size %" PRIu64 "", b->size);
     uint8_t *data = malloc(b->size - 12);
     FFREAD(data, b->size - 12, 1, f);
     struct bits_vec *v = bits_vec_alloc(data, b->size - 12, BITS_LSB);
@@ -608,15 +608,14 @@ AVIF_load(const char *filename, int skip_flag)
     AVIF *h = p->pic;
     FILE *f = fopen(filename, "rb");
     fseek(f, 0, SEEK_END);
-    uint32_t size = ftell(f);
+    uint64_t size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
     size -= read_ftyp(f, &h->ftyp);
     // h->mdat = malloc(sizeof(struct mdat_box));
     struct box b;
     while (size) {
-        uint32_t type = read_box(f, &b, size);
-        fseek(f, -8, SEEK_CUR);
+        uint32_t type = probe_box(f, &b);
         switch (type) {
         case FOURCC2UINT('m', 'e', 't', 'a'):
             read_meta_box(f, &h->meta);
@@ -630,7 +629,8 @@ AVIF_load(const char *filename, int skip_flag)
             break;
         }
         size -= b.size;
-        VDBG(avif, "%s, read %d, left %d", UINT2TYPE(type), b.size, size);
+        VDBG(avif, "%s, read %" PRIu64 ", left %" PRIu64 "", UINT2TYPE(type),
+             b.size, size);
     }
 
     // extract some info from meta box

@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
 
@@ -62,6 +63,8 @@ static inline int clip3(int minv, int maxv, int v)
       return -EBADF;                                                           \
     }                                                                          \
   } while (0)
+
+float fix16_16(uint32_t v);
 
 #ifdef __cplusplus
 }

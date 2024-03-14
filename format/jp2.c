@@ -553,7 +553,7 @@ void
 read_next_box(JP2 *j, FILE *f, int len)
 {
     struct box b;
-    uint32_t type = read_box(f, &b, len);
+    uint32_t type = read_box(f, &b);
     VDBG(jp2, "box type %s", type2name(type));
     switch (type) {
         case JP2H:

@@ -838,7 +838,7 @@ parse_pps(struct bits_vec *v)
             SKIP_BITS(v, 1);
         }
     }
-    rbsp_trailing_bits(v);
+    // rbsp_trailing_bits(v);
     return pps;
 }
 
@@ -977,7 +977,8 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     // hexdump(stdout, "sps:", data, len);
     struct sps *sps = calloc(1, sizeof(struct sps));
     sps->sps_video_parameter_set_id = READ_BITS(v, 4);
-    VDBG(hevc, "sps: sps_video_parameter_set_id %d", sps->sps_video_parameter_set_id);
+    VDBG(hevc, "sps: sps_video_parameter_set_id %d, nuh_layer_id %d",
+         sps->sps_video_parameter_set_id, h->nuh_layer_id);
     if (h->nuh_layer_id == 0) {
         sps->sps_max_sub_layer_minus1 = READ_BITS(v, 3);
     } else {
@@ -991,7 +992,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         }
     }
     assert(sps->sps_max_sub_layer_minus1 < 7);
-    int MultiLayerExtSpsFlag = (h->nuh_layer_id != 0 && sps->sps_max_sub_layer_minus1 == 7);
+    bool MultiLayerExtSpsFlag = (h->nuh_layer_id != 0 && sps->sps_max_sub_layer_minus1 == 7);
     if (!MultiLayerExtSpsFlag) {
         //almost must go here
         sps->sps_temporal_id_nesting_flag = READ_BIT(v);
@@ -1013,11 +1014,11 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         if (sps->chroma_format_idc == CHROMA_444) {
             sps->separate_colour_plane_flag = READ_BIT(v);
         }
-        VDBG(hevc, "chroma_format_idc %d, separate_colour_plane_flag %d",
+        VDBG(hevc, "sps: chroma_format_idc %d, separate_colour_plane_flag %d",
             sps->chroma_format_idc, sps->separate_colour_plane_flag);
         sps->pic_width_in_luma_samples = GOL_UE(v);
         sps->pic_height_in_luma_samples = GOL_UE(v);
-        VDBG(hevc, "pic_width_in_luma_samples %d, pic_height_in_luma_samples %d",
+        VDBG(hevc, "sps: pic_width_in_luma_samples %d, pic_height_in_luma_samples %d",
             sps->pic_width_in_luma_samples, sps->pic_height_in_luma_samples);
         // sps->conformance_window_flag = READ_BIT(v);
         if (READ_BIT(v)) {
@@ -1036,21 +1037,20 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->QpBdOffsetY = 6 * sps->bit_depth_luma_minus8;
         sps->QpBdOffsetC = 6 * sps->bit_depth_chroma_minus8;
 
-        VDBG(hevc, "bit_depth_luma_minus8 %d, bit_depth_chroma_minus8 %d",
+        VDBG(hevc, "sps: bit_depth_luma_minus8 %d, bit_depth_chroma_minus8 %d",
             sps->bit_depth_luma_minus8, sps->bit_depth_chroma_minus8);
     }
 
     sps->log2_max_pic_order_cnt_lsb_minus4 = GOL_UE(v);
+    VDBG(hevc, "sps: log2_max_pic_order_cnt_lsb %d", sps->log2_max_pic_order_cnt_lsb_minus4+4);
     //should be less than 12
     if (LIKELY(!MultiLayerExtSpsFlag)) {
-        // uint8_t sps_sub_layer_ordering_info_present_flag = READ_BIT(v);
-        if (READ_BIT(v)) {
-            // all sub layer
-            for (int i = 0; i <= sps->sps_max_sub_layer_minus1; i ++) {
-                sps->sps_sublayers[i].sps_max_dec_pic_buffering_minus1 = GOL_UE(v);
-                sps->sps_sublayers[i].sps_max_num_reorder_pics = GOL_UE(v);
-                sps->sps_sublayers[i].sps_max_latency_increase_plus1 = GOL_UE(v);
-            }
+        uint8_t sps_sub_layer_ordering_info_present_flag = READ_BIT(v);
+        for (int i = sps_sub_layer_ordering_info_present_flag ? 0 : sps->sps_max_sub_layer_minus1;
+             i <= sps->sps_max_sub_layer_minus1; i++) {
+            sps->sps_sublayers[i].sps_max_dec_pic_buffering_minus1 = GOL_UE(v);
+            sps->sps_sublayers[i].sps_max_num_reorder_pics = GOL_UE(v);
+            sps->sps_sublayers[i].sps_max_latency_increase_plus1 = GOL_UE(v);
         }
     }
     
@@ -1060,8 +1060,10 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     sps->log2_diff_max_min_luma_transform_block_size = GOL_UE(v);
     sps->max_transform_hierarchy_depth_inter = GOL_UE(v);
     sps->max_transform_hierarchy_depth_intra = GOL_UE(v);
-    
+    VDBG(hevc, "sps: log2_min_luma_coding_block_size %d", sps->log2_min_luma_coding_block_size_minus3+3);
+
     sps->scaling_list_enabled_flag = READ_BIT(v);
+    VDBG(hevc, "sps: scaling_list_enabled_flag %d", sps->scaling_list_enabled_flag);
     if (sps->scaling_list_enabled_flag) {
         uint8_t sps_infer_scaling_list_flag = 0;
         if (UNLIKELY(MultiLayerExtSpsFlag)) {
@@ -1080,6 +1082,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     sps->amp_enabled_flag = READ_BIT(v);
     sps->sample_adaptive_offset_enabled_flag = READ_BIT(v);
     sps->pcm_enabled_flag = READ_BIT(v);
+    VDBG(hevc, "sps: pcm_enabled_flag %d", sps->pcm_enabled_flag);
     if (sps->pcm_enabled_flag) {
         sps->pcm = calloc(1, sizeof(struct pcm));
         sps->pcm->pcm_sample_bit_depth_luma_minus1 = READ_BITS(v, 4);
@@ -1091,7 +1094,7 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     sps->num_short_term_ref_pic_sets = GOL_UE(v);
     // should be less than 64
     assert(sps->num_short_term_ref_pic_sets < 64);
-    printf("num_short_term_ref_pic_sets %d\n",
+    VDBG(hevc, "sps: num_short_term_ref_pic_sets %d",
            sps->num_short_term_ref_pic_sets);
     if (sps->num_short_term_ref_pic_sets) {
         sps->sps_st_ref = calloc(sps->num_short_term_ref_pic_sets, sizeof(struct st_ref_pic_set));
@@ -1102,18 +1105,22 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
     sps->long_term_ref_pics_present_flag = READ_BIT(v);
     if (sps->long_term_ref_pics_present_flag) {
         sps->num_long_term_ref_pics_sps = GOL_UE(v);
+        VDBG(hevc, "sps: num_long_term_ref_pics_sps %d", sps->num_long_term_ref_pics_sps);
         sps->sps_lt_ref = calloc(1, sizeof(struct lt_ref_pic_set));
         parse_lt_ref_set(v, sps, sps->sps_lt_ref);
     }
     sps->sps_temporal_mvp_enabled_flag = READ_BIT(v);
     sps->strong_intra_smoothing_enabled_flag = READ_BIT(v);
     sps->vui_parameters_present_flag = READ_BIT(v);
+    VDBG(hevc, "sps: vui_parameters_present_flag %d",
+         sps->vui_parameters_present_flag);
     if (sps->vui_parameters_present_flag) {
         sps->vui = calloc(1, sizeof(struct vui_parameters));
         parse_vui(v, sps->vui, sps->sps_max_sub_layer_minus1);
     }
     // read extension flags
     sps->sps_extension_present_flag = READ_BIT(v);
+    VDBG(hevc, "sps: sps_extension_present_flag %d", sps->sps_extension_present_flag);
     if (sps->sps_extension_present_flag) {
         sps->sps_range_extension_flag = READ_BIT(v);
         sps->sps_multilayer_extension_flag = READ_BIT(v);
@@ -1121,30 +1128,38 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->sps_scc_extension_flag = READ_BIT(v);
         sps->sps_extension_4bits = READ_BITS(v, 4);
     }
+    VDBG(hevc, "sps: sps_range_extension_flag %d", sps->sps_range_extension_flag);
     if (sps->sps_range_extension_flag) {
         // sps->sps_range_ext = calloc(1, sizeof(struct sps_range_extension));
         parse_sps_range_ext(&sps->sps_range_ext, v);
     }
-    VDBG(hevc, "transform_skip_rotation_enabled_flag %d",
-         sps->sps_range_ext.transform_skip_rotation_enabled_flag);
+    VDBG(hevc, "sps: sps_multilayer_extension_flag %d", sps->sps_multilayer_extension_flag);
     if (sps->sps_multilayer_extension_flag) {
         sps->sps_multilayer_ext.inter_view_mv_vert_constraint_flag = READ_BIT(v);
     }
+
+    VDBG(hevc, "sps: sps_3d_extension_flag %d", sps->sps_3d_extension_flag);
     if (sps->sps_3d_extension_flag) {
         parse_sps_3d_ext(sps->sps_3d_ext, 0, v);
         parse_sps_3d_ext(sps->sps_3d_ext+1, 1, v);
     }
+
+    VDBG(hevc, "sps: sps_scc_extension_flag %d", sps->sps_scc_extension_flag);
     if (sps->sps_scc_extension_flag) {
         int numComps = sps->chroma_format_idc == 0 ? 1: 3;
         parse_sps_scc_ext(&sps->sps_scc_ext, v, numComps);
     }
+
+    VDBG(hevc, "sps: sps_extension_4bits %d", sps->sps_extension_4bits);
     if (sps->sps_extension_4bits) {
         while(more_rbsp_data(v)) {
             // uint8_t sps_extension_data_flag = READ_BIT(v);
             SKIP_BITS(v, 1);
         }
     }
-    rbsp_trailing_bits(v);
+    // bits_vec_dump(v);
+    //image3.heic, image4.heic end with 0x40, not a stop bit
+    // rbsp_trailing_bits(v);
     return sps;
 }
 
@@ -2312,7 +2327,7 @@ parse_vps(struct bits_vec *v)
             }
         }
     }
-    rbsp_trailing_bits(v);
+    // rbsp_trailing_bits(v);
     return vps;
 }
 

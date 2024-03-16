@@ -20,7 +20,7 @@ void *test_enqueue(void *arg) {
     return NULL;
 }
 
-int main() {
+int main(void) {
     struct ring_queue *rq = ring_alloc(128);
     if (!rq) {
         return -1;

@@ -3,6 +3,7 @@
 
 #include "accl.h"
 #include "x86.h"
+#include "utils.h"
 
 #ifdef __SSE2__
 
@@ -45,7 +46,7 @@ x86_idct_1dx4_sse2_16bit(const __m128i *const in0,
     // a03 a13 a23 a33   b03 b13 b23 b33
 }
 
-static void x86_idct_4x4_sse2_16bit(int16_t *in, int bitdepth) {
+static void x86_idct_4x4_sse2_16bit(int16_t *in, int bitdepth UNUSED) {
     // This implementation makes use of 16-bit fixed point versions of two
     // multiply constants:
     //    K1 = sqrt(2) * cos (pi/8) ~= 85627 / 2^16

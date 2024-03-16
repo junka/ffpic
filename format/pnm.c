@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "colorspace.h"
+#include "utils.h"
 #include "file.h"
 #include "pnm.h"
 
@@ -287,7 +288,7 @@ read_pam_data(PNM *m, FILE *f)
 }
 
 static struct pic* 
-PNM_load(const char *filename, int skip_flag)
+PNM_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(PNM));
     PNM *m = p->pic;

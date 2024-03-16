@@ -173,7 +173,7 @@ struct tiff_file_header {
 
 #define BYTEORDER(x) if (t->ifh.byteorder == 0x4D4D) \
     {   assert(sizeof(x)==2||sizeof(x)==4); \
-        SWAP(x);\
+        x = SWAP(x);\
     }
 
 typedef struct {

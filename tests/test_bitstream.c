@@ -4,7 +4,7 @@
 #include "bitstream.h"
 
 
-int test_reader()
+int test_reader(void)
 {
     uint8_t *data = malloc(4);
     data[0] = 0x57; // 0b01010111
@@ -160,7 +160,7 @@ write_err:
     return -1;
 }
 
-int main()
+int main(void)
 {
     if (test_reader()) {
         return -1;

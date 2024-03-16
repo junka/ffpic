@@ -89,10 +89,11 @@ main(int argc, const char *argv[])
         return -1;
     }
     char title[128];
+#ifndef NDEBUG
     FILE *logf = fopen("picinfo.log", "w+");
     vlog_init();
     vlog_openlog_stream(logf);
-
+#endif
     file_ops_init();
     accl_ops_init();
     sdl_screen_register();
@@ -101,9 +102,14 @@ main(int argc, const char *argv[])
         printf("file format is not support\n");
         return -1;
     }
+    struct display *d = display_get("SDL2");
     struct pic *p = file_load(ops, filename, 0);
     if (!p) {
         p = file_dequeue_pic();
+        if (!p) {
+            printf("No decoded image\n");
+            goto quit;
+        }
         file_enqueue_pic(p);
     }
 
@@ -115,7 +121,6 @@ main(int argc, const char *argv[])
 
     snprintf(title, 128, "%s (%d * %d)", filename, p->width, p->height);
 
-    struct display *d = display_get("SDL2");
     if (p->width < 180 || p->height < 60) {
         display_init(d, title, 480, 360);
     } else {
@@ -154,5 +159,8 @@ quit:
     if (p) {
         file_free(ops, p);
     }
+#ifndef NDEBUG
+    vlog_uninit();
+#endif
     return 0;
 }

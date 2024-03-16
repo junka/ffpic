@@ -45,5 +45,4 @@ quit:
     display_uninit(d);
     file_free(ops, p);
     return 0;
-
 }

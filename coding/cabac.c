@@ -613,7 +613,7 @@ ctx_bypass_flags(int ctx_idx, int bin_idx) {
     return !!(m->bypass & (1 << bin_idx));
 }
 
-static int ctx_only_one(int ctx_idx, int binIdx) {
+static int ctx_only_one(int ctx_idx, int binIdx UNUSED) {
     return ctx_idx;
 }
 
@@ -624,14 +624,13 @@ static int ctx_only_one(int ctx_idx, int binIdx) {
 // all other patterns should be handled differenctly, like 0, 1, 1, 1 (cu_qp_delta_abs), or 0,1,3(part_mode)
 int cabac_dec_tr(cabac_dec *dec, int tid, int cMax, int cRiceParam,
                  cabac_get_ctxInc ctxInc_cb) {
-    struct ctx_model *m;
     cabac_get_ctxInc cb = ctxInc_cb;
     if (!cb) {
         cb = ctx_only_one;
     }
     // see 9-11
     int t = cMax >> cRiceParam;
-    int prefix = 0, suffix = 0, i = 0;
+    int prefix = 0, suffix = 0;
     int binIdx = 0;
 #ifndef NDEBUG
     VDBG(cabac, "tid %d, (binIdx %d)flag %d, range %x, value %x", tid,

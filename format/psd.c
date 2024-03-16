@@ -8,6 +8,7 @@
 #include "file.h"
 #include "psd.h"
 #include "vlog.h"
+#include "utils.h"
 
 VLOG_REGISTER(psd, INFO)
 
@@ -299,7 +300,7 @@ read_image_data(PSD *s, FILE *f)
 
 
 static struct pic* 
-PSD_load(const char* filename, int skip_flag)
+PSD_load(const char* filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(PSD));
     PSD * s = p->pic;

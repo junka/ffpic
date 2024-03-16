@@ -183,8 +183,8 @@ parse_sequence_header_obu(struct bits_vec *v)
             }
         }
     }
-    int op = choose_operating_point();
-    int OperatingPointIdc = obu->points[op].operating_point_idc;
+    // int op = choose_operating_point();
+    // int OperatingPointIdc = obu->points[op].operating_point_idc;
     obu->frame_width_bits_minus_1 = READ_BITS(v, 4);
     obu->frame_height_bits_minus_1 = READ_BITS(v, 4);
     obu->max_frame_width_minus_1 = READ_BITS(v, obu->frame_width_bits_minus_1+1);
@@ -385,22 +385,25 @@ parse_metadata_obu(struct bits_vec *v)
 struct frame_header_obu * parse_frame_header_obu(struct bits_vec *v)
 {
     struct frame_header_obu * obu = malloc(sizeof(*obu));
+    bits_vec_dump(v);
     return obu;
 }
 
-int parse_tile_group_obu(struct bits_vec *v, int size)
+int parse_tile_group_obu(struct bits_vec *v, int size UNUSED)
 {
-
+    bits_vec_dump(v);
     return 0;
 }
 
 int parse_frame_obu(struct bits_vec *v)
 {
+    bits_vec_dump(v);
     return 0;
 }
 
 int parse_tile_list_obu(struct bits_vec *v)
 {
+    bits_vec_dump(v);
     return 0;
 }
 
@@ -420,12 +423,12 @@ parse_obu_header(struct obu_header *h, struct bits_vec *v)
     return 0;
 }
 
-int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx)
+int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx UNUSED)
 {
     struct obu_header h;
     parse_obu_header(&h, v);
     static struct sequence_header_obu *seqobu = NULL;
-    static int SeenFrameHeader = -1;
+    // static int SeenFrameHeader = -1;
     int obu_size = 0;
     /* The above code is declaring a variable `OperatingPointIdc` and assigning it a value based on a
     conditional statement. If `seqobu` is not null, it will access the `operating_point_idc`
@@ -456,7 +459,7 @@ int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx)
         seqobu->h = h;
         *obu = (struct obu_header *)seqobu;
     } else if (h.obu_type == OBU_TEMPORAL_DELIMITER) {
-        SeenFrameHeader = 0;
+        // SeenFrameHeader = 0;
         *obu = NULL;
     } else if (h.obu_type == OBU_FRAME_HEADER) {
         struct frame_header_obu * fh = parse_frame_header_obu(v);
@@ -539,8 +542,8 @@ read_av1c_box(FILE *f, struct box **bn)
     for (int i = 0; i < b->n_obu; i ++) {
         struct obu_header *h = b->configOBUs[i];
         if (h->obu_type == OBU_SEQUENCE_HEADER) {
-            struct sequence_header_obu *obu = (struct sequence_header_obu *)b->configOBUs[i];
-            VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
+            // struct sequence_header_obu *obu = (struct sequence_header_obu *)b->configOBUs[i];
+            // VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
         }
     }
 
@@ -550,7 +553,7 @@ read_av1c_box(FILE *f, struct box **bn)
     return b->size;
 }
 
-void decode_av01(AVIF *h, uint8_t *data, uint64_t len, uint8_t **pixels)
+void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)
 {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
@@ -596,13 +599,13 @@ static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
             VDBG(avif, "exif %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("av01")) {
             // take it as real coded data
-            VINFO(avif, "decoding id 0x%p len %" PRIu64, h->items[i].data, h->items[i].length);
-            decode_av01(h, h->items[i].data, h->items[i].length, pixels);
+            VINFO(avif, "decoding id 0x%p len %" PRIu64, (void *)h->items[i].data, h->items[i].length);
+            decode_av01(h->items[i].data, h->items[i].length, pixels);
         }
     }
 }
 static struct pic* 
-AVIF_load(const char *filename, int skip_flag)
+AVIF_load(const char *filename, int skip_flag UNUSED)
 {
         struct pic *p = pic_alloc(sizeof(AVIF));
     AVIF *h = p->pic;

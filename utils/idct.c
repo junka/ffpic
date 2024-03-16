@@ -75,7 +75,7 @@ void idct_1d_4_8bits(const uint8_t *in, uint8_t out[4], int mincoeff,
         out[i] = clip3(mincoeff, maxcoeff, (tmp + (bdShift - 1)) >> bdShift);
     }
 }
-void idct_4x4_8(const void *input, void *output, int bitdepth) {
+void idct_4x4_8(const void *input, void *output, int bitdepth UNUSED) {
     uint8_t *in = (uint8_t *)input;
     uint8_t *out = (uint8_t *)output;
     uint8_t tmp[4];
@@ -94,7 +94,7 @@ void idct_4x4_8(const void *input, void *output, int bitdepth) {
     }
 }
 
-static void idct_4x4_16(void *input, int bitdepth)
+static void idct_4x4_16(void *input, int bitdepth UNUSED)
 {
     int16_t *in = (int16_t *)input;
     int16_t *out = (int16_t *)input;
@@ -482,7 +482,7 @@ idct_1d_8(const int16_t *in, const int stride, int out[8]) {
 #endif
 }
 
-static void idct_8x8_8(void *block, int depth) {
+static void idct_8x8_8(void *block, int depth UNUSED) {
     uint8_t *in = (uint8_t *)block;
     uint8_t *out = (uint8_t *)block;
     uint8_t colidcts[64];
@@ -506,7 +506,7 @@ static void idct_8x8_8(void *block, int depth) {
     }
 }
 
-static void idct_8x8_16(void *block, int depth) {
+static void idct_8x8_16(void *block, int depth UNUSED) {
     int16_t *in = (int16_t *)block;
     int16_t *out = (int16_t *)block;
     int16_t colidcts[64];

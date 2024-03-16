@@ -19,7 +19,6 @@ void usage(void)
 
 int main(int argc, char *argv[])
 {
-    int ret;
     int ch;
     char * codec = NULL;
     struct option options[] = {
@@ -57,19 +56,20 @@ int main(int argc, char *argv[])
         return -1;
     }
     char newfile[128];
-
+#ifndef NDEBUG
     FILE *logf = fopen("transcode.log", "w+");
     vlog_init();
     vlog_openlog_stream(logf);
-    file_ops_init();
+#endif
 
+    file_ops_init();
     struct file_ops *ops = file_probe(filename);
     if (ops == NULL) {
         printf("file format is not support\n");
         return -1;
     }
 
-    int left = 0, top = 0;
+    // int left = 0, top = 0;
     struct pic *p = file_load(ops, filename, 0);
     printf("width %d\n", p->width);
 
@@ -82,6 +82,8 @@ int main(int argc, char *argv[])
     printf("trancode to file %s\n", newfile);
 
     file_free(ops, p);
+#ifndef NDEBUG
     vlog_uninit();
+#endif
     return 0;
 }

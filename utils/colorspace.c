@@ -142,8 +142,6 @@ YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
 
     for (int i = 0; i < 8 * v; i++) {
         for (int k = 0; k < 8 * h; k++) {
-            int y, cb, cr;
-            int add_r, add_g, add_b;
             int r, g, b;
 
             // The Y[64 * 4] store the Y componets, but not in the 16 * 16 array, just four 8 * 8 array
@@ -182,7 +180,6 @@ YUV_to_BGRA32_8bit(uint8_t *ptr, int pitch, void *Y, void *U, void *V,
     uint8_t *sV = V;
     uint8_t *p = ptr;
     int yy, uu, vv;
-    int add_r, add_g, add_b;
     int r, g, b;
 
     for (int i = 0; i < 8 * v; i++) {

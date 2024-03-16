@@ -86,13 +86,6 @@ struct hvcC_box {
     struct nal_arr *nal_arrays;
 };
 
-// see 23008-12
-struct auxC_box {
-    FULL_BOX_ST;
-    char *aux_type; // null-terminated character string of URN
-    uint8_t* aux_subtype; // zero or more bytes until the end of the box
-};
-
 // 14496-15 8.4
 struct HEVCSampleEntry {
     struct VisualSampleEntry sample;

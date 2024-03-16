@@ -16,7 +16,6 @@ void usage(void)
 
 int main(int argc, char *argv[])
 {
-    int ret;
     int ch;
     int skip_flag = 0;
     struct option options[] = {{"help", no_argument, NULL, 'h'},
@@ -46,9 +45,11 @@ int main(int argc, char *argv[])
         printf("File not exist or can not read\n");
         return -1;
     }
+#ifndef NDEBUG
     FILE *logf = fopen("picinfo.log", "w+");
     vlog_init();
     vlog_openlog_stream(logf);
+#endif
 
     accl_ops_init();
     file_ops_init();
@@ -66,6 +67,7 @@ int main(int argc, char *argv[])
             p = file_dequeue_pic();
         }
         if (!p || !p->pic) {
+            printf("No decoded image\n");
             goto exit;
         }
     }
@@ -74,6 +76,9 @@ int main(int argc, char *argv[])
 
     file_free(ops, p);
 exit:
+
+#ifndef NDEBUG
     vlog_uninit();
+#endif
     return 0;
 }

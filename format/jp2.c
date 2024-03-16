@@ -7,14 +7,14 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
+#include "basemedia.h"
 #include "bitstream.h"
 #include "file.h"
 #include "jp2.h"
 #include "vlog.h"
+#include "utils.h"
 
 VLOG_REGISTER(jp2, DEBUG)
-
-void read_next_box(JP2 *j, FILE *f, int len);
 
 
 static int
@@ -26,149 +26,199 @@ JP2_probe(const char *filename)
         return -ENOENT;
     }
     struct jp2_signature_box h;
-    int len = fread(&h, sizeof(h), 1, f);
-    if (len < 1) {
-        fclose(f);
-        return -EBADF;
-    }
+    read_box(f, &h);
+
     fclose(f);
-    if (h.major_type == TYPE2UINT("jP  ") || 
-        h.major_type == TYPE2UINT("jP2 ")) {
+    if (h.type == TYPE2UINT("jP  ") || 
+        h.type == TYPE2UINT("jP2 ")) {
         return 0;
     }
 
     return -EINVAL;
 }
 
-void
-read_ihdr(JP2 *j, FILE *f)
+int
+read_jp2_ihdr_box(FILE *f, struct jp2_ihdr_box *b)
 {
-    fread(&j->jp2h.ihdr, 14, 1, f);
-    j->jp2h.ihdr.width = SWAP(j->jp2h.ihdr.width);
-    j->jp2h.ihdr.height = SWAP(j->jp2h.ihdr.height);
-    j->jp2h.ihdr.num_comp = SWAP(j->jp2h.ihdr.num_comp);
-    // j->jp2h.ihdr.comps = malloc(sizeof(struct jp2_bpc) * j->jp2h.ihdr.num_comp);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'h', 'd', 'r'));
+    // b->vers = read_u16(f);
+    // b->num_comp = read_u16(f);
+    b->height = read_u32(f);
+    b->width = read_u32(f);
+    b->num_comp = read_u16(f);
+    b->bpc = read_u8(f);
+    b->c = read_u8(f);
+    b->unkc = read_u8(f);
+    b->ipr = read_u8(f);
+    return b->size;
 }
 
-void
-read_colr(JP2 *j, FILE *f, uint32_t len)
+int
+read_jp2_colr_box(FILE *f, struct jp2_colr_box *b)
 {
-    fread(&j->jp2h.colr, 3, 1, f);
-    if (j->jp2h.colr.method == ENUMERATED_COLORSPACE) {
-        fread(&j->jp2h.colr.enum_cs, 4, 1, f);
-        j->jp2h.colr.enum_cs = SWAP(j->jp2h.colr.enum_cs);
-        if (j->jp2h.colr.enum_cs == 16) {
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
+    fread(&b->method, 3, 1, f);
+    if (b->method == ENUMERATED_COLORSPACE) {
+        fread(&b->enum_cs, 4, 1, f);
+        b->enum_cs = SWAP(b->enum_cs);
+        if (b->enum_cs == 16) {
             // sRGB
-        } else if (j->jp2h.colr.enum_cs == 17) {
+        } else if (b->enum_cs == 17) {
             // greyscale
-        } else if (j->jp2h.colr.enum_cs == 18) {
+        } else if (b->enum_cs == 18) {
             // sYCC
         } else {
             printf("invalid enum color space\n");
         }
-    } else if (j->jp2h.colr.method == RESTRICT_ICC_PROFILE) {
-        printf("icc len %d\n", len - 3);
+    } else if (b->method == RESTRICT_ICC_PROFILE) {
+        // printf("icc len %d\n", len - 3);
     }
+    return b->size;
 }
 
-void
-read_bpcc(JP2 *j, FILE *f)
+static int
+read_jp2_bpcc_box(FILE *f, struct jp2_bpcc_box *b, int num)
 {
-    j->jp2h.ihdr.comps = malloc(sizeof(struct jp2_bpc) * j->jp2h.ihdr.num_comp);
-    fread(j->jp2h.ihdr.comps, sizeof(struct jp2_bpc), j->jp2h.ihdr.num_comp, f);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('b', 'p', 'c', 'c'));
+    b->bits_per_comp = malloc(num);
+    fread(b->bits_per_comp, 1, num, f);
+    return b->size;
 }
 
 void
-read_cmap(JP2 *j, FILE *f)
+read_cmap(JP2 *j UNUSED, FILE *f UNUSED)
 {
     // for (int i = 0; i < j->; i ++) {
     //     j->jp2h
     // }
 }
 
-void
-read_cdef(JP2 *j, FILE *f)
+int
+read_jp2_cdef_box(FILE *f, struct jp2_cdef_box *b)
 {
-    fread(&j->jp2h.cdef, 1, 1, f);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'd', 'e', 'f'));
+    b->num_comp = read_u16(f);
+    b->comp_id = calloc(b->num_comp, 2);
+    b->comp_type = calloc(b->num_comp, 2);
+    b->comp_assoc = calloc(b->num_comp, 2);
+    for (int i = 0; i < b->num_comp; i++) {
+        b->comp_id[i] = read_u16(f);
+        b->comp_type[i] = read_u16(f);
+        b->comp_assoc[i] = read_u16(f);
+    }
+    return b->size;
 }
 
-void
-read_pclr(JP2 *j, FILE *f)
+int
+read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
 {
-    fread(&j->jp2h.pclr.num_entry, 2, 1, f);
-    j->jp2h.pclr.num_channel = fgetc(f);
-    j->jp2h.pclr.channels = malloc(j->jp2h.pclr.num_channel);
-    j->jp2h.pclr.entries = malloc(sizeof(uint32_t) * j->jp2h.pclr.num_channel * j->jp2h.pclr.num_entry);
-    fread(j->jp2h.pclr.channels, 1, j->jp2h.pclr.num_channel, f);
-    for (int i = 0; i < j->jp2h.pclr.num_entry; i ++) {
-        for (int k = 0; k < j->jp2h.pclr.num_channel; k ++) {
-            int n = (j->jp2h.pclr.channels[k].size + 8) >> 3;
-            fread(j->jp2h.pclr.entries + i * j->jp2h.pclr.num_entry + k, n, 1, f);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'c', 'l', 'r'));
+    fread(&b->num_entry, 5, 1, f);
+    b->num_entry = SWAP(b->num_entry);
+    b->num_channel = fgetc(f);
+    b->palette_input = SWAP(b->palette_input);
+    b->component = calloc(b->num_channel, 2);
+    b->depth = malloc(b->num_channel);
+    fread(b->component, 2, b->num_channel, f);
+    fread(b->depth, 1, b->num_channel, f);
+    for (int i = 0; i < b->num_entry; i ++) {
+        for (int j = 0; j < b->num_channel; j ++) {
+            int n = (b->entries[j] + 8) >> 3;
+            fread(b->entries + i * b->num_entry + j, n, 1, f);
         }
     }
+    return b->size;
 }
 
-
-void
-read_resc(JP2 *j, FILE *f)
+static int
+read_jp2_resc_box(FILE *f, struct jp2_resc_box *b)
 {
-
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'c'));
+    b->vrcn = read_u16(f);
+    b->vrcd = read_u16(f);
+    b->hrcn = read_u16(f);
+    b->hrcd = read_u16(f);
+    b->vrce = read_u8(f);
+    b->hrce = read_u8(f);
+    return b->size;
 }
 
-void 
-read_resolution(JP2* j, FILE *f)
+static int
+read_jp2_resd_box(FILE *f, struct jp2_resd_box *b)
 {
-
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'd'));
+    b->vrdn = read_u16(f);
+    b->vrdd = read_u16(f);
+    b->hrdn = read_u16(f);
+    b->hrdd = read_u16(f);
+    b->vrde = read_u8(f);
+    b->hrde = read_u8(f);
+    return b->size;
 }
 
-void 
-read_url(JP2* j, FILE * f, int len)
+int
+read_jp2_res_box(FILE *f, struct jp2_res_box *b)
 {
-    fread(&j->uuid_info[j->uinf_num-1].url, 4, 1, f);
-    j->uuid_info[j->uinf_num-1].url.location = malloc(len - 4);
-    fread(j->uuid_info[j->uinf_num-1].url.location, len - 4, 1, f);
-}
-
-void 
-read_ulst(JP2* j, FILE * f)
-{
-    fread(&j->uuid_info[j->uinf_num-1].ulst.num_uuid, 2, 1, f);
-    j->uuid_info[j->uinf_num-1].ulst.num_uuid = SWAP(j->uuid_info[j->uinf_num-1].ulst.num_uuid);
-    j->uuid_info[j->uinf_num-1].ulst.id = malloc(j->uuid_info[j->uinf_num-1].ulst.num_uuid * sizeof(uint128_t));
-    for (int i = 0; i < j->uuid_info[j->uinf_num-1].ulst.num_uuid; i ++) {
-        fread(j->uuid_info[j->uinf_num-1].ulst.id + i, sizeof(uint128_t), 1, f);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', ' '));
+    int64_t s = b->size - 8;
+    while (s) {
+        struct box p;
+        probe_box(f, &p);
+        switch (p.type) {
+            case RESC:
+                read_jp2_resc_box(f, &b->resc);
+                break;
+            case RESD:
+                read_jp2_resd_box(f, &b->resd);
+                break;
+            default:
+                break;
+        }
+        s -= p.size;
     }
+    return b->size;
 }
 
-void
-read_uinf(JP2* j, FILE * f, int len)
+
+int 
+read_jp2_url_box(FILE * f, struct jp2_url_box *b)
 {
-    if (j->uinf_num == 0) {
-        j->uuid_info = malloc(sizeof(struct jp2_uinf));
-    } else {
-        j->uuid_info = realloc(j->uuid_info, sizeof(struct jp2_uinf) * (j->uinf_num+1));
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('u', 'r', 'l', ' '));
+    read_till_null(f, &b->location);
+    return b->size;
+}
+
+int
+read_jp2_ulst_box(FILE * f, struct jp2_ulst_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'l', 's', 't'));
+    b->num_uuid = read_u16(f);
+    b->id = malloc(b->num_uuid * sizeof(uint128_t));
+    for (int i = 0; i < b->num_uuid; i ++) {
+        fread(b->id + i, sizeof(uint128_t), 1, f);
     }
-    j->uinf_num ++;
-    
+    return b->size;
+}
+
+int
+read_jp2_uinf_box(FILE * f, struct jp2_uinf_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'i', 'n', 'f'));
     // read ulst
-    read_next_box(j, f, len);
+    read_jp2_ulst_box(f, &b->ulst);
     // read url
-    len = len - 8 - 2 - j->uuid_info[j->uinf_num-1].ulst.num_uuid * 8;
-    read_next_box(j, f, len);
+    read_jp2_url_box(f, &b->url);
+    return b->size;
 }
 
 //may ignore this part
-void
-read_xml(JP2 *j, FILE *f, int len)
+int
+read_jp2_xml_box(FILE *f, struct jp2_xml_box *b)
 {
-    if (j->xml_num == 0) {
-        j->xml = malloc(sizeof(struct jp2_xml));
-    } else {
-        j->xml = realloc(j->xml, sizeof(struct jp2_xml) * (j->xml_num + 1));
-    }
-    j->xml_num ++;
-    j->xml[j->xml_num-1].data = malloc(len);
-    fread(j->xml[j->xml_num-1].data, len, 1, f);
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('x', 'm', 'l', ' '));
+    b->data = malloc(b->size - 8);
+    FFREAD(b->data, 1, b->size - 8, f);
+    return b->size;
 }
 
 
@@ -271,7 +321,7 @@ read_qcd(JP2 *j, FILE *f)
     fread(&j->main_h.qcd, 3, 1, f);
     l += 3;
     j->main_h.qcd.length = SWAP(j->main_h.qcd.length);
-    printf("guard num %d table len %d, decomp %d\n", j->main_h.qcd.guard_num,
+    VDBG(jp2, "guard num %d table len %d, decomp %d\n", j->main_h.qcd.guard_num,
            j->main_h.qcd.length - 3, j->main_h.cod.p.decomp_level_num);
     if (j->main_h.qcd.guard_num == 0) {
         j->main_h.qcd.table = malloc(3*j->main_h.cod.p.decomp_level_num + 1);
@@ -357,7 +407,7 @@ int tag_tree_decode(struct bits_vec *v, uint32_t leafno, int thresh)
 }
 
 //see B.10 packet header information coding
-void read_packet_header(JP2 *j, struct bits_vec *v, int tile_id) {
+void read_packet_header(struct bits_vec *v, int tile_id UNUSED) {
     // start process packet header: B.10
     //  - zero length packet;
     //  - code-block inclusion;
@@ -365,18 +415,18 @@ void read_packet_header(JP2 *j, struct bits_vec *v, int tile_id) {
     //  - number of coding passes
     //  - length of the code-block compressed image data from a given code-block
     // see B.10.3, first bit denotes whether the packet has a length of zero
-    int layers_num = j->main_h.cod.layers_num;
+    // int layers_num = j->main_h.cod.layers_num;
     int zl = READ_BIT(v);
-    int inclusion;
+    int inclusion UNUSED;
     // int bitplane;
     // int pass = 0;
-    VDBG(jp2, "layers_num %d zero length packet %d", layers_num, zl);
+    // VDBG(jp2, "layers_num %d zero length packet %d", layers_num, zl);
     if (zl) {
         inclusion = tag_tree_decode(v, 0, 0);
     } else {
         inclusion = READ_BIT(v);
     }
-    printf("zl %d, inclusion %d\n", zl, inclusion);
+    VDBG(jp2, "zl %d, inclusion %d", zl, inclusion);
 }
 
 //last marker in a tile-part header, end with next SOT or EOC
@@ -410,13 +460,13 @@ read_sod(JP2 *j, FILE *f) {
     if (j->main_h.ppm.index) {
 
     }
-    read_packet_header(j, v, tile_id);
+    read_packet_header(v, tile_id);
     if (j->main_h.cod.eph) {
         // if EPH is enabled
     }
 
     int l = ftell(f) - start;
-    VDBG(jp2, "a tile %d\n", l);
+    VDBG(jp2, "a tile %d", l);
     bits_vec_free(v);
     return l;
 }
@@ -442,7 +492,9 @@ int read_poc(JP2 *j, FILE *f)
     return 0;
 }
 
-static const char * jp2_marker_name(uint16_t mark)
+#ifndef NDEBUG
+static const char *
+jp2_marker_name(uint16_t mark)
 {
     int id = (mark >> 8) & 0xFF;
     switch(id) {
@@ -493,12 +545,14 @@ static const char * jp2_marker_name(uint16_t mark)
         default:
             return "unkown";
     }
-
 }
+#endif
 
 void 
-read_stream(JP2 *j, FILE *f, int l)
+read_stream(JP2 *j, FILE *f)
 {
+    struct box b;
+    read_box(f, &b);
     uint16_t mark;
     mark = read_marker(f);
     if (mark != SOC) {
@@ -538,7 +592,7 @@ read_stream(JP2 *j, FILE *f, int l)
             //     break;
             case EOC:
                 //may be absent in case corrupt
-                VERR(jp2, "end of code stream %d, %ld\n", l, ftell(f));
+                VERR(jp2, "end of code stream  %ld", ftell(f));
                 return;
             default:
                 printf("marker %x\n", SWAP(mark));
@@ -549,58 +603,57 @@ read_stream(JP2 *j, FILE *f, int l)
     }
 }
 
-void 
-read_next_box(JP2 *j, FILE *f, int len)
+int
+read_jp2_prfl_box(FILE *f, struct jp2_prfl_box *b)
 {
-    struct box b;
-    uint32_t type = read_box(f, &b);
-    VDBG(jp2, "box type %s", type2name(type));
-    switch (type) {
-        case JP2H:
-            read_next_box(j, f, b.size - 8);
-            break;
-        case IHDR:
-            read_ihdr(j, f);
-            break;
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'r', 'f', 'l'));
+    b->brand = read_u32(f);
+    b->compatibility_list = malloc(b->size - 12);
+    FFREAD(b->compatibility_list, 4, (b->size - 12) / 4, f);
+    return b->size;
+}
+
+int read_jp2h_box(FILE *f, struct jp2h_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('j', 'p', '2', 'h'));
+    read_jp2_ihdr_box(f, &b->ihdr);
+    int64_t size = b->size - b->ihdr.size - 8;
+    while(size) {
+        struct box p;
+        uint32_t type = probe_box(f, &p);
+        VDBG(jp2, "JP2H %s", type2name(type));
+        switch(type) {
+        // case IHDR:
+        //     read_jp2_ihdr_box(f, &b->ihdr);
+        //     break;
         case BPCC:
-            read_bpcc(j, f);
+            read_jp2_bpcc_box(f, &b->bpcc, b->ihdr.num_comp);
             break;
         case COLR:
-            read_colr(j, f, b.size - 8);
+            if (b->n_colr == 0) {
+                b->colr = malloc(sizeof(struct jp2_colr_box));
+            } else {
+                b->colr = realloc(b->colr, sizeof(struct jp2_colr_box) * (b->n_colr + 1));
+            }
+            read_jp2_colr_box(f, b->colr + b->n_colr);
+            b->n_colr ++;
             break;
         case PCLR:
-            read_pclr(j, f);
+            read_jp2_pclr_box(f, &b->pclr);
             break;
-        // case RES:
-        //     read_resolution(j, f);
-        //     break;
-        // case RESC:
-        //     read_resc(j, f);
-        //     break;
-        case JP2C:
-            read_stream(j, f, b.size - 8);
-            break;
-        case UINF:
-            read_uinf(j, f, b.size - 8);
-            break;
-        case ULST:
-            read_ulst(j, f);
-            break;
-        case URL:
-            read_url(j, f, b.size - 8);
-            break;
-        case XML:
-            read_xml(j, f, b.size - 8);
+        case RES:
+            read_jp2_res_box(f, &b->res);
             break;
         default:
-            printf("unkown marker \"%s\"\n", UINT2TYPE(type));
-            fseek(f, b.size - 8, SEEK_CUR);
             break;
+        }
+        size -= p.size;
     }
+    return b->size;
 }
 
 static struct pic* 
-JP2_load(const char *filename, int skip_flag)
+JP2_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(JP2));
     JP2 *j = p->pic;
@@ -610,15 +663,52 @@ JP2_load(const char *filename, int skip_flag)
     int size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    //first box, JP box
-    fread(&h, sizeof(h), 1, f);
+    //first box, JP signature box
+    read_box(f, &h);
+    h.magic = read_u32(f);
+    assert(h.magic == 0x0D0A870A);
 
-    //second box, ftyp box
+    // second box, ftyp box
     read_ftyp(f, (void *)&(j->ftyp));
 
     // common process for other boxes
     while(ftell(f) < size) {
-        read_next_box(j, f, -1);
+        struct box b;
+        uint32_t type = probe_box(f, &b);
+        VDBG(jp2, "box type %s", type2name(type));
+        switch (type) {
+        case JP2H:
+            read_jp2h_box(f, &j->jp2h);
+            break;
+        case PRFL:
+            read_jp2_prfl_box(f, &j->prfl);
+            break;
+        case JP2C:
+            read_stream(j, f);
+            break;
+        case UINF:
+            if (j->uinf_num == 0) {
+                j->uinf = malloc(sizeof(struct jp2_uinf_box));
+            } else {
+                j->uinf = realloc(j->uinf, sizeof(struct jp2_uinf_box) * (j->uinf_num + 1));
+            }
+            read_jp2_uinf_box(f, j->uinf + j->uinf_num);
+            j->uinf_num++;
+            break;
+        case XML:
+            if (j->xml_num == 0) {
+                j->xml = malloc(sizeof(struct jp2_xml_box));
+            } else {
+                j->xml = realloc(j->uinf, sizeof(struct jp2_xml_box) * (j->xml_num + 1));
+            }
+            read_jp2_xml_box(f, j->xml);
+            j->xml_num ++;
+            break;
+        default:
+            printf("unkown marker \"%s\"\n", UINT2TYPE(type));
+            fseek(f, b.size - 8, SEEK_CUR);
+            break;
+        }
     }
     fclose(f);
 
@@ -630,22 +720,23 @@ JP2_free(struct pic *p)
 {
     JP2 *j = (JP2 *) p->pic;
     if(j->jp2h.ihdr.num_comp > 0) {
-        if (j->jp2h.ihdr.comps)
-            free(j->jp2h.ihdr.comps);
+        
     }
-    if (j->jp2h.colr.method == 2) {
-        free(j->jp2h.colr.iccpro.iccp);
+    for (int i = 0; i < j->jp2h.n_colr; i++) {
+        free(j->jp2h.colr[i].iccpro.iccp);
     }
+    free(j->jp2h.colr);
+
     for (int i = 0; i <j->uinf_num; i ++) {
-        if(j->uuid_info[i].ulst.num_uuid) {
-            free(j->uuid_info[i].ulst.id);
+        if(j->uinf[i].ulst.num_uuid) {
+            free(j->uinf[i].ulst.id);
         }
-        if (j->uuid_info[i].url.location) {
-            free(j->uuid_info[i].url.location);
+        if (j->uinf[i].url.location) {
+            free(j->uinf[i].url.location);
         }
     }
-    if (j->uuid_info)
-        free(j->uuid_info);
+    if (j->uinf)
+        free(j->uinf);
     for (int i = 0; i< j->xml_num; i++) {
         if (j->xml[i].data)
             free(j->xml[i].data);
@@ -675,22 +766,29 @@ JP2_info(FILE *f, struct pic* p)
     fprintf(f, "---------------------------\n");
     fprintf(f, "\tIHDR height %d, width %d, num_comp %d, bpc %d, compression %d\n",
                 j->jp2h.ihdr.height, j->jp2h.ihdr.width, j->jp2h.ihdr.num_comp, j->jp2h.ihdr.bpc+1, j->jp2h.ihdr.c);
-    for (int i = 0; j->jp2h.ihdr.comps && i < j->jp2h.ihdr.num_comp; i++) {
-        fprintf(f, "\tbitsperpixel %d\n", j->jp2h.ihdr.comps[i].value_minus_one+1);
+    if (j->jp2h.bpcc.size == 0) {
+        fprintf(f, "\tbitsperpixel %d\n", j->jp2h.ihdr.bpc);
+    } else {
+        for (int i = 0; i < j->jp2h.ihdr.num_comp; i++) {
+            fprintf(f, "\tbitsperpixel %d\n", j->jp2h.bpcc.bits_per_comp[i] & 0x7F);
+        }
     }
-    fprintf(f, "\tCOLR method %d, precedence %d, approximation %d, colorspace %d\n",
-            j->jp2h.colr.method, j->jp2h.colr.precedence, j->jp2h.colr.approx, j->jp2h.colr.enum_cs);
-    if (j->jp2h.colr.method == RESTRICT_ICC_PROFILE) {
-        //fprintf profile
+    for (int i = 0; i < j->jp2h.n_colr; i++) {
+        struct jp2_colr_box *colr = &j->jp2h.colr[i];
+        fprintf(f, "\tCOLR method %d, precedence %d, approximation %d, colorspace %d\n",
+                colr->method, colr->precedence, colr->approx, colr->enum_cs);
+        if (colr->method == RESTRICT_ICC_PROFILE) {
+            //fprintf profile
+        }
     }
     for (int i = 0; i < j->uinf_num; i ++) {
-        fprintf(f, "\tulst num_uuid %d:\n", j->uuid_info[i].ulst.num_uuid);
-        for (int k = 0; k < j->uuid_info[i].ulst.num_uuid; k++) {
+        fprintf(f, "\tulst num_uuid %d:\n", j->uinf[i].ulst.num_uuid);
+        for (int k = 0; k < j->uinf[i].ulst.num_uuid; k++) {
             fprintf(f, "\t\t%016" PRIx64 "%016" PRIx64 "\n",
-                    j->uuid_info[i].ulst.id[k].v[0],
-                    j->uuid_info[i].ulst.id[k].v[1]);
+                    j->uinf[i].ulst.id[k].v[0],
+                    j->uinf[i].ulst.id[k].v[1]);
         }
-        fprintf(f, "\turl %s\n", j->uuid_info[i].url.location);
+        fprintf(f, "\turl %s\n", j->uinf[i].url.location);
     }
     // for (int i = 0; i < j->xml_num; i++) {
     //     fprintf(f, "\t xml %d: %s\n", i, j->xml[i].data);

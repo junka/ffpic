@@ -382,7 +382,7 @@ struct stss_box {
 };
 
 struct SampleGroupEntry {
-
+    BOX_ST;
 };
 
 struct sgpd_box {
@@ -395,7 +395,7 @@ struct sgpd_box {
     uint32_t entry_count;
 
     uint32_t *description_length;
-    struct SampleGroupEntry *entries;
+    // struct SampleGroupEntry *entries;
 };
 
 // see 8.9.2 SampleToGroup
@@ -468,8 +468,9 @@ struct hmhd_box {
     uint32_t reserved;
 };
 
+// subtitle media header box
 struct sthd_box {
-
+    FULL_BOX_ST;
 };
 
 struct nmhd_box {
@@ -507,6 +508,18 @@ struct mdia_box {
     struct minf_box minf;
 };
 
+// see ISO/IEC 23008-12 7.5 auxiliary image
+struct auxi_box {
+    FULL_BOX_ST;
+    char* aux_track_type;
+};
+
+// see ISO/IEC 23008-12 6.5.8
+struct auxC_box {
+    FULL_BOX_ST;
+    char *aux_type;       // null-terminated character string of URN
+    uint8_t *aux_subtype; // zero or more bytes until the end of the box
+};
 
 /* hint, cdsc, font, hind, vdep, vplx, subt */
 struct track_ref_type_box {
@@ -562,12 +575,24 @@ struct pixi_box {
     uint8_t* bits_per_channel;
 };
 
-/* for HEIF may have hvcC, ispe */
+
+struct irot_box {
+    BOX_ST;
+#if BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t reserved : 6;
+    uint8_t angle : 2; // * 90 in anti-clockwise direction
+#else
+    uint8_t angle:2;
+    uint8_t reserved:6;
+#endif
+};
+
+/* for HEIF may have hvcC, ispe, pixi, clap */
 /* for avif may have av1C, ispe, pixi, psap */
 struct ipco_box {
     BOX_ST;
-    struct box *property[16];
     int n_property;
+    struct box *property[16];
 };
 
 
@@ -706,15 +731,23 @@ int read_moov_box(FILE *f, struct moov_box *b);
 int read_meta_box(FILE *f, struct meta_box *meta);
 
 #define FFREAD_BOX_ST(b, f, fourcc) \
-    assert(read_box(f, b) == fourcc)
+    read_box(f, b); \
+    assert(b->type == fourcc)
 
 #define FFREAD_BOX_FULL(b, f, fourcc) \
-    assert(read_full_box(f, b) == fourcc)
+    read_full_box(f, b); \
+    assert(b->type == fourcc)
 
 void free_meta_box(struct meta_box *b);
 void free_moov_box(struct moov_box *b);
 
 int read_VisualSampleEntry(FILE *f, struct VisualSampleEntry *e);
+
+uint8_t read_u8(FILE *f);
+uint16_t read_u16(FILE *f);
+uint32_t read_u32(FILE *f);
+uint64_t read_u64(FILE *f);
+int read_till_null(FILE *f, char **str);
 
 #ifdef __cplusplus
 }

@@ -52,10 +52,8 @@ void vlog_set_global_level(uint32_t level);
  */
 int vlog_register(const char *name);
 
-
 int vlog(uint32_t level, uint32_t logtype, const char *format, ...)
     _format_printf(3, 4);
-
 
 /* Can't use 0, as it gives compiler warnings */
 #define VLOG_EMERG    1U  /**< System is unusable.               */
@@ -87,14 +85,16 @@ int vlog_register_type_and_pick_level(const char *name, uint32_t level_def);
 #define VABORT(t, ...)   VLOG(ALERT, t, __VA_ARGS__)
 #define VFATAL(t, ...)   VLOG(EMERG, t, __VA_ARGS__)
 
-
+#ifndef NDEBUG
 #define VLOG_REGISTER(name, level)                \
 int vlog_##name;                                        \
 static void __attribute__((constructor))__##name(void) {    \
     vlog_##name = vlog_register_type_and_pick_level(#name,    \
                             VLOG_##level);                \
 }
-
+#else
+#define VLOG_REGISTER(name, level)
+#endif
 
 void vlog_init(void);
 void vlog_uninit(void);

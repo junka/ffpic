@@ -8,6 +8,7 @@
 
 #include "byteorder.h"
 #include "basemedia.h"
+#include "gif.h"
 #include "utils.h"
 
 #include "vlog.h"
@@ -117,10 +118,10 @@ int
 read_ftyp(FILE *f, void *d)
 {
     struct ftyp_box *ftyp = (struct ftyp_box*)d;
-    int len;
 
     FFREAD(ftyp, 12, 1, f);
     ftyp->size = SWAP(ftyp->size);
+    VDBG(basemedia, "size %d, %s", ftyp->size, type2name(ftyp->major_brand));
     if (ftyp->size > 12) {
         ftyp->compatible_brands = malloc(((ftyp->size - 12)));
         FFREAD(ftyp->compatible_brands, 4, ((ftyp->size - 12)>>2), f);
@@ -285,18 +286,18 @@ read_infe_box(FILE *f, struct infe_box *b)
         }
         b->item_protection_index = read_u16(f);
         FFREAD(&b->item_type, 4, 1, f);
-        int l = read_till_null(f, &b->item_name);
+        int64_t l = read_till_null(f, &b->item_name);
         VDBG(basemedia, "infe name %s, type %s, id %d", b->item_name, type2name(b->item_type), b->item_id);
         if (b->item_type == TYPE2UINT("mime")) {
-            int m = read_till_null(f, &b->content_type);
+            read_till_null(f, &b->content_type);
             read_till_null(f, &b->content_encoding);
             // fgetc(f);
         } else if (b->item_type == TYPE2UINT("uri ")) {
             read_till_null(f, &b->content_type);
         } else {
-            if ((b->size > 20 + l) && b->version == 2) {
+            if (((int64_t)b->size - 20 > l) && b->version == 2) {
                 fseek(f, b->size - 20 -l, SEEK_CUR);
-            } else if ((b->size > 22 + l) && b->version == 3){
+            } else if (((int64_t)b->size > 22 + l) && b->version == 3) {
                 fseek(f, b->size - 22 -l, SEEK_CUR);
             }
         }
@@ -385,7 +386,6 @@ read_iref_box(FILE *f, struct iref_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'r', 'e', 'f'));
     int sz = b->size - 12;
-    int n = 1;
 
     while (sz) {
         if (b->refs_count == 0) {
@@ -448,17 +448,46 @@ read_colr_box(FILE *f, struct colr_box *b)
     return b->size;
 }
 
+int read_auxc_box(FILE *f, struct auxC_box *b) {
+
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('a', 'u', 'x', 'C'));
+    int l = read_till_null(f, &b->aux_type);
+    b->aux_subtype = malloc(b->size - l - 12);
+    VDBG(basemedia, "aux_type %s", b->aux_type);
+    FFREAD(b->aux_subtype, 1, b->size - l - 12, f);
+    // VDBG(heif, "aux_subtype %s", b->aux_subtype);
+    return b->size;
+}
+
+int
+read_clap_box(FILE *f, struct clap_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'l', 'a', 'p'));
+    b->cleanApertureWidthN = read_u32(f);
+    b->cleanApertureWidthD = read_u32(f);
+    b->cleanApertureHeightN = read_u32(f);
+    b->cleanApertureHeightD = read_u32(f);
+    b->horizOffN = read_u32(f);
+    b->horizOffD = read_u32(f);
+    b->vertOffN = read_u32(f);
+    b->vertOffD = read_u32(f);
+    return b->size;
+}
+
+int
+read_irot_box(FILE *f, struct irot_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'r', 'o', 't'));
+    b->angle = read_u8(f) & 0x3;
+    return b->size;
+}
+
 extern int read_hvcc_box(FILE *f, struct box **bn);
 extern int read_av1c_box(FILE *f, struct box **bn);
-extern int read_auxc_box(FILE *f, struct box **bn);
 
 static int
 read_ipco_box(FILE *f, struct ipco_box *b)
 {
-    struct ispe_box *ispe;
-    struct pixi_box *pixi;
-    struct colr_box *colr;
-
     FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'p', 'c', 'o'));
     int64_t s = b->size - 8;
     int n = 0;
@@ -478,23 +507,34 @@ read_ipco_box(FILE *f, struct ipco_box *b)
                 b->property[n++] = cc;
                 break;
             case FOURCC2UINT('i', 's', 'p', 'e'):
-                ispe = calloc(1, sizeof(struct ispe_box));
-                s -= read_ispe_box(f, ispe);
-                b->property[n++] = (struct box *)ispe;
+                cc = calloc(1, sizeof(struct ispe_box));
+                s -= read_ispe_box(f, (struct ispe_box *)cc);
+                b->property[n++] = (struct box *)cc;
                 break;
             case FOURCC2UINT('p', 'i', 'x', 'i'):
-                pixi = calloc(1, sizeof(struct pixi_box));
-                s -= read_pixi_box(f, pixi);
-                b->property[n++] = (struct box *)pixi;
+                cc = calloc(1, sizeof(struct pixi_box));
+                s -= read_pixi_box(f, (struct pixi_box *)cc);
+                b->property[n++] = (struct box *)cc;
                 break;
             case FOURCC2UINT('c', 'o', 'l', 'r'):
-                colr = calloc(1, sizeof(struct colr_box));
-                s -= read_colr_box(f, colr);
-                b->property[n++] = (struct box *)colr;
+                cc = calloc(1, sizeof(struct colr_box));
+                s -= read_colr_box(f, (struct colr_box *)cc);
+                b->property[n++] = (struct box *)cc;
                 break;
             case FOURCC2UINT('a', 'u', 'x', 'C'):
-                s -= read_auxc_box(f, &cc);
-                b->property[n++] = cc;
+                cc = calloc(1, sizeof(struct auxC_box));
+                s -= read_auxc_box(f, (struct auxC_box *)cc);
+                b->property[n++] = (struct box *)cc;
+                break;
+            case FOURCC2UINT('c', 'l', 'a', 'p'):
+                cc = calloc(1, sizeof(struct clap_box));
+                s -= read_clap_box(f, (struct clap_box*)cc);
+                b->property[n++] = (struct box *)cc;
+                break;
+            case FOURCC2UINT('i', 'r', 'o', 't'):
+                cc = calloc(1, sizeof(struct irot_box));
+                s -= read_irot_box(f, (struct irot_box*)cc);
+                b->property[n++] = (struct box *)cc;
                 break;
             default:
                 s -= (p.size);
@@ -547,7 +587,6 @@ read_iprp_box(FILE *f, struct iprp_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'p', 'r', 'p'));
     int64_t s = b->size - 8;
-    struct box *cc = NULL;
 
     while (s > 0) {
         struct box p;
@@ -706,7 +745,7 @@ int read_stsd_box(FILE *f, struct stsd_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 'd'));
     b->entry_count = read_u32(f);
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         struct box p;
         probe_box(f, &p);
         struct SampleEntry *e = NULL;
@@ -720,9 +759,13 @@ int read_stsd_box(FILE *f, struct stsd_box *b)
     return b->size;
 }
 
-int read_stdp_box(FILE *f, struct stdp_box *b)
+int read_stdp_box(FILE *f, struct stdp_box *b, int sample_count)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 'd', 'p'));
+    b->priority = calloc(sample_count, 2);
+    for (int i = 0; i < sample_count; i++) {
+        b->priority[i] = read_u16(f);
+    }
     return b->size;
 }
 
@@ -735,7 +778,7 @@ int read_stts_box(FILE *f, struct stts_box *b)
     if (b->entry_count) {
         b->sample_count = calloc(b->entry_count, 4);
         b->sample_delta = calloc(b->entry_count, 4);
-        for (int i = 0; i < b->entry_count; i++) {
+        for (uint32_t i = 0; i < b->entry_count; i++) {
             b->sample_count[i] = read_u32(f);
             b->sample_delta[i] = read_u32(f);
         }
@@ -749,7 +792,7 @@ int read_ctts_box(FILE *f, struct ctts_box *b)
     b->entry_count = read_u32(f);
     b->sample_count = calloc(b->entry_count, 4);
     b->sample_offset = calloc(b->entry_count, 4);
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         b->sample_count[i] = read_u32(f);
         b->sample_offset[i] = read_u32(f);
     }
@@ -766,7 +809,7 @@ int read_stsc_box(FILE *f, struct stsc_box *b)
     b->first_chunk = calloc(b->entry_count, 4);
     b->sample_per_chunk = calloc(b->entry_count, 4);
     b->sample_description_index = calloc(b->entry_count, 4);
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         b->first_chunk[i] = read_u32(f);
         b->sample_per_chunk[i] = read_u32(f);
         b->sample_description_index[i] = read_u32(f);
@@ -783,7 +826,7 @@ int read_stco_box(FILE *f, struct stco_box *b)
            b->entry_count);
 
     b->chunk_offset = calloc(b->entry_count, 4);
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         b->chunk_offset[i] = read_u32(f);
     }
     return b->size;
@@ -798,7 +841,7 @@ int read_stsz_box(FILE *f, struct stsz_box *b)
            type2name(b->type), b->size, b->sample_size, b->sample_count);
 
     b->entry_size = calloc(b->sample_count, 4);
-    for (int i = 0; i < b->sample_count; i++) {
+    for (uint32_t i = 0; i < b->sample_count; i++) {
         b->entry_size[i] = (b->sample_size == 0) ? read_u32(f) : b->sample_size;
         VDBG(basemedia, "entry size %d", b->entry_size[i]);
     }
@@ -811,20 +854,12 @@ int read_stss_box(FILE *f, struct stss_box *b)
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('s', 't', 's', 's'));
     b->entry_count = read_u32(f);
     b->sample_number = calloc(b->entry_count, 4);
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         b->sample_number[i] = read_u32(f);
     }
     return b->size;
 }
 
-int read_SampleGroupEntry(FILE *f, struct SampleGroupEntry *e, int len)
-{
-    uint32_t grouping_type;
-    FFREAD(&grouping_type, 4, 1, f);
-    VDBG(basemedia, "SampleGroupEntry %d: %d", (grouping_type), len);
-    fseek(f, len - 4, SEEK_CUR);
-    return 0;
-}
 
 int read_sgpd_box(FILE *f, struct sgpd_box *b)
 {
@@ -836,15 +871,15 @@ int read_sgpd_box(FILE *f, struct sgpd_box *b)
     } else if (b->version >= 2) {
         b->default_sample_description_index = read_u32(f);
     }
-    VDBG(basemedia, "version %d, name %s, default_length %d", b->version,
+    VDBG(basemedia, "SGPD: version %d, name %s, default_length %d", b->version,
            type2name(b->grouping_type), b->default_length);
 
     b->entry_count = read_u32(f);
     VDBG(basemedia, "size %" PRIu64 ", name %s, count %d", b->size,
            type2name(b->grouping_type), b->entry_count);
     b->description_length = calloc(b->entry_count, 4);
-    b->entries = calloc(b->entry_count, sizeof(struct SampleGroupEntry));
-    for (int i = 0; i < b->entry_count; i++) {
+    // b->entries = calloc(b->entry_count, sizeof(struct SampleGroupEntry));
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         if (b->version == 1) {
             if (b->default_length == 0) {
                 b->description_length[i] = read_u32(f);
@@ -853,7 +888,7 @@ int read_sgpd_box(FILE *f, struct sgpd_box *b)
             }
         }
         // SampleGroupEntry
-        read_SampleGroupEntry(f, b->entries + i, b->description_length[i]);
+        // read_SampleGroupEntry(f, b->entries + i, b->description_length[i]);
     }
     return b->size;
 }
@@ -871,7 +906,7 @@ int read_sbgp_box(FILE *f, struct sbgp_box *b)
     if (b->entry_count) {
         b->sample_count = calloc(b->entry_count, 4);
         b->group_description_index = calloc(b->entry_count, 4);
-        for (int i = 0; i < b->entry_count; i++) {
+        for (uint32_t i = 0; i < b->entry_count; i++) {
             b->sample_count[i] = read_u32(f);
             b->group_description_index[i] = read_u32(f);
         }
@@ -890,7 +925,7 @@ int read_stbl_box(FILE *f, struct stbl_box *b)
         VDBG(basemedia, "STBL: %s left %"PRIu64"", type2name(type), s);
         switch (type) {
         case FOURCC2UINT('s', 't', 'd', 'p'):
-            read_stdp_box(f, &b->stdp);
+            read_stdp_box(f, &b->stdp, b->stsz.sample_count);
             break;
         case FOURCC2UINT('s', 't', 't', 's'):
             read_stts_box(f, &b->stts);
@@ -977,7 +1012,6 @@ int read_mdia_box(FILE *f, struct mdia_box *b)
     FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'd', 'i', 'a'));
     read_mdhd_box(f, &b->mdhd);
     read_hdlr_box(f, &b->hdlr);
-    int64_t s = b->size - b->mdhd.size - b->hdlr.size - 8;
     struct box p;
     uint32_t type = probe_box(f, &p);
     if (type == FOURCC2UINT('e', 'l', 'n', 'g')) {
@@ -1004,13 +1038,13 @@ read_grpl_box(FILE *f, struct grpl_box *b)
     int n = 0;
     while (s) {
         struct EntityToGroupBox *p = malloc(sizeof(struct EntityToGroupBox));
-        uint32_t type = read_full_box(f, p);
+        read_full_box(f, p);
         p->group_id = read_u32(f);
         p->num_entities_in_group = read_u32(f);
         VDBG(basemedia, "group_id %d, type %s, num_entities_in_group %d",
                p->group_id, type2name(p->type), p->num_entities_in_group);
         p->entity_id = calloc(p->num_entities_in_group, 4);
-        for (int i = 0; i < p->num_entities_in_group; i++) {
+        for (uint32_t i = 0; i < p->num_entities_in_group; i++) {
             p->entity_id[i] = read_u32(f);
         }
         b->entities[n++] = p;
@@ -1149,7 +1183,7 @@ void free_hdlr_box(struct hdlr_box *b)
 void free_dref_box(struct dref_box *b)
 {
     if (b->entry_count) {
-        for (int i = 0; i < b->entry_count; i++) {
+        for (uint32_t i = 0; i < b->entry_count; i++) {
             struct DataEntryBox *e = b->entries + i;
             free(e->name);
             free(e->location);
@@ -1177,7 +1211,7 @@ void free_iloc_box(struct iloc_box *b)
 void free_iinf_box(struct iinf_box *b)
 {
     if (b->entry_count) {
-        for (int i = 0; i < b->entry_count; i++) {
+        for (uint32_t i = 0; i < b->entry_count; i++) {
             if (b->item_infos[i].item_name)
                 free(b->item_infos[i].item_name);
             if (b->item_infos[i].content_type)
@@ -1211,8 +1245,14 @@ void free_pixi_box(struct pixi_box *b) {
         free(b->bits_per_channel);
 }
 
+void free_auxc_box(struct auxC_box *b) {
+    if (b->aux_type)
+        free(b->aux_type);
+    if (b->aux_subtype)
+        free(b->aux_subtype);
+}
+
 extern void free_hvcc_box(struct box *b);
-extern void free_auxc_box(struct box *b);
 
 void free_ipco_box(struct ipco_box *b)
 {
@@ -1223,7 +1263,7 @@ void free_ipco_box(struct ipco_box *b)
             } else if (b->property[i]->type == FOURCC2UINT('p', 'i', 'x', 'i')) {
                 free_pixi_box((struct pixi_box *)b->property[i]);
             } else if(b->property[i]->type == FOURCC2UINT('a', 'u', 'x', 'C')) {
-                free_auxc_box(b->property[i]);
+                free_auxc_box((struct auxC_box *)b->property[i]);
             }
             free(b->property[i]);
         }
@@ -1232,7 +1272,7 @@ void free_ipco_box(struct ipco_box *b)
 
 void free_ipma_box(struct ipma_box *b)
 {
-    for (int i = 0; i < b->entry_count; i++) {
+    for (uint32_t i = 0; i < b->entry_count; i++) {
         if (b->entries[i].association_count) {
             free(b->entries[i].property_index);
         }
@@ -1269,8 +1309,8 @@ void free_elng_box(struct elng_box *b)
 
 void free_stsd_box(struct stsd_box *b)
 {
-    if (b->entry_count) {
-        free(b->entries);
+    for (uint32_t i = 0; i < b->entry_count; i++) {
+        free(b->entries[i]);
     }
 }
 
@@ -1328,7 +1368,7 @@ void free_sgpd_box(struct sgpd_box *b)
 {
     if (b->entry_count) {
         free(b->description_length);
-        free(b->entries);
+        // free(b->entries);
     }
 }
 

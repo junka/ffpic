@@ -19,7 +19,7 @@ VLOG_REGISTER(png, INFO)
 
 #define CRC_ASSER(a, b) b = SWAP(b);  assert(a == b);
 
-static int 
+static int
 PNG_probe(const char* filename)
 {
     FILE *f = fopen(filename, "rb");
@@ -200,7 +200,7 @@ remove_padding_bits(uint8_t *out, const uint8_t *in,
 }
 
 static void
-PNG_unfilter(PNG *p, const uint8_t *buf, int size)
+PNG_unfilter(PNG *p, const uint8_t *buf)
 {
     // uint8_t type = *buf;
     int depth = calc_png_bits_per_pixel(p);
@@ -208,7 +208,7 @@ PNG_unfilter(PNG *p, const uint8_t *buf, int size)
     int pitch = (p->ihdr.width * depth + 7) / 8;
 
     uint8_t *prevline = 0;
-    assert((1 + pitch) * p->ihdr.height <= (uint32_t)size);
+    assert((1 + pitch) * p->ihdr.height <= (uint32_t)p->size);
 
     for (uint32_t y = 0; y < p->ihdr.height; y++) {
         int outindex = pitch * y;
@@ -612,7 +612,8 @@ PNG_load(const char* filename, int skip_flag)
 
     if (!skip_flag) {
         uint8_t* udata = malloc(b->size);
-        int a = deflate_decode(b->compressed, b->compressed_size, udata, &b->size);
+        deflate_decode(b->compressed, b->compressed_size, udata, &b->size);
+
 #if 0
         hexdump(stdout, "png raw data", "", compressed, 32);
         hexdump(stdout, "png decompress data", "", udata, 32);
@@ -621,9 +622,8 @@ PNG_load(const char* filename, int skip_flag)
         b->compressed = NULL;
         b->compressed_size = 0;
         b->data = (uint8_t*)malloc(b->size);
-        VDBG(png, "ret %d, size %d\n", a, b->size);
 
-        PNG_unfilter(b, udata, b->size);
+        PNG_unfilter(b, udata);
         free(udata);
     }
     p->width = b->ihdr.width;

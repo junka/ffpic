@@ -317,7 +317,6 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     }
     int sym_count = sort_symbol_descrease(freq, symbols);
     uint8_t count[16] = {0}; // put codelen here
-    int code_len = 0;
     hnode **n = malloc(sizeof(hnode *) * sym_count);
     for (int i = 0; i < sym_count; i++) {
         n[i] = malloc(sizeof(hnode));

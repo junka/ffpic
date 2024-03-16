@@ -1289,8 +1289,10 @@ struct cu {
     int y0;
     int nCbS;
     int log2CbSize;
-    struct cu_extension ext[64][64];
-
+    // struct cu_extension ext[64][64];
+#ifdef ENABLE_3D
+    struct cu_extension **ext;
+#endif
     struct predication_unit pu[8][8];
 
     struct trans_tree tt;
@@ -1299,7 +1301,6 @@ struct cu {
     int32_t CuQpOffsetCr;
     int PaletteEscapeVal[3][64][64];
     uint32_t PaletteIndexMap[64][64];
-    // struct trans_unit *tu;
 };
 
 

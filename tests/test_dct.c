@@ -205,7 +205,7 @@ void fdct2d8x8(int16_t *data) {
     data[i] = buf[i];
 }
 
-int test_dct() {
+int test_dct(void) {
     int16_t data[] = {
         117, 115, 112, 112, 110, 108, 103, 101, 117, 115, 113, 113, 111,
         108, 103, 99,  116, 116, 115, 113, 111, 108, 102, 98,  116, 116,
@@ -222,7 +222,7 @@ int test_dct() {
     };
 
     const struct dct_ops *dct = get_dct_ops(8);
-    int16_t out[64];
+    // int16_t out[64];
     dct->fdct_8x8(data);
     // for (int i = 0; i < 64; i ++) {
     //   data1[i] -= 128;
@@ -264,7 +264,7 @@ int test_dct() {
 }
 
 
-int main()
+int main(void)
 {
 
     return test_dct();

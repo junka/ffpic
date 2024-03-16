@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -42,7 +43,8 @@ int test_decoder(void)
         return -1;
     }
 
-    int ret = 0, i = 0;
+    int ret = 0;
+    size_t i = 0;
     do {
         ret = huffman_decode_symbol(hdec, dtree);
         // printf("get %c expect %c\n", ret, expect[i]);
@@ -51,7 +53,6 @@ int test_decoder(void)
         }
     } while (ret != -1 && i < len);
 
-end_decode:
     free(s->syms);
     free(s);
     huffman_codec_free(hdec);
@@ -95,7 +96,7 @@ int test_encoder(void)
     }
     //huffman_dump_table(stdout, tree);
     struct huffman_codec *codec = huffman_codec_init(NULL, 0);
-    for (int i = 0; i< sizeof(data)/sizeof(data[0])-1; i++) {
+    for (size_t i = 0; i < sizeof(data) / sizeof(data[0]) - 1; i++) {
         huffman_encode_symbol(codec, tree, data[i]);
     }
     uint8_t *got;

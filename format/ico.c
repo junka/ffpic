@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include "colorspace.h"
+#include "utils.h"
 #include "ico.h"
 #include "file.h"
 #include "vlog.h"
@@ -33,7 +34,7 @@ ICO_probe(const char *filename)
 }
 
 static struct pic* 
-ICO_load(const char *filename, int skip_flag)
+ICO_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(ICO));
     ICO *c = p->pic;

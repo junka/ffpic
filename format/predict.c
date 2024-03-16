@@ -31,7 +31,8 @@ static inline void pred_TM(uint8_t *dst, uint8_t *top, uint8_t *left, int size, 
 // rfc6383 12.3
 
 //===== 4X4 luma ==========================================
-static void pred_B_DC(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_DC(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                      int x UNUSED, int y UNUSED) {
     // DC
     uint32_t dc = 0;
     int i;
@@ -63,7 +64,7 @@ static void pred_B_DC(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
 }
 
 static void pred_B_TM(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
-                     int x UNUSED, int y UNUSED) {
+                      int x UNUSED, int y UNUSED) {
     pred_TM(dst, top, left, 4, stride);
 }
 
@@ -93,8 +94,8 @@ static void pred_B_VE(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
     }
 }
 
-static void pred_B_HE(uint8_t *dst, uint8_t *top, uint8_t *left,
-                      int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_HE(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                      int x UNUSED, int y UNUSED) {
     /*  horizontal
     | P  | A | B | C | D | E | F | G | H |
     |----|---|---|---|---|---|---|---|---|
@@ -119,7 +120,7 @@ static void pred_B_HE(uint8_t *dst, uint8_t *top, uint8_t *left,
 }
 
 static void pred_B_LD(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
-                      int stride, int x, int y) {
+                      int stride, int x UNUSED, int y UNUSED) {
     /* Down-Left
     | P  | A | B | C | D | E | F | G | H |
     |----|---|---|---|---|---|---|---|---|
@@ -141,7 +142,8 @@ static void pred_B_LD(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
     DST(3, 3) = AVG3(top[6], top[7], top[7]);
 }
 
-static void pred_B_RD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_RD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                      int x UNUSED, int y UNUSED) {
     /* Down-right
     | X  | A | B | C | D | E | F | G | H |
     |----|---|---|---|---|---|---|---|---|
@@ -164,7 +166,8 @@ static void pred_B_RD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     DST(3, 0) = AVG3P(left + 2);
 }
 
-static void pred_B_VR(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_VR(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                      int x UNUSED, int y UNUSED) {
     /* Vertical-Right
     | X  | A | B | C | D | E | F | G | H |
     |----|---|---|---|---|---|---|---|---|
@@ -191,7 +194,8 @@ static void pred_B_VR(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     DST(2, 0) = AVG3(left[1], left[0], top[-1]);
 }
 
-static void pred_B_VL(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_VL(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
+                      int stride, int x UNUSED, int y UNUSED) {
     /* Vertical-Left (1/3 step)
     | P  | A | B | C | D | E | F | G | H |
     |----|---|---|---|---|---|---|---|---|
@@ -216,7 +220,8 @@ static void pred_B_VL(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int
     DST(3, 3) = AVG3P(top + 6);
 }
 
-static void pred_B_HD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x UNUSED, int y UNUSED) {
+static void pred_B_HD(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                      int x UNUSED, int y UNUSED) {
     // Horizontal-Down
     DST(0, 0) = DST(1, 2) = AVG2(left[0], *(top - 1));
     DST(1, 0) = DST(2, 2) = AVG2P(left);
@@ -276,7 +281,8 @@ static void pred_DC_UV(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, in
     Put8x8uv(dc, dst, stride);
 }
 
-static void pred_TM_UV(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x, int y) {
+static void pred_TM_UV(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                       int x UNUSED, int y UNUSED) {
     pred_TM(dst, top, left, 8, stride);
 }
 
@@ -326,7 +332,7 @@ static void pred_DC_16(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, in
     }
 }
 
-static void pred_VE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left,
+static void pred_VE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left UNUSED,
                        int stride, int x UNUSED, int y UNUSED) {
     // vertical
     for (int j = 0; j < 16; ++j) {
@@ -334,7 +340,7 @@ static void pred_VE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left,
     }
 }
 
-static void pred_HE_16(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
+static void pred_HE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left UNUSED,
                        int stride, int x UNUSED, int y UNUSED) {
     // horizontal
     for (int j = 16; j > 0; --j) {
@@ -343,18 +349,16 @@ static void pred_HE_16(uint8_t *dst, uint8_t *top, uint8_t *left UNUSED,
     }
 }
 
-static void pred_TM_16(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x, int y) {
+static void pred_TM_16(uint8_t *dst, uint8_t *top, uint8_t *left, int stride,
+                       int x UNUSED, int y UNUSED) {
     pred_TM(dst, top, left, 16, stride);
 }
 
 typedef void (*PredFunc)(uint8_t *dst, uint8_t *top, uint8_t *left, int stride, int x, int y);
 
 static PredFunc PredLuma4[NUM_BMODES] = {
-    pred_B_DC, pred_B_TM,
-    pred_B_VE, pred_B_HE,
-    pred_B_RD, pred_B_VR,
-    pred_B_LD, pred_B_VL,
-    pred_B_HD, pred_B_HU
+    pred_B_DC, pred_B_TM, pred_B_VE, pred_B_HE, pred_B_RD,
+    pred_B_VR, pred_B_LD, pred_B_VL, pred_B_HD, pred_B_HU
 };
 
 static PredFunc PredChroma8[4] = {
@@ -710,8 +714,8 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                                          -390,  -315,  -256, -315,  -390,
                                          -482,  -630,  -910, -1638, -4096};
 
-    int ref_arr[67];
-    int *ref = ref_arr + 33;
+    int ref_arr[97];
+    int *ref = ref_arr + 34;// ref range from -32 to 0 to 63
 
     if (predModeIntra >= 18) {
         for (int x = 0; x <= nTbS; x++) {
@@ -721,7 +725,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
         if (angle < 0) {
             if (((nTbS * angle) >> 5) < -1) {
                 for (int x = -1; x >= ((angle *nTbS) >> 5); x--) {
-                    if (((x * invAngle[predModeIntra-11] + 128) >> 8) == 0) {
+                    if (((x * invAngle[predModeIntra - 11] + 128) >> 8) == 0) {
                         ref[x] = top[-1];
                     } else {
                         ref[x] = left[-1 + ((x * invAngle[predModeIntra-11] + 128) >> 8)];
@@ -780,8 +784,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
 
                 if (predModeIntra == 10 && cIdx == 0 && nTbS < 32 &&
                     disableIntraBoundaryFilter == 0 && y == 0) {
-                    DST(y, x) = clip3(0, (1 << (bitdepth)) - 1,
-                                      left[y] + ((top[x] - top[-1]) >> 1));
+                    DST(y, x) = clip3(0, (1 << (bitdepth)) - 1, left[y] + ((top[x] - top[-1]) >> 1));
                 }
             }
         }

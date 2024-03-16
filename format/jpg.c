@@ -250,7 +250,7 @@ encode_vlc(int code)
 }
 
 static void
-dequant_data_unit(struct jpg_decoder *d, int16_t dstbuf[64], int16_t srcbuf[64], int start, int end)
+dequant_data_unit(struct jpg_decoder *d, int16_t dstbuf[64], int16_t srcbuf[64], int end)
 {
     for (int i = 0; i <= end; i++) {
         dstbuf[i] = srcbuf[i] * d->quant[i];
@@ -508,10 +508,10 @@ JPG_decode_scan(JPG* j, uint8_t *rawdata, int len)
     int16_t *yuv[3];
     int skip = 0;
     for (uint8_t i = 0; i < j->sof.components_num; ++i) {
-        int v = j->sof.colors[i].vertical;
-        int h = j->sof.colors[i].horizontal;
+        // int v = j->sof.colors[i].vertical;
+        // int h = j->sof.colors[i].horizontal;
         table_cid[j->sof.colors[i].cid] = i;
-        assert(h * v <= 4);
+        // assert(h * v <= 4);
     }
 
     for (int y = 0; y < height; y += ystride) {
@@ -548,7 +548,7 @@ JPG_decode_scan(JPG* j, uint8_t *rawdata, int len)
                 for (int vi = 0; vi < v && y + vi * 8 < height; vi ++) {
                     for (int hi = 0; hi < h && x + hi * 8 < width; hi ++) {
                         dequant_data_unit(d[k], &Y[k][64 * (vi * h + hi)],
-                                          &yuv[k][64 * (vi * h + hi)], start, end);
+                                          &yuv[k][64 * (vi * h + hi)], end);
                         dct->idct_8x8(&Y[k][64 * (vi * h + hi)], 8);
                     }
                 }
@@ -590,7 +590,7 @@ JPG_decode_scan(JPG* j, uint8_t *rawdata, int len)
 }
 
 static uint8_t *
-read_compressed_scan(JPG* j, FILE *f, int *len)
+read_compressed_scan(FILE *f, int *len)
 {
     size_t pos = ftell(f);
     while (1) {
@@ -653,7 +653,7 @@ read_sos(JPG* j, FILE *f, bool skip_flag)
     VINFO(jpg, "sos successive approximation bits high %d, low %d", j->sos.approx_bits_h,
          j->sos.approx_bits_l);
     int len;
-    uint8_t* rawdata = read_compressed_scan(j, f, &len);
+    uint8_t* rawdata = read_compressed_scan(f, &len);
     if (!skip_flag) {
         JPG_decode_scan(j, rawdata, len);
     }

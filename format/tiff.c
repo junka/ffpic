@@ -8,6 +8,7 @@
 #include "tiff.h"
 #include "lzw.h"
 #include "vlog.h"
+#include "utils.h"
 #include "colorspace.h"
 
 VLOG_REGISTER(tiff, INFO)
@@ -346,7 +347,7 @@ tiff_compose_image_from_de(TIFF *t)
 
 
 static struct pic*
-TIFF_load(const char *filename, int skip_flag)
+TIFF_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(TIFF));
     TIFF *t = p->pic;

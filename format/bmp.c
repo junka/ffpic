@@ -98,7 +98,7 @@ RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int dep
             struct bmp_color_entry *ct)
 {
     int p = 0;
-    uint8_t lo, hi, px;
+    uint8_t px;
     int y = height > 0 ? height - 1 : 0;
     int delta = (height > 0) ? -1 : 1;
     int x = 0;
@@ -207,7 +207,7 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
 }
 
 static struct pic*
-BMP_load(const char* filename, int skip_flag)
+BMP_load(const char* filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;
@@ -230,9 +230,8 @@ BMP_load(const char* filename, int skip_flag)
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
                 fread(b->palette, 4, 1, f);
-                vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n",
-                     b->palette[i].blue, b->palette[i].green, b->palette[i].red,
-                     b->palette[i].alpha);
+                VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
+                     b->palette[i].red, b->palette[i].alpha);
             }
         }
     } else if (size == 40 || memcmp("BM", &b->file_header.file_type, 2) == 0) {
@@ -259,9 +258,8 @@ BMP_load(const char* filename, int skip_flag)
             fread(b->palette, 4, color_num, f);
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
-                vlog(VLOG_DEBUG, vlog_bmp, " %d %d %d, %d\n",
-                     b->palette[i].blue, b->palette[i].green, b->palette[i].red,
-                     b->palette[i].alpha);
+                VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
+                     b->palette[i].red, b->palette[i].alpha);
             }
         }
     }

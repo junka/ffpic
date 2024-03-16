@@ -37,20 +37,19 @@ BPG_probe(const char *filename)
 
 uint32_t read_ue7(FILE *f)
 {
-    uint32_t ret = 0, l = 0;
+    uint32_t ret = 0;
     uint8_t value = fgetc(f);
     ret = value & 0x7f;
     while ((value & 0x80) != 0) {
         ret <<= 7;
         value = fgetc(f);
         ret |= (value & 0x7f);
-        l += 8;
     }
     return ret;
 }
 
 struct pic*
-BPG_load(const char *filename, int skip_flag)
+BPG_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(BPG));
     BPG *h = p->pic;
@@ -61,15 +60,15 @@ BPG_load(const char *filename, int skip_flag)
     h->picture_height = read_ue7(f);
     h->picture_data_length = read_ue7(f);
     if (h->head.extension_present_flag) {
-        uint32_t extension_len = read_ue7(f);
+        // uint32_t extension_len = read_ue7(f);
         while (1) {
-            uint32_t tag = read_ue7(f);
-            uint32_t tag_len = read_ue7(f);
-            if (tag == 5) {
-                //TODO
-            } else {
-                //TODO
-            }
+            // uint32_t tag = read_ue7(f);
+            // uint32_t tag_len = read_ue7(f);
+            // if (tag == 5) {
+            //     //TODO
+            // } else {
+            //     //TODO
+            // }
         }
     }
 

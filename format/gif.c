@@ -228,7 +228,7 @@ void read_gif(FILE* f, GIF *gif) {
 }
 
 static struct pic *
-GIF_load_one(FILE *f, Graphic *g)
+GIF_load_one(Graphic *g)
 {
     struct pic *p = pic_alloc(sizeof(GIF *));
     p->pic = NULL;
@@ -246,23 +246,26 @@ GIF_load_one(FILE *f, Graphic *g)
 static struct pic *
 GIF_load(const char *filename, int skip_flag)
 {
-    GIF* g = malloc(sizeof(GIF));
+    struct pic *p = pic_alloc(sizeof(GIF));
+    GIF* g = (GIF *)p->pic;
     FILE* f = fopen(filename, "rb");
     read_gif(f, g);
     fclose(f);
-    struct pic *p = NULL;
-    if (g->graphic_count > 1) {
-        for (int i = 0; i < g->graphic_count; i++) {
-            p = GIF_load_one(f, &g->graphics[i]);
-            file_enqueue_pic(p);
+    if (!skip_flag) {
+        if (g->graphic_count > 1) {
+            for (int i = 0; i < g->graphic_count; i++) {
+                p = GIF_load_one(&g->graphics[i]);
+                file_enqueue_pic(p);
+            }
+            p->pic = g;
+            return NULL;
+        } else {
+            p = GIF_load_one(g->graphics);
+            p->pic = g;
+            return p;
         }
-        p->pic = g;
-        return NULL;
-    } else {
-        p = GIF_load_one(f, g->graphics);
-        p->pic = g;
-        return p;
     }
+    return p;
 }
 
 static int 

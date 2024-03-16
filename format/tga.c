@@ -7,6 +7,7 @@
 #include "file.h"
 #include "tga.h"
 #include "colorspace.h"
+#include "utils.h"
 
 static int 
 TGA_probe(const char *filename)
@@ -133,7 +134,7 @@ read_compress_data(TGA *t, FILE *f)
 }
 
 static struct pic* 
-TGA_load(const char *filename, int skip_flag)
+TGA_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(TGA));
     TGA *t = p->pic;

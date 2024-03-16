@@ -1,6 +1,7 @@
 #ifndef _JP2_H_
 #define _JP2_H_
 
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -10,6 +11,7 @@ extern "C" {
 //following jp box and ftyp box, super box
 #define JP2H FOURCC2UINT('j', 'p', '2', 'h')
 
+#define PRFL FOURCC2UINT('p', 'r', 'f', 'l')
 
 //other jp2 boxes
 #define IHDR FOURCC2UINT('i', 'h', 'd', 'r')
@@ -90,30 +92,32 @@ extern "C" {
 
 #pragma pack(push, 1)
 
+// I.6 Box definition share the same struct with basemedia
+// LBox TBox XLBox DBox, which could use BOX_ST
+
 //first box, JP signature box
 struct jp2_signature_box {
-    uint32_t len;
-    uint32_t major_type;
-    uint32_t minor_type;
+    BOX_ST;
+    uint32_t magic; //0x0D0A870A
 };
 
-// see ISO/IEC 15444-1 I.5.3.2
-struct jp2_bpc {
-    uint8_t sign:1; //0 for unsigned, 1 for signed
-    uint8_t value_minus_one:7;
+// see ISO/IEC 15444-1
+struct jp2_bpcc_box {
+    BOX_ST;
+    uint8_t *bits_per_comp;//low 7bits as value, high 1bit as sign
 };
 
-// see ISO/IEC 15444-1 I.5.3.1
-struct jp2_ihdr {
+// see ISO/IEC 15444-1
+struct jp2_ihdr_box {
+    BOX_ST;
     uint32_t height;
     uint32_t width;
     uint16_t num_comp;
+
     uint8_t bpc;    //bits per component
     uint8_t c;      //compression type
     uint8_t unkc;   //unkown colorspace
     uint8_t ipr;    //intellectual property
-
-    struct jp2_bpc *comps;
 };
 
 struct jp2_icc_profile {
@@ -126,7 +130,8 @@ enum color_method {
     RESTRICT_ICC_PROFILE = 2,
 };
 
-struct jp2_colr {
+struct jp2_colr_box {
+    BOX_ST;
     uint8_t method;     /* see enum color_method */
     uint8_t precedence; /* reserved for iso use, set to zero */
     uint8_t approx;     /* approximation set to zero */
@@ -150,38 +155,65 @@ struct jp2_cmap_component {
 
 // };
 
-struct pclr_chan {
-    uint8_t sign:1;
-    uint8_t size:7;
-};
-
-struct jp2_pclr {
+struct jp2_pclr_box {
+    BOX_ST;
     uint16_t num_entry;
     uint8_t num_channel;
-    struct pclr_chan * channels;
+    uint16_t palette_input; //
+    uint16_t *component;
+    uint8_t *depth;
     uint32_t *entries;
     // struct jp2_cmap_component * cmap;
 };
 
-
-struct jp2_cdef_chan {
-    uint16_t chan_id;
-    uint16_t type;
-    uint16_t assoc;
+// capture resolution box
+struct jp2_resc_box {
+    BOX_ST;
+    uint16_t vrcn;
+    uint16_t vrcd;
+    uint16_t hrcn;
+    uint16_t hrcd;
+    uint8_t vrce;
+    uint8_t hrce;
 };
 
-struct jp2_cdef {
-    uint16_t num_chans;
-    struct jp2_cdef_chan * ents;
+struct jp2_resd_box {
+    BOX_ST;
+    uint16_t vrdn;
+    uint16_t vrdd;
+    uint16_t hrdn;
+    uint16_t hrdd;
+    uint8_t vrde;
+    uint8_t hrde;
+};
+
+struct jp2_res_box {
+    BOX_ST;
+    struct jp2_resc_box resc;
+    struct jp2_resd_box resd;
+};
+
+struct jp2_cdef_box {
+    BOX_ST;
+    uint16_t num_comp;
+    uint16_t *comp_id;
+    uint16_t *comp_type;
+    uint16_t *comp_assoc;
 };
 
 
 struct jp2h_box {
-    struct jp2_ihdr ihdr;
-    struct jp2_colr colr;
-    // struct jp2_cmap cmap;
-    struct jp2_cdef cdef;
-    struct jp2_pclr pclr;
+    BOX_ST;
+    struct jp2_ihdr_box ihdr; // required
+    struct jp2_bpcc_box bpcc; // optional
+
+    int n_colr;
+    struct jp2_colr_box *colr; // required
+
+    struct jp2_pclr_box pclr; // optional
+    struct jp2_cdef_box cdef; // optional
+    struct jp2_res_box res; //optional
+
 };
 
 
@@ -190,35 +222,37 @@ struct jp2h_box {
 // };
 
 //see I.7.1 xml boxes
-struct jp2_xml {
+struct jp2_xml_box {
+    BOX_ST;
     uint8_t * data;
-};
-
-struct jp2_uuid {
-    uint64_t id[2];
-    uint8_t *data;
-};
-
-struct jp2_url {
-    uint32_t version : 8;
-    uint32_t flags : 24;
-    uint8_t *location;
 };
 
 typedef struct {
     uint64_t v[2];
-}uint128_t;
+} uint128_t;
+
+struct jp2_uuid_box {
+    uint128_t id;
+    uint8_t *data;
+};
+
+struct jp2_url_box {
+    FULL_BOX_ST;
+    char *location;
+};
 
 // see I.7.3.1
-struct jp2_ulst {
+struct jp2_ulst_box {
+    BOX_ST;
     uint16_t num_uuid;
     uint128_t* id;
 };
 
 // see I.7.3
-struct jp2_uinf {
-    struct jp2_ulst ulst;
-    struct jp2_url url;
+struct jp2_uinf_box {
+    BOX_ST;
+    struct jp2_ulst_box ulst;
+    struct jp2_url_box url;
 };
 
 struct sop {
@@ -269,9 +303,10 @@ struct cap {
     uint16_t* extensions;
 };
 
-struct prf {
-    uint16_t length;
-    uint16_t *profile;
+struct jp2_prfl_box {
+    BOX_ST;
+    uint32_t brand;
+    uint32_t *compatibility_list;
 };
 
 
@@ -398,7 +433,7 @@ struct cme {
 struct main_header {
     struct siz siz;
     struct cap cap;
-    struct prf prf;
+    // struct prf prf;
     struct cod cod;
     struct coc coc;
     struct qcd qcd;
@@ -417,13 +452,14 @@ struct tile_header {
 
 typedef struct {
     struct ftyp_box ftyp;
+    struct jp2_prfl_box prfl;
     struct jp2h_box jp2h;
     // struct jp2c_box *jp2c;
-    struct jp2_uuid uuid;
+    struct jp2_uuid_box uuid;
     int xml_num;
-    struct jp2_xml* xml;
+    struct jp2_xml_box* xml;
     int uinf_num;
-    struct jp2_uinf* uuid_info;
+    struct jp2_uinf_box* uinf;
 
     struct main_header main_h;
     // struct tile_header tile_h;

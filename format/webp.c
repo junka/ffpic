@@ -901,11 +901,11 @@ read_token_proba_update(struct vp8_key_frame_header *kh, struct bool_dec *br)
 static void
 read_vp8_ctl_partition(WEBP *w, struct bool_dec *br, FILE *f)
 {
-    int width = ((w->fi.width + 3) >> 2) << 2;
-    int height = w->fi.height;
-    // int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    VDBG(webp, "width in MB block uint:%d", (width + 15) >> 4);
-    VDBG(webp, "height in MB block uint:%d", (height + 15) >> 4);
+    // int width = ((w->fi.width + 3) >> 2) << 2;
+    // int height = w->fi.height;
+    // // int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
+    // VDBG(webp, "width in MB block uint:%d", (width + 15) >> 4);
+    // VDBG(webp, "height in MB block uint:%d", (height + 15) >> 4);
 
     w->k.cs_and_clamp.color_space = BOOL_BIT(br);
     w->k.cs_and_clamp.clamp = BOOL_BIT(br);
@@ -1455,7 +1455,7 @@ vp8_decode_mb_header(WEBP *w, bool_dec *bt, struct macro_block *mb, int y, int x
 }
 
 /* see h264 8.3 */
-static void vp8_prerdict_mb(WEBP *w, struct macro_block *block, int16_t *coeffs,
+static void vp8_prerdict_mb(struct macro_block *block, int16_t *coeffs,
                             int y, uint8_t *yout, uint8_t *uout, uint8_t *vout,
                             int y_stride, int uv_stride) {
     // VDBG(webp, "left %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
@@ -1851,7 +1851,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
             uint8_t *yout = Y + y_stride * y * 16 + x * 16;
             uint8_t *uout = U + 8 * uv_stride * y + x * 8;
             uint8_t *vout = V + 8 * uv_stride * y + x * 8;
-            vp8_prerdict_mb(w, block, coeffs, y, yout, uout, vout, y_stride, uv_stride);
+            vp8_prerdict_mb(block, coeffs, y, yout, uout, vout, y_stride, uv_stride);
         }
     }
     int filter_type = (w->k.loop_filter_level == 0) ? WEBP_FILTER_NONE :
@@ -1945,16 +1945,17 @@ static void webpl_predicator_transform(WEBP *w, struct bits_vec *v) {
     }
 }
 
-static void webpl_color_transform(WEBP *w, struct bits_vec *v) {
+static void webpl_color_transform(WEBP *w UNUSED, struct bits_vec *v) {
     // int size_bits = READ_BITS(v, 3) + 2;
     // int block_width = 1 << size_bits;
     // int block_height = 1 << size_bits;
+    bits_vec_dump(v);
 }
-static void webpl_sub_green_transform(WEBP *w, struct bits_vec *v) {
+static void webpl_sub_green_transform(WEBP *w UNUSED, struct bits_vec *v) {
     bits_vec_dump(v);
 }
 
-static void webpl_color_index_transform(WEBP *w, struct bits_vec *v) {
+static void webpl_color_index_transform(WEBP *w UNUSED, struct bits_vec *v) {
     bits_vec_dump(v);
 }
 
@@ -2003,7 +2004,7 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
 }
 
 static struct pic* 
-WEBP_load(const char *filename, int skip_flag)
+WEBP_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(WEBP));
     WEBP *w = p->pic;

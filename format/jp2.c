@@ -85,12 +85,20 @@ read_jp2_bpcc_box(FILE *f, struct jp2_bpcc_box *b, int num)
     return b->size;
 }
 
-void
-read_cmap(JP2 *j UNUSED, FILE *f UNUSED)
+int
+read_jp2_cmap_box(FILE *f, struct jp2_cmap_box *b)
 {
-    // for (int i = 0; i < j->; i ++) {
-    //     j->jp2h
-    // }
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'm', 'a', 'p'));
+    int n = (b->size - 8) / 4;
+    b->cmp = calloc(n, 2);
+    b->mtyp = calloc(n, 1);
+    b->pcol = calloc(n, 1);
+    for (int i = 0; i < n; i++) {
+        b->cmp[i] = read_u16(f);
+        b->mtyp[i] = read_u8(f);
+        b->pcol[i] = read_u8(f);
+    }
+    return b->size;
 }
 
 int
@@ -179,7 +187,6 @@ read_jp2_res_box(FILE *f, struct jp2_res_box *b)
     return b->size;
 }
 
-
 int 
 read_jp2_url_box(FILE * f, struct jp2_url_box *b)
 {
@@ -218,6 +225,16 @@ read_jp2_xml_box(FILE *f, struct jp2_xml_box *b)
     FFREAD_BOX_ST(b, f, FOURCC2UINT('x', 'm', 'l', ' '));
     b->data = malloc(b->size - 8);
     FFREAD(b->data, 1, b->size - 8, f);
+    return b->size;
+}
+
+int
+read_jp2_uuid_box(FILE *f, struct jp2_uuid_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'u', 'i', 'd'));
+    FFREAD(&b->id, 16, 1, f);
+    b->data = malloc(b->size - 8 - 16);
+    FFREAD(b->data, 1, b->size - 24, f);
     return b->size;
 }
 
@@ -376,7 +393,7 @@ struct tag_tree {
 // 2-D target
 int tag_tree_decode(struct bits_vec *v, uint32_t leafno, int thresh)
 {
-    struct tag_tree* tree[32];
+    struct tag_tree* tree[32] = {NULL};
     struct tag_tree *node = tree[leafno];
     struct tag_tree **pos = tree;
     while(node->parent) {
@@ -603,16 +620,6 @@ read_stream(JP2 *j, FILE *f)
     }
 }
 
-int
-read_jp2_prfl_box(FILE *f, struct jp2_prfl_box *b)
-{
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'r', 'f', 'l'));
-    b->brand = read_u32(f);
-    b->compatibility_list = malloc(b->size - 12);
-    FFREAD(b->compatibility_list, 4, (b->size - 12) / 4, f);
-    return b->size;
-}
-
 int read_jp2h_box(FILE *f, struct jp2h_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('j', 'p', '2', 'h'));
@@ -643,6 +650,12 @@ int read_jp2h_box(FILE *f, struct jp2h_box *b)
             break;
         case RES:
             read_jp2_res_box(f, &b->res);
+            break;
+        case CDEF:
+            read_jp2_cdef_box(f, &b->cdef);
+            break;
+        case CMAP:
+            read_jp2_cmap_box(f, &b->cmap);
             break;
         default:
             break;
@@ -680,9 +693,6 @@ JP2_load(const char *filename, int skip_flag UNUSED)
         case JP2H:
             read_jp2h_box(f, &j->jp2h);
             break;
-        case PRFL:
-            read_jp2_prfl_box(f, &j->prfl);
-            break;
         case JP2C:
             read_stream(j, f);
             break;
@@ -701,8 +711,17 @@ JP2_load(const char *filename, int skip_flag UNUSED)
             } else {
                 j->xml = realloc(j->uinf, sizeof(struct jp2_xml_box) * (j->xml_num + 1));
             }
-            read_jp2_xml_box(f, j->xml);
+            read_jp2_xml_box(f, j->xml+j->xml_num);
             j->xml_num ++;
+            break;
+        case UUID:
+            if (j->uuid_num == 0) {
+                j->uuid = malloc(sizeof(struct jp2_uuid_box));
+            } else {
+                j->uuid = realloc(j->uuid, sizeof(struct jp2_uuid_box) * (j->uuid_num + 1));
+            }
+            read_jp2_uuid_box(f, j->uuid + j->uuid_num);
+            j->uuid_num ++;
             break;
         default:
             printf("unkown marker \"%s\"\n", UINT2TYPE(type));

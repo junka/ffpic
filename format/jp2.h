@@ -11,8 +11,6 @@ extern "C" {
 //following jp box and ftyp box, super box
 #define JP2H FOURCC2UINT('j', 'p', '2', 'h')
 
-#define PRFL FOURCC2UINT('p', 'r', 'f', 'l')
-
 //other jp2 boxes
 #define IHDR FOURCC2UINT('i', 'h', 'd', 'r')
 //color specification
@@ -151,9 +149,12 @@ struct jp2_cmap_component {
     uint8_t palette_id;  
 };
 
-// struct jp2_cmap {
-
-// };
+struct jp2_cmap_box {
+    BOX_ST;
+    uint16_t* cmp;
+    uint8_t* mtyp;
+    uint8_t* pcol;
+};
 
 struct jp2_pclr_box {
     BOX_ST;
@@ -211,15 +212,11 @@ struct jp2h_box {
     struct jp2_colr_box *colr; // required
 
     struct jp2_pclr_box pclr; // optional
+    struct jp2_cmap_box cmap; // optional
     struct jp2_cdef_box cdef; // optional
     struct jp2_res_box res; //optional
-
 };
 
-
-// struct jp2c_box {
-
-// };
 
 //see I.7.1 xml boxes
 struct jp2_xml_box {
@@ -232,6 +229,7 @@ typedef struct {
 } uint128_t;
 
 struct jp2_uuid_box {
+    BOX_ST;
     uint128_t id;
     uint8_t *data;
 };
@@ -301,12 +299,6 @@ struct cap {
     uint16_t length;
     uint32_t bitmap;
     uint16_t* extensions;
-};
-
-struct jp2_prfl_box {
-    BOX_ST;
-    uint32_t brand;
-    uint32_t *compatibility_list;
 };
 
 
@@ -451,13 +443,15 @@ struct tile_header {
 };
 
 typedef struct {
-    struct ftyp_box ftyp;
-    struct jp2_prfl_box prfl;
-    struct jp2h_box jp2h;
+    struct ftyp_box ftyp; // required
+    struct jp2h_box jp2h; // required
     // struct jp2c_box *jp2c;
-    struct jp2_uuid_box uuid;
     int xml_num;
     struct jp2_xml_box* xml;
+
+    int uuid_num;
+    struct jp2_uuid_box* uuid;
+
     int uinf_num;
     struct jp2_uinf_box* uinf;
 

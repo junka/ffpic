@@ -714,7 +714,7 @@ void hevc_intra_angular(uint16_t *dst, uint16_t *left, uint16_t *top, int nTbS,
                                          -390,  -315,  -256, -315,  -390,
                                          -482,  -630,  -910, -1638, -4096};
 
-    int ref_arr[97];
+    int ref_arr[137];
     int *ref = ref_arr + 34;// ref range from -32 to 0 to 63
 
     if (predModeIntra >= 18) {

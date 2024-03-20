@@ -317,7 +317,7 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
             } else {
                 // ac refine
                 positive = 1 << low;
-                negative = (-1) << high;
+                negative = (uint32_t)(-1) << high;
                 if ((*skip) > 0) {
                     for (; i <= end; i++) {
                         if (buf[zigzag[i]]!= 0) {
@@ -744,7 +744,7 @@ read_app0(JPG *j, FILE *f)
     j->app0.len = SWAP(j->app0.len);
     j->app0.xdensity = SWAP(j->app0.xdensity);
     j->app0.ydensity = SWAP(j->app0.ydensity);
-    if (j->app0.xthumbnail * j->app0.ythumbnail) {
+    if ((j->app0.xthumbnail * j->app0.ythumbnail) > 0) {
         j->app0.data = malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
         fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail, f);
     }
@@ -840,6 +840,7 @@ JPG_load_one(FILE *f, int skip_flag)
             break;
         case APP1:
             VDBG(jpg, "app1 exif");
+            // fall through
         default:
             VDBG(jpg, "skip marker %x", SWAP(m));
             fread(&len, 2, 1, f);

@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, INFO)
+VLOG_REGISTER(hevc, DEBUG)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -1642,8 +1642,8 @@ parse_vps_vui_bsp_hrd_params(struct bits_vec *v, struct vps_vui_bsp_hrd_params *
                     }
                 }
             }
-            uint32_t BpBitRate[64][2][2][2][2];
-            uint32_t BpbSize[64][2][2][2][2];
+            uint32_t BpBitRate[64][2][2][2][2] UNUSED;
+            uint32_t BpbSize[64][2][2][2][2] UNUSED;
             for (uint32_t i = 0; i < num_signalled_partitioning_schemes + 1; i ++) {
                 for(int t = 0; t <= MaxSubLayersInLayerSetMinus1[OlsIdxToLsIdx[h]]; t++ ) {
                     uint32_t num_bsp_schedules_minus1 = GOL_UE(v);
@@ -1892,8 +1892,8 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     int SubPicHrdFlag = 0;
     vps_ext->NumViews = 1;
     uint8_t ScalabilityId[64][16];
-    uint8_t DependencyId[64];
-    uint8_t AuxId[64];
+    uint8_t DependencyId[64] UNUSED;
+    uint8_t AuxId[64] UNUSED;
 
     for (int i = 0; i <= MaxLayersMinus1; i ++) {
         uint8_t iNuhLId = vps_ext->layer_id_in_nuh[i];
@@ -1944,10 +1944,10 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
         }
     }
 
-    int NumRefLayers[64];
+    int NumRefLayers[64] UNUSED;
     int NumPredictedLayers[64];
     int IdDirectRefLayer[64][64];
-    int IdRefLayer[64][64];
+    int IdRefLayer[64][64] UNUSED;
     int IdPredictedLayer[64][64];
 
 
@@ -5014,7 +5014,7 @@ static void decode_cu_coded_intra_prediction_mode(
     struct hevc_param_set *hps,
     int xCb, int yCb, int xBase UNUSED, int yBase UNUSED, int log2CbSize, struct picture *p) {
     // invoke 8.6.1
-    // struct quant_pixel qp = quatization_parameters(xBase, yBase, hps, slice, cu, p);
+    quatization_parameters(xBase, yBase, hps, slice, cu, p);
     int nCbS = 1 << log2CbSize;
 
     struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
@@ -5643,7 +5643,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu,
     struct trans_tree *tt = &cu->tt;
     int coded_sub_block_flag[8][8] = {0};
     int explicit_rdpcm_flag[4] = {0};
-    int explicit_rdpcm_dir_flag[4] = {0};
+    int explicit_rdpcm_dir_flag[4] UNUSED = {0};
 
     //see 7-38
     int Log2MaxTransformSkipSize = pps->pps_range_ext.log2_max_transform_skip_block_size_minus2 + 2;
@@ -7183,6 +7183,7 @@ static void inloop_filter(struct slice_segment_header*slice, struct pps *pps, st
     // invoke 8.7.2
     deblock_filter(slice, sps, p);
     // sao (sample adaptive offset) filter
+    sps->sample_adaptive_offset_enabled_flag = 0;
     if (sps->sample_adaptive_offset_enabled_flag == 1) {
         // invoke 8.7.3
         sao_filter(slice, pps, sps, p);
@@ -7289,7 +7290,7 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
     h.forbidden_zero_bit = (data[0] & 0x80) >> 7;
     h.nal_unit_type = (data[0] & 0x7E) >> 1;
     h.nuh_layer_id = (((data[0] & 1) << 5) | ((data[1] & 0xF8) >> 3));
-    h.nuh_temporal_id = data[1] & 0x7 - 1;
+    h.nuh_temporal_id = (data[1] & 0x7) - 1;
     VDBG(hevc, "len %d f %d type %d, layer id %d, temp id %d", len, h.forbidden_zero_bit,
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id);
     assert(h.forbidden_zero_bit == 0);

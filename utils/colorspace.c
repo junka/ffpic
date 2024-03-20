@@ -801,6 +801,7 @@ uint32_t CS_MasksToPixelFormatEnum(int bpp, uint32_t rmask, uint32_t gmask,
             return CS_PIXELFORMAT_RGB24;
 #endif
         }
+        // fall through
     case 32:
         if (rmask == 0) {
             return CS_PIXELFORMAT_RGB888;

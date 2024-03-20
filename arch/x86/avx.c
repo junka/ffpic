@@ -76,14 +76,16 @@ __m256i x86_idct_1dx4_avx2_16bit(const __m256i left, __m256i right, int shift) {
 static void x86_idct_4x4_avx2_16bit(int16_t *in, int bitdepth)
 {
     int bdShift = 20 - bitdepth;
-    const int16_t transMatrix[4][4] = {{29, 55, 74, 84},
-                                        {74, 74, 0, -74},
-                                        {84, -29, -74, 55},
-                                        {55, -84, 74, -29}};
-    const int16_t transMatrixT[4][4] = {{29, 74, 84, 55},
-                                        {55, 74, -29, -84},
-                                        {74, 0, -74, 74},
-                                        {84, -74, 55, -29}};
+    const int16_t transMatrix[16]
+        __attribute__((aligned(32))) = {29, 55, 74, 84,
+                                        74, 74, 0, -74,
+                                        84, -29, -74, 55,
+                                        55, -84, 74, -29};
+    const int16_t transMatrixT[16]
+        __attribute__((aligned(32))) = {29, 74, 84, 55,
+                                        55, 74, -29, -84,
+                                        74, 0, -74, 74,
+                                        84, -74, 55, -29};
     // 16 * 16 = 256 bit size
     __m256i tran = _mm256_load_si256((const __m256i *)transMatrix);
     __m256i tranT = _mm256_load_si256((const __m256i *)transMatrixT);

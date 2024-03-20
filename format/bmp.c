@@ -252,8 +252,9 @@ BMP_load(const char* filename, int skip_flag UNUSED)
 
         if (b->dib.v2.bit_count <= 8) {
             p->depth = 24;
-            int color_num = b->dib.v2.colors_used ? b->dib.v2.colors_used
-                                                  : (1 << b->dib.v2.bit_count);
+            int color_num = b->dib.v2.colors_used
+                                ? b->dib.v2.colors_used
+                                : ((uint32_t)1 << b->dib.v2.bit_count);
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
             fread(b->palette, 4, color_num, f);
             VDBG(bmp, "palette");

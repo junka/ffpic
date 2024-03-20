@@ -8,7 +8,6 @@
 
 #include "byteorder.h"
 #include "basemedia.h"
-#include "gif.h"
 #include "utils.h"
 
 #include "vlog.h"

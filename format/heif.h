@@ -84,6 +84,8 @@ struct hvcC_box {
 #endif
     uint8_t num_of_arrays;
     struct nal_arr *nal_arrays;
+
+    struct hevc_param_set hps;
 };
 
 // 14496-15 8.4

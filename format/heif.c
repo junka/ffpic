@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
+#include "hevc.h"
 #include "vlog.h"
 #include "utils.h"
 #include "heif.h"
@@ -68,7 +69,12 @@ HEIF_probe(const char *filename)
 void free_hvcc_box(struct box *bn)
 {
     struct hvcC_box *b = (struct hvcC_box*)bn;
-    if (b->num_of_arrays) {
+    for (int i = 0; i < b->num_of_arrays; i++) {
+        if (b->nal_arrays[i].numNalus) {
+            free(b->nal_arrays[i].xps);
+        }
+    }
+    if (b->nal_arrays) {
         free(b->nal_arrays);
     }
 }
@@ -96,20 +102,25 @@ read_hvcc_box(FILE *f, struct box **bn)
     VDBG(heif, "hvcC: num_of_arrays %d", b->num_of_arrays);
     for (int i = 0; i < b->num_of_arrays; i ++) {
         FFREAD(b->nal_arrays + i, 1, 1, f);
-        uint16_t numNalus;
-        FFREAD(&numNalus, 2, 1, f);
-        numNalus = SWAP(numNalus);
-        VDBG(heif, "nalu: numNalus %d, type %d, completeness %d", numNalus,
-             b->nal_arrays[i].nal_unit_type, b->nal_arrays[i].array_completeness);
-        struct nalus *nals = calloc(numNalus, sizeof(struct nalus));
-        for (int j = 0; j < numNalus; j++) {
-            FFREAD(&nals[j].unit_length, 2, 1, f);
 
-            nals[j].unit_length = SWAP(nals[j].unit_length);
+        b->nal_arrays[i].numNalus = read_u16(f);
+        VDBG(heif, "nalu: numNalus %d, type %d, completeness %d",
+             b->nal_arrays[i].numNalus, b->nal_arrays[i].nal_unit_type,
+             b->nal_arrays[i].array_completeness);
+        struct nalus *nals = calloc(b->nal_arrays[i].numNalus, sizeof(struct nalus));
+        if (b->nal_arrays[i].nal_unit_type == VPS_NUT) {
+            b->nal_arrays[i].xps = calloc(b->nal_arrays[i].numNalus, sizeof(struct vps*));
+        } else if (b->nal_arrays[i].nal_unit_type == PPS_NUT) {
+            b->nal_arrays[i].xps = calloc(b->nal_arrays[i].numNalus, sizeof(struct pps*));
+        } else if (b->nal_arrays[i].nal_unit_type == SPS_NUT) {
+            b->nal_arrays[i].xps = calloc(b->nal_arrays[i].numNalus, sizeof(struct sps*));
+        }
+        for (int j = 0; j < b->nal_arrays[i].numNalus; j++) {
+            nals[j].unit_length = read_u16(f);
             VDBG(heif, "hvcc: nal unit length %d", nals[j].unit_length);
             nals[j].nal_units = malloc(nals[j].unit_length);
             FFREAD(nals[j].nal_units, 1, nals[j].unit_length, f);
-            parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL);
+            parse_nalu(nals[j].nal_units, nals[j].unit_length, (uint8_t **)(((void **)(b->nal_arrays[i].xps))+j), &b->hps);
             free(nals[j].nal_units);
         }
         free(nals);
@@ -141,17 +152,18 @@ find_item_by_id(HEIF *h, int id)
     return NULL;
 }
 
-struct box *
-find_property_from_item_id(HEIF *h, int id)
+struct hvcC_box *
+get_hvcc_from_item_id(HEIF *h, int id)
 {
     for (uint32_t i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
         for (int j = 0; j < h->meta.iprp.ipma.entries[i].association_count; j++) {
             if (h->meta.iprp.ipma.entries[i].item_id == (uint32_t)id) {
                 for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
-                    int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
+                    // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                     int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
-                    if (essential) {
-                        return (struct box *)h->meta.iprp.ipco.property[property_index-1];
+                    struct box *b = (struct box *)h->meta.iprp.ipco.property[property_index-1];
+                    if (b->type == TYPE2UINT("hvcC")) {
+                        return (struct hvcC_box *)h->meta.iprp.ipco.property[property_index-1];
                     }
                 }
             }
@@ -169,7 +181,8 @@ int get_primary_item_id(HEIF *h)
     return h->meta.pitm.item_id;
 }
 
-struct ispe_box * get_ispe_by_item_id(HEIF *h, int id)
+struct ispe_box *
+get_ispe_by_item_id(HEIF *h, int id)
 {
     for (uint32_t i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
         if (h->meta.iprp.ipma.entries[i].item_id == (uint32_t)id) {
@@ -191,6 +204,7 @@ static void
 pre_read_item(HEIF * h, FILE *f, uint32_t idx)
 {
     // for now make sure, extent_count = 1 work
+    assert(h->items[idx].item->extent_count == 1);
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
         h->items[idx].data = malloc(h->items[idx].length);
@@ -216,23 +230,22 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
     }
 }
 
-void
-decode_hvc1(uint8_t *data, uint64_t len, uint8_t** pixels)
-{
+void decode_hvc1(uint8_t *data, uint64_t len, uint8_t **pixels,
+                 struct hevc_param_set *hps) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     while (len > 0) {
         int sample_len = p[0] << 24 | p[1] << 16| p[2] << 8| p[3];
         len -= 4;
         p += 4;
-        parse_nalu(p, sample_len, pixels);
+        parse_nalu(p, sample_len, pixels, hps);
         len -= sample_len;
         p += sample_len;
     }
 }
 
 static struct pic *
-HEIF_load_one(int width, int height, uint8_t *data, int length) {
+HEIF_load_one(int width, int height, uint8_t *data, int length, struct hevc_param_set *hps) {
     struct pic *p = pic_alloc(sizeof(HEIF));
     // HEIF *h = p->pic;
     p->width = width;
@@ -241,9 +254,111 @@ HEIF_load_one(int width, int height, uint8_t *data, int length) {
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = malloc(p->pitch * p->height);
-    p->format = CS_PIXELFORMAT_RGB888;
-    decode_hvc1(data, length, (uint8_t **)&p->pixels);
+    p->format = CS_PIXELFORMAT_RGBA8888;
+    decode_hvc1(data, length, (uint8_t **)&p->pixels, hps);
     return p;
+}
+
+static int
+decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
+{
+    int num = 0;
+    struct grid *ig = malloc(sizeof(struct grid));
+    ig->version = it->data[0];
+    ig->flags = it->data[1];
+    ig->row_minus_one = it->data[2];
+    ig->columns_minus_one = it->data[3];
+    // 8 bytes, top, left, width, height in 2 bytes
+    if ((ig->flags & 1) == 0) {
+        assert(it->length == 8);
+        uint16_t width = *(uint16_t *)(it->data + 4);
+        uint16_t height = *(uint16_t *)(it->data + 6);
+        ig->output_width = SWAP(width);
+        ig->output_height = SWAP(height);
+    } else {
+        assert(it->length == 12);
+        uint32_t width = *(uint32_t *)(it->data + 4);
+        uint32_t height = *(uint32_t *)(it->data + 8);
+        ig->output_width = SWAP(width);
+        ig->output_height = SWAP(height);
+    }
+    VDBG(heif, "grid width %d, height %d", ig->output_width, ig->output_height);
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+        assert(ref->ref_count == (ig->row_minus_one + 1) * (ig->columns_minus_one + 1));
+        if (ref->from_item_id == it->item->item_id && ref->type == TYPE2UINT("dimg")) {
+            for (int j = 0; j < ref->ref_count; j++) {
+                struct heif_item *item = find_item_by_id(h, ref->to_item_ids[j]);
+                assert(item->type == TYPE2UINT("hvc1"));
+                struct hvcC_box *conf = get_hvcc_from_item_id(h, ref->to_item_ids[j]);
+                decode_hvc1(item->data, item->length, (uint8_t **)&p->pixels, &conf->hps);
+                num ++;
+            }
+        }
+    }
+    free(ig);
+    return num;
+}
+
+static int
+decode_primary_item(HEIF *h, struct pic *p)
+{
+    int num = 0;
+    int primary_id = get_primary_item_id(h);
+    if (primary_id < 0) {
+        //no primary
+        return num;
+    }
+    VINFO(heif, "primary id %d", primary_id);
+    int pri_index = 0;
+    for (pri_index = 0; pri_index < (int)h->meta.iloc.item_count; pri_index++) {
+        if (h->items[pri_index].item->item_id == primary_id) {
+            break;
+        }
+    }
+
+    if (pri_index >= h->meta.iloc.item_count) {
+        return 0;
+    }
+    struct heif_item *pri_item = &h->items[pri_index];
+    if (pri_item->type == TYPE2UINT("grid")) {
+        // grid must have iref and decode the refered data
+        num += decode_grid_items(h, pri_item, p);
+    } else if (pri_item->type == TYPE2UINT("hvc1")) {
+        VINFO(heif, "primary loc at %" PRIu64, h->items[pri_index].item->base_offset);
+        struct hvcC_box *conf = get_hvcc_from_item_id(h, primary_id);
+        decode_hvc1(pri_item->data, pri_item->length, (uint8_t **)&p->pixels, &conf->hps);
+        num ++;
+    }
+    return num;
+}
+
+static int
+decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED)
+{
+    struct itemtype_ref_box *ref;
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        // uint32_t from_id = h->meta.iref.refs[i].from_item_id;
+        // VDBG(heif, "from_id %d", from_id);
+        ref = &h->meta.iref.refs[i];
+        for (int j = 0; j < ref->ref_count; j++) {
+            int id = ref->to_item_ids[j];
+            if (id == primary_id) {
+                struct heif_item *r = find_item_by_id(h, ref->from_item_id);
+                if (r->type == TYPE2UINT("hvc1") && ref->type == TYPE2UINT("auxl")) {
+                    printf("decoding auxl image: depth map or alpha plane\n");
+                    // decode_hvc1(r->data, r->length, (uint8_t **)&p->pixels);
+                    struct hvcC_box *conf = get_hvcc_from_item_id(h, r->item->item_id);
+                    struct pic *p1 = HEIF_load_one(p->width, p->height, r->data, r->length, &conf->hps);
+                    file_enqueue_pic(p1);
+
+                } else if (r->type == TYPE2UINT("Exif") && ref->type == TYPE2UINT("cdsc")) {
+                    VDBG(heif, "exif %" PRIu64, r->length);
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 static int
@@ -253,83 +368,16 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     for (int i = 0; i < h->item_num; i++) {
         pre_read_item(h, f, i);
     }
-    uint16_t primary_id = get_primary_item_id(h);
-    VINFO(heif, "primary id %d", primary_id);
-    int i = 0;
-    for (i = 0; i < (int)h->meta.iloc.item_count; i++) {
-        if (h->items[i].item->item_id == primary_id) {
-            VINFO(heif, "primary loc at %" PRIu64, h->items[i].item->base_offset);
-            break;
-        }
-    }
-    if (i < h->meta.iloc.item_count) {
-        // we have PITM box, start from it
-        if (h->items[i].type == TYPE2UINT("grid")) {
-            //grid must have iref and decode the refered data
-            struct grid ig;
-            ig.version = h->items[i].data[0];
-            ig.flags = h->items[i].data[1];
-            ig.row_minus_one = h->items[i].data[2];
-            ig.columns_minus_one = h->items[i].data[3];
-            if ((ig.flags & 1) == 0) {
-                assert(h->items[i].length == 8);
-                uint16_t width = *(uint16_t *)(h->items[i].data + 4);
-                uint16_t height = *(uint16_t *)(h->items[i].data + 6);
-                ig.output_width = SWAP(width);
-                ig.output_height = SWAP(height);
-            } else {
-                assert(h->items[i].length == 12);
-                uint32_t width = *(uint32_t *)(h->items[i].data + 4);
-                uint32_t height = *(uint32_t *)(h->items[i].data + 8);
-                ig.output_width = SWAP(width);
-                ig.output_height = SWAP(height);
-            }
-            VDBG(heif, "grid rows %d, columns %d, width %d, height %d", ig.row_minus_one+1, ig.columns_minus_one+1, 
-                    ig.output_width, ig.output_height);
-            
-            for (int j = 0; j < h->meta.iref.refs_count; j++) {
-                if (h->meta.iref.refs[j].from_item_id == h->items[i].item->item_id) {
-                    assert(h->meta.iref.refs[j].ref_count == (ig.row_minus_one + 1) * (ig.columns_minus_one + 1));
-                    for (int k = 0; k < h->meta.iref.refs[j].ref_count; k++) {
-                        struct heif_item *item = find_item_by_id(h, h->meta.iref.refs[j].to_item_ids[k]);
-                        decode_hvc1(item->data, item->length,
-                                    (uint8_t **)&p->pixels);
-                        num ++;
-                    }
-                }
-            }
-        } else if (h->items[i].type == TYPE2UINT("hvc1")) {
-            // struct box *bb = find_property_from_item_id(h, h->items[i].item->item_id);
-            // VDBG(heif, "property %s", type2name(bb->type));
-            decode_hvc1(h->items[i].data, h->items[i].length, (uint8_t **)&p->pixels);
-            num ++;
-        }
+
+    int primary_id = get_primary_item_id(h);
+    if (primary_id >= 0) {
+        num = decode_primary_item(h, p);
+        decode_reference_items_for_primary(h, primary_id, p);
         return num;
     }
-    if (h->meta.iref.refs_count) {
-        for (int i = 0; i < h->meta.iref.refs_count; i++) {
-            // uint32_t from_id = h->meta.iref.refs[i].from_item_id;
-            // VDBG(heif, "from_id %d", from_id);
-            for (int j = 0; j < h->meta.iref.refs[i].ref_count; j++) {
-                int id = h->meta.iref.refs[i].to_item_ids[j];
-                for (int k = 0; k < h->meta.iloc.item_count; k ++) {
-                    const struct item_location *it = h->items[k].item;
-                    if (it->item_id == id) {
-                        VDBG(heif, 
-                            "item_id %d, construct_method %d, extent_count %d, "
-                            "ref_id %d, base %"PRIu64", offset %"PRIu64", length %"PRIu64"",
-                            it->item_id, it->construct_method, it->extent_count,
-                            it->data_ref_id, it->base_offset, it->extents[0].extent_offset,
-                            it->extents[0].extent_length);
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // we may have no primary id
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         VDBG(heif, "decoding %s", type2name(h->items[i].type));
-        pre_read_item(h, f, i);
         if (h->items[i].type == TYPE2UINT("Exif")) {
             VDBG(heif, "exif %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("mime")) {
@@ -339,39 +387,16 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, (void*)h->items[i].data, h->items[i].length);
-            if (primary_id == h->items[i].item->item_id) {
-                VINFO(heif, "decoding primary id");
-                decode_hvc1(h->items[i].data, h->items[i].length, (uint8_t **)&p->pixels);
-            } else {
-                if (num == 1) {
-                    file_enqueue_pic(p);
-                }
-                VINFO(heif, "decoding sub items, width %d, height %d", p->width, p->height);
-                struct pic *p1 = HEIF_load_one(p->width, p->height, h->items[i].data, h->items[i].length);
-                file_enqueue_pic(p1);
+            if (num == 1) {
+                file_enqueue_pic(p);
             }
+            VINFO(heif, "decoding sub items, width %d, height %d", p->width, p->height);
+            struct hvcC_box *conf = get_hvcc_from_item_id(h, h->items[i].item->item_id);
+            struct pic *p1 = HEIF_load_one(p->width, p->height, h->items[i].data, h->items[i].length, &conf->hps);
+            file_enqueue_pic(p1);
             num++;
         } else if (h->items[i].type == TYPE2UINT("grid")) {
-            struct grid ig;
-            ig.version = h->items[i].data[0];
-            ig.flags = h->items[i].data[1];
-            ig.row_minus_one = h->items[i].data[2];
-            ig.columns_minus_one = h->items[i].data[3];
-            // 8 bytes, top, left, width, height in 2 bytes
-            if ((ig.flags & 1) == 0) {
-                assert(h->items[i].length == 8);
-                uint16_t width = *(uint16_t *)(h->items[i].data+4);
-                uint16_t height = *(uint16_t *)(h->items[i].data+6);
-                ig.output_width = SWAP(width);
-                ig.output_height = SWAP(height);
-            } else {
-                assert(h->items[i].length == 12);
-                uint32_t width = *(uint32_t *)(h->items[i].data + 4);
-                uint32_t height = *(uint32_t *)(h->items[i].data + 8);
-                ig.output_width = SWAP(width);
-                ig.output_height = SWAP(height);
-            }
-            VDBG(heif, "grid width %d, height %d", ig.output_width, ig.output_height);
+            decode_grid_items(h, h->items + i, p);
         }
     }
     return num;
@@ -401,7 +426,7 @@ decode_moov(FILE *f, struct moov_box *b)
                 uint8_t *data = malloc(size);
                 fread(data, size, 1, f);
                 // printf("load one for %d, length %d\n", k, size);
-                struct pic *p1 = HEIF_load_one(width, height, data,size);
+                struct pic *p1 = HEIF_load_one(width, height, data,size, NULL);
                 file_enqueue_pic(p1);
                 // free(data);
             }

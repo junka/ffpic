@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, DEBUG)
+VLOG_REGISTER(hevc, INFO)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -7281,10 +7281,8 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     free(hslice.slice);
 }
 
-struct hevc_param_set hps;
-
-void
-parse_nalu(uint8_t *data, int len, uint8_t **pixels)
+uint16_t
+parse_nalu(uint8_t *data, int len, uint8_t **pixels, struct hevc_param_set *hps)
 {
     struct hevc_nalu_header h;
     h.forbidden_zero_bit = (data[0] & 0x80) >> 7;
@@ -7324,11 +7322,12 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
         // hexdump(stdout, "data: ", "", data, 32);
         // printf("nrbsp %d\n", nrbsp);
         // hexdump(stdout, "rbsp: ", "", rbsp, 32);
-        parse_slice_segment_layer(&h, v, &hps, pixels);
+        parse_slice_segment_layer(&h, v, hps, pixels);
         break;
     case VPS_NUT:
         new_vps = parse_vps(v);
-        hps.vps[hps.vps_num++] = new_vps;
+        hps->vps[new_vps->vps_video_parameter_set_id] = new_vps;
+        *pixels = (uint8_t *)new_vps;
         break;
     case SPS_NUT:
         new_sps = parse_sps(&h, v, new_vps);
@@ -7336,7 +7335,8 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
             VERR(hevc, "can no parse sps correctly");
             exit(-1);
         }
-        hps.sps[hps.sps_num++] = new_sps;
+        *pixels = (uint8_t *)new_sps;
+        hps->sps[new_sps->sps_seq_parameter_set_id] = new_sps;
         break;
     case PPS_NUT:
         new_pps = parse_pps(v);
@@ -7344,7 +7344,8 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
             VERR(hevc, "can no parse pps correctly");
             exit(-1);
         }
-        hps.pps[hps.pps_num++] = new_pps;
+        *pixels = (uint8_t *)new_pps;
+        hps->pps[new_pps->pps_pic_parameter_set_id] = new_pps;
         break;
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
@@ -7356,50 +7357,52 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels)
         break;
     }
     bits_vec_free(v);
+    return h.nal_unit_type;
 }
 
-void free_hevc_param_set(void) {
-    for (int i = 0; i < hps.pps_num; i++) {
-        if (hps.pps[i]) {
-            if (hps.pps[i]->pps_3d_ext)
-                free(hps.pps[i]->pps_3d_ext);
-            if (hps.pps[i]->pps_multilayer_ext)
-                free(hps.pps[i]->pps_multilayer_ext);
-            free(hps.pps[i]->column_width_minus1);
-            free(hps.pps[i]->row_height_minus1);
-            free(hps.pps[i]->CtbAddrTsToRs);
-            free(hps.pps[i]->CtbAddrRsToTs);
-            free(hps.pps[i]->TileId);
-            free(hps.pps[i]);
-            hps.pps[i] = NULL;
+void free_hevc_param_set(struct hevc_param_set *hps)
+{
+    for (int i = 0; i < 16; i++) {
+        if (hps->pps[i]) {
+            if (hps->pps[i]->pps_3d_ext)
+                free(hps->pps[i]->pps_3d_ext);
+            if (hps->pps[i]->pps_multilayer_ext)
+                free(hps->pps[i]->pps_multilayer_ext);
+            free(hps->pps[i]->column_width_minus1);
+            free(hps->pps[i]->row_height_minus1);
+            free(hps->pps[i]->CtbAddrTsToRs);
+            free(hps->pps[i]->CtbAddrRsToTs);
+            free(hps->pps[i]->TileId);
+            free(hps->pps[i]);
+            hps->pps[i] = NULL;
         }
     }
-    for (int i = 0; i < hps.sps_num; i++) {
-        if (hps.sps[i]) {
-            if (hps.sps[i]->list_data)
-                free(hps.sps[i]->list_data);
-            if (hps.sps[i]->pcm)
-                free(hps.sps[i]->pcm);
-            if (hps.sps[i]->sps_st_ref)
-                free(hps.sps[i]->sps_st_ref);
-            if (hps.sps[i]->sps_lt_ref)
-                free(hps.sps[i]->sps_lt_ref);
-            if (hps.sps[i]->vui)
-                free(hps.sps[i]->vui);
-            free(hps.sps[i]);
-            hps.sps[i] = NULL;
+    for (int i = 0; i < 16; i++) {
+        if (hps->sps[i]) {
+            if (hps->sps[i]->list_data)
+                free(hps->sps[i]->list_data);
+            if (hps->sps[i]->pcm)
+                free(hps->sps[i]->pcm);
+            if (hps->sps[i]->sps_st_ref)
+                free(hps->sps[i]->sps_st_ref);
+            if (hps->sps[i]->sps_lt_ref)
+                free(hps->sps[i]->sps_lt_ref);
+            if (hps->sps[i]->vui)
+                free(hps->sps[i]->vui);
+            free(hps->sps[i]);
+            hps->sps[i] = NULL;
         }
     }
-    for (int i = 0; i < hps.vps_num; i++) {
-        if (hps.vps[i]) {
-            if (hps.vps[i]->vps_timing_info)
-                free(hps.vps[i]->vps_timing_info);
-            if (hps.vps[i]->vps_ext)
-                free(hps.vps[i]->vps_ext);
-            if (hps.vps[i]->vps_3d_ext)
-                free(hps.vps[i]->vps_3d_ext);
-            free(hps.vps[i]);
-            hps.vps[i] = NULL;
+    for (int i = 0; i < 16; i++) {
+        if (hps->vps[i]) {
+            if (hps->vps[i]->vps_timing_info)
+                free(hps->vps[i]->vps_timing_info);
+            if (hps->vps[i]->vps_ext)
+                free(hps->vps[i]->vps_ext);
+            if (hps->vps[i]->vps_3d_ext)
+                free(hps->vps[i]->vps_3d_ext);
+            free(hps->vps[i]);
+            hps->vps[i] = NULL;
         }
     }
 }

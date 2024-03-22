@@ -963,8 +963,9 @@ struct nal_arr {
     uint8_t reserved:1;
     uint8_t nal_unit_type:6;
 #endif
-    // uint16_t numNalus;
+    uint16_t numNalus;
     // struct nalus * nals;
+    void *xps; // could be vps/sps/pps, depending on unit_type
 };
 
 
@@ -1328,13 +1329,9 @@ struct ctu {
 
 
 struct hevc_param_set {
-    int vps_num;
+    // four bits max 16
     struct vps *vps[16];
-
-    int sps_num;
     struct sps *sps[16]; // for a sequence of a video
-
-    int pps_num;
     struct pps *pps[64]; // for several pictures
 };
 
@@ -1346,9 +1343,9 @@ struct hevc_slice {
 
 #pragma pack(pop)
 
-void parse_nalu(uint8_t *data, int len, uint8_t **pixels);
+uint16_t parse_nalu(uint8_t *data, int len, uint8_t **pixels, struct hevc_param_set *hps);
 
-void free_hevc_param_set(void);
+void free_hevc_param_set(struct hevc_param_set *hps);
 
 #ifdef __cplusplus
 }

@@ -171,6 +171,48 @@ YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
     }
 }
 
+static void UNUSED
+single_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y,
+                       void *U, void *V, int v, int h)
+{
+    int16_t *sY = (int16_t *)Y;
+    int16_t *sU = (int16_t *)U;
+    int16_t *sV = (int16_t *)V;
+    uint8_t *p = ptr;
+    int16_t yy, uu, vv;
+
+    for (int i = 0; i < 8 * v; i++) {
+        for (int k = 0; k < 8 * h; k++) {
+            int r, g, b;
+
+            // The Y[64 * 4] store the Y componets, but not in the 16 * 16
+            // array, just four 8 * 8 array
+            yy = sY[((i / 8) * h + (k / 8)) * 64 + (i % 8) * 8 + k % 8];
+            uu = sU[(i / v) * 8 + (k / h)] - 128;
+            vv = sV[(i / v) * 8 + (k / h)] - 128;
+
+            // see JFIF3
+            //  add_r = FIX(1.40200) * vv + ONE_HALF;
+            //  add_g = -FIX(0.34414) * uu - FIX(0.71414) * vv + ONE_HALF;
+            //  add_b = FIX(1.772) * uu + ONE_HALF;
+
+            // y = (yy) << SCALEBITS;
+            // b = (y + add_b) >> SCALEBITS;
+            // g = (y + add_g) >> SCALEBITS;
+            // r = (y + add_r) >> SCALEBITS;
+
+            r = clamp(yy + 1.280 * vv, 255);
+            g = clamp(yy - 0.215 * uu - 0.381 * vv, 255);
+            b = clamp(yy + 2.128 * uu, 255);
+            p[4 * k] = b;
+            p[4 * k + 1] = g;
+            p[4 * k + 2] = r;
+            p[4 * k + 3] = 0xff; // alpha
+        }
+        p += pitch;
+    }
+}
+
 static void
 YUV_to_BGRA32_8bit(uint8_t *ptr, int pitch, void *Y, void *U, void *V,
                    int v, int h)
@@ -670,6 +712,63 @@ void YUV420_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
     }
 }
 
+void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
+                            int y_stride, int mbrows, int mbcols,
+                            int ctbsize) {
+    uint8_t *p = ptr, *p2 = ptr;
+    int width = mbcols * ctbsize;
+    int right_space = pitch - width * 4;
+    int16_t *Y;
+    int16_t yy;
+
+    for (int y = 0; y < mbrows; y++) {
+        for (int x = 0; x < mbcols; x++) {
+            Y = yout + y_stride * y * ctbsize + x * ctbsize;
+            p = p2;
+            p2 = p + ctbsize * 4;
+            for (int i = 0; i < ctbsize; i++) {
+                for (int j = 0; j < ctbsize; j++) {
+                    yy = clamp(Y[i * y_stride + j], 255);
+                    p[4 * j] = yy;
+                    p[4 * j + 1] = yy;
+                    p[4 * j + 2] = yy;
+                    p[4 * j + 3] = yy;
+                }
+                p += pitch;
+            }
+        }
+        p2 = p - pitch + ctbsize * 4 + right_space;
+    }
+}
+
+void YUV400_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
+                           int y_stride, int mbrows, int mbcols, int ctbsize) {
+    uint8_t *p = ptr, *p2 = ptr;
+    int width = mbcols * ctbsize;
+    int right_space = pitch - width * 4;
+    uint8_t *Y;
+    uint8_t yy;
+
+    for (int y = 0; y < mbrows; y++) {
+        for (int x = 0; x < mbcols; x++) {
+            Y = yout + y_stride * y * ctbsize + x * ctbsize;
+            p = p2;
+            p2 = p + ctbsize * 4;
+            for (int i = 0; i < ctbsize; i++) {
+                for (int j = 0; j < ctbsize; j++) {
+                    yy = clamp(Y[i * y_stride + j], 255);
+                    p[4 * j] = yy;
+                    p[4 * j + 1] = yy;
+                    p[4 * j + 2] = yy;
+                    p[4 * j + 3] = yy;
+                }
+                p += pitch;
+            }
+        }
+        p2 = p - pitch + ctbsize * 4 + right_space;
+    }
+}
+
 enum cs_bits_type {
   CS_BITLEN_8 = 0,
   CS_BITLEN_16 = 1,
@@ -922,6 +1021,18 @@ void BGRA32_TO_HSV(uint8_t *ptr, int pitch, int height, uint16_t* h, uint8_t *s,
             h++;
             *s++ = (cmax == 0) ? 0 : 255 - 255 * cmin/cmax;
             *v++ = cmax;
+        }
+    }
+}
+
+void blend_BGRA32_8bit_alpha(uint8_t *fg, uint8_t *bg, int pitch, int height) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < pitch/4; x++) {
+            float alpha = (float)bg[y * pitch + 4 * x] / 255;
+            fg[y * pitch + 4 * x] = fg[y * pitch + 4 * x] * alpha + (1 - alpha) * bg[y * pitch + 4 * x];
+            fg[y * pitch + 4 * x + 1] = fg[y * pitch + 4 * x + 1] * alpha +(1 - alpha) * bg[y * pitch + 4 * x + 1];
+            fg[y * pitch + 4 * x + 2] = fg[y * pitch + 4 * x + 2] * alpha +(1 - alpha) * bg[y * pitch + 4 * x + 2];
+            fg[y * pitch + 4 * x + 3] = alpha * 255;
         }
     }
 }

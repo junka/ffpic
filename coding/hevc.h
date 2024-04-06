@@ -813,7 +813,7 @@ struct sps_scc_extension {
 };
 
 enum chroma_format {
-  CHROMA_400        = 0,
+  CHROMA_400        = 0, // means mono chrome
   CHROMA_420        = 1,
   CHROMA_422        = 2,
   CHROMA_444        = 3
@@ -845,7 +845,7 @@ struct sps {
     // uint8_t update_rep_format_flag:1;
     uint8_t sps_rep_format_idx;
 
-    GUE(chroma_format_idc);
+    GUE(chroma_format_idc); // 0 means Y only, others means YUV
     
     uint8_t separate_colour_plane_flag:1;
 

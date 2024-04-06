@@ -152,8 +152,8 @@ find_item_by_id(HEIF *h, int id)
     return NULL;
 }
 
-struct hvcC_box *
-get_hvcc_from_item_id(HEIF *h, int id)
+struct box *
+get_ipma_item_from_item_id(HEIF *h, int id, uint32_t fourcc)
 {
     for (uint32_t i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
         for (int j = 0; j < h->meta.iprp.ipma.entries[i].association_count; j++) {
@@ -162,14 +162,27 @@ get_hvcc_from_item_id(HEIF *h, int id)
                     // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                     int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
                     struct box *b = (struct box *)h->meta.iprp.ipco.property[property_index-1];
-                    if (b->type == TYPE2UINT("hvcC")) {
-                        return (struct hvcC_box *)h->meta.iprp.ipco.property[property_index-1];
+                    if (b->type == fourcc) {
+                        return h->meta.iprp.ipco.property[property_index-1];
                     }
                 }
             }
         }
     }
     return NULL;
+}
+
+struct hvcC_box *
+get_hvcc_from_item_id(HEIF *h, int id)
+{
+    return (struct hvcC_box *)get_ipma_item_from_item_id(h, id, FOURCC2UINT('h', 'v', 'c', 'C'));
+}
+
+struct auxC_box *
+get_auxc_from_item_id(HEIF *h, int id)
+{
+    return (struct auxC_box *)get_ipma_item_from_item_id(h, id, FOURCC2UINT('a', 'u', 'x', 'C'));
+
 }
 
 int get_primary_item_id(HEIF *h)
@@ -208,7 +221,8 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
     if (h->items[idx].item->extent_count == 1) {
         h->items[idx].length = h->items[idx].item->extents[0].extent_length;
         h->items[idx].data = malloc(h->items[idx].length);
-        VDBG(heif, "read item %d, length %"PRIu64"", idx, h->items[idx].length);
+        VDBG(heif, "read item %d, length %" PRIu64 ", method %d", idx,
+             h->items[idx].length, h->items[idx].item->construct_method);
         if (h->items[idx].item->construct_method == 0) {//file offset
             fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET),
             fread(h->items[idx].data, h->items[idx].length, 1, f);
@@ -216,6 +230,7 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
             memcpy(h->items[idx].data, h->meta.idat.data + h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, h->items[idx].length);
             // hexdump(stdout, "idat", "", h->items[idx].data, h->items[idx].length);
         } else if (h->items[idx].item->construct_method == 2) { // item offset
+
         }
     } else {
         h->items[idx].data = malloc(1);
@@ -346,14 +361,29 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
             if (id == primary_id) {
                 struct heif_item *r = find_item_by_id(h, ref->from_item_id);
                 if (r->type == TYPE2UINT("hvc1") && ref->type == TYPE2UINT("auxl")) {
-                    printf("decoding auxl image: depth map or alpha plane\n");
-                    // decode_hvc1(r->data, r->length, (uint8_t **)&p->pixels);
                     struct hvcC_box *conf = get_hvcc_from_item_id(h, r->item->item_id);
-                    struct pic *p1 = HEIF_load_one(p->width, p->height, r->data, r->length, &conf->hps);
-                    file_enqueue_pic(p1);
-
+                    struct auxC_box *auxc = get_auxc_from_item_id(h, r->item->item_id);
+                    assert(auxc != NULL);
+                    if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
+                        (strcmp(auxc->aux_type, "urn:mpeg:avc:2015:auxid:1") == 0) ||
+                        (strcmp(auxc->aux_type, "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"))) {
+                        // alpha channel
+                        VDBG(heif, "decoding auxl image: alpha plane");
+                        struct pic *p1 = HEIF_load_one(p->width, p->height, r->data, r->length, &conf->hps);
+                        blend_BGRA32_8bit_alpha((uint8_t*)(p->pixels), (uint8_t*)p1->pixels, p->pitch, p->height);
+                        pic_free(p1);
+                    } else if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
+                        (strcmp(auxc->aux_type, "urn:mpeg:avc:2015:auxid:1") == 0)) {
+                        //depth channel
+                        VDBG(heif, "decoding auxl image: depth plane");
+                    }
+                    
                 } else if (r->type == TYPE2UINT("Exif") && ref->type == TYPE2UINT("cdsc")) {
-                    VDBG(heif, "exif %" PRIu64, r->length);
+                    VDBG(heif, "exif %" PRIu64 "", r->length);
+                    struct exif_block ex;
+                    ex.exif_tiff_header_offset = ((uint32_t)r->data[0]<<24|r->data[1]<<16|r->data[2]<<8|r->data[3]);
+                    ex.payload = r->data+5;
+                    VDBG(heif, "exif tiff %d payload %s", ex.exif_tiff_header_offset, ex.payload);
                 }
             }
         }
@@ -372,7 +402,7 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     int primary_id = get_primary_item_id(h);
     if (primary_id >= 0) {
         num = decode_primary_item(h, p);
-        decode_reference_items_for_primary(h, primary_id, p);
+        num += decode_reference_items_for_primary(h, primary_id, p);
         return num;
     }
     // we may have no primary id

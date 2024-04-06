@@ -20,7 +20,11 @@ void BGR24_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
 
 void BGRA32_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U, int16_t *V);
 
+void YUV400_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
+                            int y_stride, int mbrows, int mbcols, int ctbsize);
 
+void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
+                            int y_stride, int mbrows, int mbcols, int ctbsize);
 
 struct cs_ops {
     void (*YUV_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V, int vertical, int horizontal);
@@ -243,6 +247,8 @@ uint32_t CS_MasksToPixelFormatEnum(int bpp, uint32_t rmask, uint32_t gmask,
                                    uint32_t bmask, uint32_t amask);
 
 const char *CS_GetPixelFormatName(uint32_t format);
+
+void blend_BGRA32_8bit_alpha(uint8_t *fg, uint8_t *bg, int pitch, int height);
 
 #ifdef __cplusplus
 }

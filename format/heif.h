@@ -1,6 +1,7 @@
 #ifndef _HEIF_H_
 #define _HEIF_H_
 
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -96,6 +97,12 @@ struct HEVCSampleEntry {
 };
 
 #pragma pack(pop)
+
+
+struct exif_block {
+    uint32_t exif_tiff_header_offset;
+    uint8_t *payload;
+};
 
 
 struct heif_item {

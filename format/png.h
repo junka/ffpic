@@ -121,11 +121,9 @@ struct chromaticities_white_point {
 
 union background_color {
     uint16_t greyscale;
-    struct {
-      uint16_t red;
-      uint16_t green;
-      uint16_t blue;
-    } rgb;
+    uint16_t red;
+    uint16_t green;
+    uint16_t blue;
     uint8_t palette;
 };
 

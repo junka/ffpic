@@ -15,7 +15,7 @@
 #include "colorspace.h"
 #include "accl.h"
 
-VLOG_REGISTER(hevc, INFO)
+VLOG_REGISTER(hevc, DEBUG)
 
 #pragma pack(push, 1)
 struct cu_info {
@@ -1908,6 +1908,7 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
         vps->ViewOrderIdx[iNuhLId] = ScalabilityId[i][1];
         DependencyId[iNuhLId] = ScalabilityId[i][2];
         AuxId[iNuhLId] = ScalabilityId[i][3];
+        VDBG(hevc, "AuxId %d", AuxId[iNuhLId]);
         if (i > 0) {
             int newViewFlag = 1;
             for (int j = 0; j < i; j ++) {
@@ -2763,7 +2764,7 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         if (sps->separate_colour_plane_flag == 1) {
             slice->colour_plane_id = READ_BITS(v, 2);
             // 0, 1, 2 refers to Y, Cb, Cr
-            VDBG(hevc, "color_plane_id %d", slice->colour_plane_id);
+            VDBG(hevc, "colour_plane_id %d", slice->colour_plane_id);
         }
         if ((vps->vps_ext && headr->nuh_layer_id > 0 && !vps->vps_ext->poc_lsb_not_present_flag[vps->LayerIdxInVps[headr->nuh_layer_id]]) ||
             (headr->nal_unit_type!= IDR_W_RADL && headr->nal_unit_type != IDR_N_LP)) {
@@ -7223,7 +7224,7 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     int uv_stride = y_stride >> 1;
     struct picture p = {
         .size = height * y_stride,
-        .pixel = malloc(height * y_stride * sizeof(int16_t) * 2),
+        .pixel = calloc(height * y_stride * 2, sizeof(int16_t)),
         .y_stride = y_stride,
         .uv_stride = uv_stride,
     };
@@ -7256,10 +7257,24 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     inloop_filter(hslice.slice, pps, sps, &p);
 
-    YUV420_to_BGRA32_16bit(
-        *pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel, p.pixel+p.size, p.pixel+p.size * 3/2,
-        y_stride, uv_stride, divceil(height, (1 << sps->CtbLog2SizeY)),
-        divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
+    if (sps->chroma_format_idc == CHROMA_420) {
+        YUV420_to_BGRA32_16bit(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel,
+                p.pixel+p.size, p.pixel+p.size * 3/2, y_stride, uv_stride, divceil(height, (1 << sps->CtbLog2SizeY)),
+                divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
+    } else if (sps->chroma_format_idc == CHROMA_422) {
+        VDBG(hevc, "we got CHROMA_422");
+
+    } else if (sps->chroma_format_idc == CHROMA_444) {
+        VDBG(hevc, "we got CHROMA_444");
+
+    } else if (sps->chroma_format_idc == CHROMA_400) {
+        VDBG(hevc, "we got CHROME_400");
+        YUV400_to_BGRA32_16bit(
+            *pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel,
+            y_stride,
+            divceil(height, (1 << sps->CtbLog2SizeY)),
+            divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
+    }
 
     free(p.pixel);
     free(p.info);

@@ -6,6 +6,7 @@
 #include <assert.h>
 #include <sys/cdefs.h>
 
+#include "basemedia.h"
 #include "colorspace.h"
 #include "crc.h"
 #include "deflate.h"
@@ -15,7 +16,7 @@
 #include "utils.h"
 #include "vlog.h"
 
-VLOG_REGISTER(png, INFO)
+VLOG_REGISTER(png, DEBUG)
 
 #define CRC_ASSER(a, b) b = SWAP(b);  assert(a == b);
 
@@ -470,9 +471,9 @@ read_bkgd(PNG *b, FILE *f, uint32_t crc32, uint32_t length)
                b->ihdr.color_type == TRUECOLOR_ALPHA) {
         FFREAD(&b->bcolor, 6, 1, f);
         crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
-        b->bcolor.rgb.red = SWAP(b->bcolor.rgb.red);
-        b->bcolor.rgb.green = SWAP(b->bcolor.rgb.green);
-        b->bcolor.rgb.blue = SWAP(b->bcolor.rgb.blue);
+        b->bcolor.red = SWAP(b->bcolor.red);
+        b->bcolor.green = SWAP(b->bcolor.green);
+        b->bcolor.blue = SWAP(b->bcolor.blue);
     } else if (b->ihdr.color_type == INDEXEDCOLOR) {
         FFREAD(&b->bcolor, 1, 1, f);
         crc32 = update_crc(crc32, (uint8_t *)&b->bcolor, length);
@@ -536,17 +537,16 @@ PNG_load(const char* filename, int skip_flag)
     uint8_t *data = NULL;
     uint32_t crc32, crc;
 
-    if (READ_FAIL(&length, sizeof(uint32_t), 1, f)) {
-        return NULL;
-    }
+    length = read_u32(f);
+
     if (READ_FAIL(&chunk_type, sizeof(uint32_t), 1, f)) {
         return NULL;
     }
-    length = SWAP(length);
 
     while (length && chunk_type != (uint32_t)CHARS2UINT("IEND")) {
         assert(length > 0);
         crc32 = init_crc32((uint8_t*)&chunk_type, sizeof(uint32_t));
+        VDBG(png, "get chunk type %s", type2name(chunk_type));
         switch (chunk_type) {
             case CHUNK_TYPE_IHDR:
                 crc32 = read_ihdr(b, f, crc32);
@@ -600,15 +600,14 @@ PNG_load(const char* filename, int skip_flag)
         fread(&crc, sizeof(uint32_t), 1, f);
         crc32 = finish_crc32(crc32);
         CRC_ASSER(crc32, crc);
-        fread(&length, sizeof(uint32_t), 1, f);
-        length = SWAP(length);
+        length = read_u32(f);
         fread(&chunk_type, sizeof(uint32_t), 1, f);
     }
     /* check iEND chunk */
     read_iend(f);
     fclose(f);
     b->size = calc_image_raw_size(b);
-    VDBG(png, "compressed size %d, pre allocate %d\n", b->compressed_size, b->size);
+    VDBG(png, "compressed size %d, pre allocate %d", b->compressed_size, b->size);
 
     if (!skip_flag) {
         uint8_t* udata = malloc(b->size);
@@ -630,12 +629,19 @@ PNG_load(const char* filename, int skip_flag)
     p->height = b->ihdr.height;
     p->depth = calc_png_bits_per_pixel(b);
     p->pixels = b->data;
-    p->format = CS_MasksToPixelFormatEnum(p->depth, 0, 0, 0, 0xFF);
+    // PNG in RGB/RGBA order ?
+    if (p->depth == 32) {
+        p->format = CS_PIXELFORMAT_ABGR8888;
+        // CS_MasksToPixelFormatEnum(p->depth, 0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
+    } else if (p->depth <= 24) {
+        p->format = CS_MasksToPixelFormatEnum(p->depth, 0, 0, 0, 0x000000FF);
+    }
+    VDBG(png, "depth %d, format %s", p->depth, CS_GetPixelFormatName(p->format));
     p->pitch = ((b->ihdr.width * p->depth + 31) >> 5) << 2;
     return p;
 }
 
-static void 
+static void
 PNG_free(struct pic* p)
 {
     PNG *b = (PNG *)(p->pic);
@@ -731,7 +737,7 @@ PNG_info(FILE* f, struct pic* p)
     } else if (b->ihdr.color_type == TRUECOLOR ||
                b->ihdr.color_type == TRUECOLOR_ALPHA) {
         fprintf(f, "\tBackgroud color: RGB %04x, %04x, %04x\n",
-                b->bcolor.rgb.red, b->bcolor.rgb.green, b->bcolor.rgb.blue);
+                b->bcolor.red, b->bcolor.green, b->bcolor.blue);
     } else if (b->ihdr.color_type == INDEXEDCOLOR) {
         fprintf(f, "\tBackgroud color: Index %d\n", b->bcolor.palette);
     }

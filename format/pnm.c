@@ -10,20 +10,16 @@
 #include "pnm.h"
 
 static int 
-PNM_probe(const char *filename)
+PNM_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
         return -ENOENT;
     }
     struct file_header sig;
     size_t len = fread(&sig, sizeof(struct file_header), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if(sig.magic != 'P') {
         return -EINVAL;
     }

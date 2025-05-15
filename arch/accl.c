@@ -6,6 +6,9 @@
 #ifdef ENABLE_OPENCL
 #include "opcl.h"
 #endif
+#ifdef ENABLE_VULKAN
+#include "vk_idct.h"
+#endif
 
 TAILQ_HEAD(accl_ops_list, accl_ops);
 
@@ -26,6 +29,9 @@ void accl_ops_init(void)
 #ifdef ENABLE_OPENCL
     opcl_amd_init();
 #endif
+#ifdef ENABLE_VULKAN
+    vulkan_init();
+#endif
 }
 
 struct accl_ops *
@@ -43,4 +49,14 @@ struct accl_ops *accl_find(int type) {
         }
     }
     return NULL;
+}
+
+void accl_ops_uninit(void)
+{
+#ifdef ENABLE_VULKAN
+    vulkan_uninit();
+#endif
+#ifdef ENABLE_OPENCL
+    opcl_amd_uninit();
+#endif
 }

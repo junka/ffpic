@@ -20,26 +20,21 @@
 VLOG_REGISTER(webp, DEBUG)
 
 static int
-WEBP_probe(const char *filename)
+WEBP_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VCRIT(webp, "fail to open %s", filename);
         return -ENOENT;
     }
     struct webp_header h;
     int len = fread(&h, sizeof(h), 1, f);
     if (len < 1) {
-        fclose(f);
-        VCRIT(webp, "read %s file webp header error", filename);
+        VCRIT(webp, "read file webp header error");
         return -EBADF;
     }
-    fclose(f);
     if (!memcmp(&h.riff, "RIFF", 4) && !memcmp(&h.webp, "WEBP", 4)) {
         return 0;
     }
 
-    VDBG(webp, "%s is not a valid webp file", filename);
     return -EINVAL;
 }
 

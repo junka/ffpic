@@ -13,20 +13,16 @@
 VLOG_REGISTER(ico, INFO)
 
 static int
-ICO_probe(const char *filename)
+ICO_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(ico, "fail to open %s\n", filename);
         return -ENOENT;
     }
     struct ico_header head;
     int len = fread(&head, sizeof(struct ico_header), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if (head.rsv_zero == 0 && (head.type == 1 || head.type == 2))
         return 0;
 

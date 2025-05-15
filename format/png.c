@@ -21,17 +21,14 @@ VLOG_REGISTER(png, DEBUG)
 #define CRC_ASSER(a, b) b = SWAP(b);  assert(a == b);
 
 static int
-PNG_probe(const char* filename)
+PNG_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(png, "fail to open %s", filename);
         return -ENOENT;
     }
     struct png_file_header sig;
     FFREAD(&sig, sizeof(struct png_file_header), 1, f);
 
-    fclose(f);
     const uint8_t png_signature[] = {0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
     if (!memcmp(&sig, png_signature, sizeof(png_signature))){
         return 0;

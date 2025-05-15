@@ -510,11 +510,9 @@ read_xml(SVG *g, FILE *f)
 
 
 static int
-SVG_probe(const char *filename)
+SVG_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "r");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
         return -ENOENT;
     }
     char buf[2048];
@@ -522,11 +520,9 @@ SVG_probe(const char *filename)
     if (!strncmp("<?xml version=\"1.0\" standalone=\"no\"?>", buf, 37)) {
         fgets(buf, 2048, f);
         if (!strncmp("<!DOCTYPE svg PUBLIC ", buf, 21)) {
-            fclose(f);
             return 0;
         }
     }
-    fclose(f);
     return -EINVAL;
 }
 

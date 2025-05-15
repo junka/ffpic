@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <assert.h>
 
 #include "utils.h"
@@ -73,23 +74,42 @@ __m256i x86_idct_1dx4_avx2_16bit(const __m256i left, __m256i right, int shift) {
     return result;
 }
 
-static void x86_idct_4x4_avx2_16bit(int16_t *in, int bitdepth)
-{
-    int bdShift = 20 - bitdepth;
-    const int16_t transMatrix[16]
-        __attribute__((aligned(32))) = {29, 55, 74, 84,
-                                        74, 74, 0, -74,
-                                        84, -29, -74, 55,
-                                        55, -84, 74, -29};
-    const int16_t transMatrixT[16]
-        __attribute__((aligned(32))) = {29, 74, 84, 55,
-                                        55, 74, -29, -84,
-                                        74, 0, -74, 74,
-                                        84, -74, 55, -29};
+static void x86_idct_4x4_avx2_16bit(int16_t *in, int bitdepth) {
+    int bdShift  = 20 - bitdepth;
+    // const int16_t transMatrix[16] __attribute__((aligned(32))) =
+    // {
+    //     29, 55, 74, 84,
+    //     74, 74, 0, -74,
+    //     84, -29, -74, 55,
+    //     55, -84, 74, -29
+    // };
+    // const int16_t transMatrixT[16] __attribute__((aligned (32))) =
+    // {
+    //     29, 74, 84, 55,
+    //     55, 74, -29, -84,
+    //     74, 0, -74, 74,
+    //     84, -74, 55, -29
+    // };
+    const int16_t transMatrix[16] __attribute__((aligned(32))) =
+    {
+        64, 64, 64, 64,
+        83, 36, -36, -83,
+        64, -64, -64, 64,
+        36, -83, 83, -36
+    };
+
+    const int16_t transMatrixT[16] __attribute__((aligned (32))) =
+    {
+        64, 83, 64, 36,
+        64, 36, -64, -83,
+        64, -36, -64, 83,
+        64, -83, 64, -36 
+    };
     // 16 * 16 = 256 bit size
     __m256i tran = _mm256_load_si256((const __m256i *)transMatrix);
     __m256i tranT = _mm256_load_si256((const __m256i *)transMatrixT);
     __m256i input = _mm256_loadu_si256((const __m256i *)in);
+
     __m256i tmp = x86_idct_1dx4_avx2_16bit(tranT, input, 7);
     __m256i ret = x86_idct_1dx4_avx2_16bit(tmp, tran, bdShift);
     _mm256_storeu_si256((__m256i *)in, ret);

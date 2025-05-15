@@ -22,20 +22,16 @@ const char *bmptype[] = {
 };
 
 static int 
-BMP_probe(const char* filename)
+BMP_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(bmp, "fail to open %s\n", filename);
         return -ENOENT;
     }
     struct bmp_file_header file_h;
     int len = fread(&file_h, sizeof(file_h), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
 
     for (unsigned long i = 0; i < sizeof(bmptype)/sizeof(bmptype[0]); i++) {
         if (!memcmp(&file_h.file_type, bmptype[i], 2)) {

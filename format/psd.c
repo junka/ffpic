@@ -13,20 +13,16 @@
 VLOG_REGISTER(psd, INFO)
 
 static int
-PSD_probe(const char *filename)
+PSD_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(psd, "fail to open %s", filename);
         return -ENOENT;
     }
     struct psd_file_header h;
     int len = fread(&h, sizeof(h), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     h.version = SWAP(h.version);
 
     if ((!strncmp((char *)&h.signature, "8BPS", 4)) && (h.version == 1)) {

@@ -16,17 +16,14 @@
 VLOG_REGISTER(avif, DEBUG)
 
 static int
-AVIF_probe(const char *filename)
+AVIF_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
         return -ENOENT;
     }
     struct ftyp_box h;
     FFREAD(&h, sizeof(h), 1, f);
 
-    fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
         if(h.minor_version == TYPE2UINT("avif"))
         return 0;

@@ -152,6 +152,7 @@ main(int argc, const char *argv[])
         // file_enqueue_pic(p);
     }
 
+    accl_ops_uninit();
     pic_poll_block(false);
 
 quit:

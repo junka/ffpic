@@ -18,12 +18,10 @@
 VLOG_REGISTER(bpg, DEBUG)
 
 static int
-BPG_probe(const char *filename)
+BPG_probe(FILE *f)
 {
     struct bpg_file header;
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-      VERR(bpg, "fail to open %s\n", filename);
       return -ENOENT;
     }
     fread(&header, sizeof(header), 1, f);
@@ -31,7 +29,6 @@ BPG_probe(const char *filename)
         return 0;
     }
 
-    fclose(f);
     return -EINVAL;
 }
 

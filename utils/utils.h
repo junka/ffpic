@@ -17,6 +17,8 @@ void hexdump(FILE *f, const char *title, const char *prefix, const void *buf, un
 
 void mb_dump(FILE *f, const char *title, const uint8_t *buf, int size, int stride);
 
+void block_dump(FILE *f, const char *title, const int16_t *buf, int size);
+
 int log2floor(uint32_t n);
 int log2ceil(uint32_t n);
 
@@ -59,7 +61,6 @@ static inline int clip3(int minv, int maxv, int v)
 #define FFREAD(ptr, size, nitems, stream)                                      \
   do {                                                                         \
     if (nitems != fread(ptr, size, nitems, stream)) {                          \
-      fclose(stream);                                                          \
       return -EBADF;                                                           \
     }                                                                          \
   } while (0)

@@ -7,6 +7,7 @@
 
 #include "idct.h"
 #include "utils.h"
+#include "accl.h"
 
 #define DCTSIZE (8)
 #define RIGHT_SHIFT(x, n) ((x) >> (n))
@@ -183,7 +184,8 @@ void ff_fdct_ifast(int16_t *data) {
 
 #define alpha(u) ((u == 0) ? (1.0f/sqrt(8)) : 0.5)
 
-void fdct2d8x8(int16_t *data) {
+static void fdct2d8x8(int16_t *data)
+{
   int u, v;
   int x, y, i;
   float buf[64];
@@ -205,21 +207,136 @@ void fdct2d8x8(int16_t *data) {
     data[i] = buf[i];
 }
 
-int test_dct(void) {
-    int16_t data[] = {
+
+// 实现结果实际上加上了128，保证数值由[-128, 127] -> [0, 255] 范围
+void idct2d8x8(int16_t *data) {
+  int x, y, u, v, i;
+  float buf[64];
+  float temp;
+
+  for (x = 0; x < 8; x++) {
+    for (y = 0; y < 8; y++) {
+      temp = 0;
+      for (u = 0; u < 8; u++) {
+        for (v = 0; v < 8; v++) {
+          temp += alpha(u) * alpha(v) * data[v * 8 + u] *
+                  (float)cos((2.0f * x + 1.0f) / 16.0f * u * M_PI) *
+                  (float)cos((2.0f * y + 1.0f) / 16.0f * v * M_PI);
+        }
+      }
+      buf[y * 8 + x] = temp + 128;
+    }
+  }
+
+  for (i = 0; i < 64; i++)
+    data[i] = (int16_t)roundf(buf[i]);
+}
+
+
+void idct2d4x4(int16_t *data) {
+  int x, y, u, v, i;
+  float buf[16];
+  float temp;
+
+  for (x = 0; x < 4; x++) {
+    for (y = 0; y < 4; y++) {
+      temp = 0;
+      for (u = 0; u < 4; u++) {
+        for (v = 0; v < 4; v++) {
+          temp += alpha(u) * alpha(v) * data[v * 4 + u] *
+                  (float)cos((2.0f * x + 1.0f) / 8.0f * u * M_PI) *
+                  (float)cos((2.0f * y + 1.0f) / 8.0f * v * M_PI);
+        }
+      }
+      buf[y * 4 + x] = temp;
+    }
+  }
+
+  for (i = 0; i < 16; i++)
+    data[i] = (int16_t)roundf(buf[i]);
+}
+
+int test_verify(int size, int16_t *data, int16_t *exp)
+{
+  for (int i = 0; i < size; i ++) {
+    if (ABS(data[i]-exp[i])>1) {
+        printf("not match %d: %d vs %d\n", i, data[i], exp[i]);
+        return -1;
+    }
+  }
+  return 0;
+}
+
+
+int test_idct4x4(void) {
+  int16_t data[] = {
+    117, 115, 112, 112,
+    110, 108, 103, 101,
+    117, 115, 113, 113,
+    111, 108, 103, 99,
+  };
+  int16_t data1[] = {
+    117, 115, 112, 112,
+    110, 108, 103, 101,
+    117, 115, 113, 113,
+    111, 108, 103, 99,
+  };
+  const struct dct_ops *dct = get_dct_ops(16);
+  dct->idct_4x4(data, 12);
+
+  // int16_t out[16];
+  // idct_4x4_hevc(data1, out, 8, false);
+  idct2d4x4(data1);
+#if 0
+  block_dump(stdout, "data", data, 4);
+  // block_dump(stdout, "out", out, 4);
+  block_dump(stdout, "data1", data1, 4);
+#endif
+  
+  return test_verify(16, data, data1);
+}
+
+
+#ifdef ENABLE_VULKAN
+int test_idct4x4_accl(void) {
+  accl_ops_init();
+
+  int16_t data[] = {
+    117, 115, 112, 112,
+    110, 108, 103, 101,
+    117, 115, 113, 113,
+    111, 108, 103, 99,
+  };
+  int16_t data1[] = {
+    117, 115, 112, 112,
+    110, 108, 103, 101,
+    117, 115, 113, 113,
+    111, 108, 103, 99,
+  };
+
+  struct accl_ops *ops = accl_find(GPU_TYPE_VULKAN);
+  ops->idct_4x4(data, 8);
+
+  idct2d4x4(data1);
+#if 0
+  block_dump(stdout, "data", data, 4);
+  block_dump(stdout, "data1", data1, 4);
+#endif
+  accl_ops_uninit();
+  return test_verify(16, data, data1);
+}
+#endif
+
+int test_fdct8x8(void) {
+    int16_t data[64] = {
         117, 115, 112, 112, 110, 108, 103, 101, 117, 115, 113, 113, 111,
         108, 103, 99,  116, 116, 115, 113, 111, 108, 102, 98,  116, 116,
         116, 114, 111, 107, 101, 97,  116, 117, 117, 115, 111, 104, 99,
         97,  117, 118, 117, 114, 109, 102, 98,  97,  118, 118, 117, 112,
         106, 100, 98,  98,  118, 118, 117, 111, 104, 99,  98,  97,
     };
-    int16_t data1[] = {
-        117, 115, 112, 112, 110, 108, 103, 101, 117, 115, 113, 113, 111,
-        108, 103, 99,  116, 116, 115, 113, 111, 108, 102, 98,  116, 116,
-        116, 114, 111, 107, 101, 97,  116, 117, 117, 115, 111, 104, 99,
-        97,  117, 118, 117, 114, 109, 102, 98,  97,  118, 118, 117, 112,
-        106, 100, 98,  98,  118, 118, 117, 111, 104, 99,  98,  97,
-    };
+    int16_t data1[64];
+    memcpy(data1, data, 64 * sizeof(int16_t));
 
     const struct dct_ops *dct = get_dct_ops(8);
     // int16_t out[64];
@@ -228,44 +345,78 @@ int test_dct(void) {
     //   data1[i] -= 128;
     // }
     fdct2d8x8(data1);
-    // jpeg_fdct(data);
     // ff_fdct_ifast(data1);
-    // for (int i = 0; i < 8; i++) {
-    //     for (int j = 0; j < 8; j++) {
-    //         printf("%d ", (int)out[i * 8 + j]);
-    //     }
-    //     printf("\n");
-    // }
-    // printf("\n");
+#if 0
+    block_dump(stdout, "data", data, 8);
+    block_dump(stdout, "data1", data1, 8);
+#endif
+    return test_verify(64, data, data1);
+}
 
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
-            printf("%d ", (int)data[i * 8 + j]);
-        }
-        printf("\n");
-    }
-    printf("\n");
+int test_idct8x8_8bit()
+{
+    int16_t data[] = {
+        511, 55, -11, 0, 0, 0, 0, 0, 
+        05, -10, -2, 7, 0, 0, 0, -1, 
+        -2, 0, 6, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+    };
+    int16_t data1[64];
+    memcpy(data1, data, 64 * 2);
 
-    for (int i = 0; i < 8; i++) {
-        for (int j = 0; j < 8; j++) {
-            printf("%d ", (int)data1[i * 8 + j]);
-        }
-        printf("\n");
-    }
-    printf("\n");
+    const struct dct_ops *dct = get_dct_ops(16);
+    dct->idct_8x8(data, 16);
+    idct2d8x8(data1);
+#if 0
+    block_dump(stdout, "data", data, 8);
+    block_dump(stdout, "data1", data1, 8);
+#endif
 
-    for (int i = 0; i < 64; i ++) {
-        if (ABS(data[i]-data1[i])>1) {
-            printf("not match %d: %d vs %d\n", i, (int16_t)(data[i]), data1[i]);
-            return -1;
-        }
-    }
-    return 0;
+    return test_verify(64, data, data1);
+}
+
+int test_idct8x8_16bit()
+{
+    int16_t data[] = {
+        873, 55, -11, 0, 0, 0, 0, 0, 
+        05, -10, -2, 7, 0, 0, 0, -1, 
+        -2, 0, 6, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 1, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+    };
+    int16_t data1[64];
+    memcpy(data1, data, 64 * 2);
+
+    const struct dct_ops *dct = get_dct_ops(16);
+    dct->idct_8x8(data, 16);
+    idct2d8x8(data1);
+#if 0
+    block_dump(stdout, "data", data, 8);
+    block_dump(stdout, "data1", data1, 8);
+#endif
+
+    return test_verify(64, data, data1);
 }
 
 
 int main(void)
 {
-
-    return test_dct();
+    if (test_fdct8x8())
+      return -1;
+    if (test_idct8x8_16bit())
+      return -1;
+    if (test_idct4x4())
+      return -1;
+#ifdef ENABLE_VULKAN
+    if (test_idct4x4_accl())
+      return -1;
+#endif
+    return 0;
 }

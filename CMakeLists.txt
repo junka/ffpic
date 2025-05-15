@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.11)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 11)
 
@@ -105,6 +105,7 @@ list(APPEND FFPIC_FORMART
 find_package(SDL2)
 find_package(OpenCL)
 find_library(MATH_LIBRARY m)
+find_package(Vulkan)
 
 list(APPEND FFPIC_ACCL
   "${FFPIC_ROOT}/arch/accl.c"
@@ -117,7 +118,7 @@ if(OpenCL_FOUND)
       SET(OUTPUT_FILE ${INPUT_FILE}_xx.h)
       ADD_CUSTOM_COMMAND(
           OUTPUT ${OUTPUT_FILE}
-          COMMAND ${CLSOURCE_COMPILER} -n srcstr -i ${INPUT_FILE} ${OUTPUT_FILE}
+          COMMAND ${CLSOURCE_COMPILER} -i ${INPUT_FILE} | sed 's/[a-z_A-Z0-9]*opcl_cl/srcstr/g' > ${OUTPUT_FILE}
           COMMENT "Compiling ${INPUT_FILE} to binary")
       LIST(APPEND FFPIC_ACCL ${OUTPUT_FILE})
   ENDFOREACH()
@@ -126,9 +127,44 @@ if(OpenCL_FOUND)
     "${FFPIC_ROOT}/arch/opencl/opcl.c")
 endif()
 
+if (Vulkan_FOUND)
+  set(SPIRV_DIR ${CMAKE_CURRENT_BINARY_DIR})
+  FILE(GLOB_RECURSE SHADER_FILES "${FFPIC_ROOT}/arch/vulkan/*.comp")
+  FOREACH(SHADER ${SHADER_FILES})
+    get_filename_component(SHADER_NAME ${SHADER} NAME_WE)
+    set(SPIRV_FILE ${SPIRV_DIR}/${SHADER_NAME}.spv)
+    set(HEADER_FILE ${SPIRV_DIR}/${SHADER_NAME}.h)
 
-add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_CODING} ${FFPIC_ACCL})
+    add_custom_command(
+        OUTPUT ${SPIRV_FILE}
+        COMMAND glslc -c ${SHADER} -fshader-stage=compute -g -o ${SPIRV_FILE}
+        DEPENDS ${SHADER}
+        COMMENT "Compiling ${SHADER_NAME} to SPIR-V"
+    )
+
+    add_custom_command(
+        OUTPUT ${HEADER_FILE}
+        COMMAND xxd -i ${SPIRV_FILE} | sed "s/[_a-zA-Z0-9]*${SHADER_NAME}/${SHADER_NAME}/g" > ${HEADER_FILE}
+        DEPENDS ${SPIRV_FILE}
+        COMMENT "Converting ${SPIRV} to header file"
+    )
+
+    list(APPEND SPIRV_HEADERS ${HEADER_FILE})
+  ENDFOREACH()
+  message("${SPIRV_HEADERS}")
+  list(APPEND FFPIC_ACCL
+    "${FFPIC_ROOT}/arch/vulkan/vk_idct.c")
+endif()
+
+add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_ACCL} ${FFPIC_CODING})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
+
+
+if (Vulkan_FOUND)
+  add_custom_target(compile_shaders DEPENDS ${SPIRV_HEADERS})
+  add_dependencies(ffpic compile_shaders)
+  target_include_directories(ffpic PRIVATE ${SPIRV_DIR})
+endif ()
 
 if(OpenCL_FOUND)
   target_compile_options(ffpic PRIVATE -DENABLE_OPENCL)
@@ -138,15 +174,21 @@ add_executable(picinfo "${FFPIC_ROOT}/app/picinfo.c")
 add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c")
 add_executable(transcode "${FFPIC_ROOT}/app/transcode.c")
 
+if(Vulkan_FOUND)
+  target_include_directories(ffpic PRIVATE $(Vulkan_INCLUDE_DIRS))
+  include_directories(ffpic "${FFPIC_ROOT}/arch/vulkan/")
+  target_compile_options(ffpic PRIVATE -DENABLE_VULKAN)
+endif()
+
 if(SDL2_FOUND)
   add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
   target_link_libraries(sdlshow ffpic m)
   target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
 endif(SDL2_FOUND)
 
-target_link_libraries(picinfo ffpic m)
-target_link_libraries(transbmp ffpic m)
-target_link_libraries(transcode ffpic m)
+target_link_libraries(picinfo ffpic m ${CMAKE_DL_LIBS})
+target_link_libraries(transbmp ffpic m ${CMAKE_DL_LIBS})
+target_link_libraries(transcode ffpic m ${CMAKE_DL_LIBS})
 target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 target_include_directories(transbmp PRIVATE ${FFPIC_DIRS})
 target_include_directories(transcode PRIVATE ${FFPIC_DIRS})
@@ -167,6 +209,16 @@ if(OpenCL_FOUND)
   target_link_libraries(transcode OpenCL::OpenCL)
   if(SDL2_FOUND)
     target_link_libraries(sdlshow OpenCL::OpenCL)
+  endif(SDL2_FOUND)
+endif()
+
+if (Vulkan_FOUND)
+  target_link_libraries(ffpic ${CMAKE_DL_LIBS})
+  target_link_libraries(picinfo ${CMAKE_DL_LIBS})
+  target_link_libraries(transbmp ${CMAKE_DL_LIBS})
+  target_link_libraries(transcode ${CMAKE_DL_LIBS})
+  if(SDL2_FOUND)
+    target_link_libraries(sdlshow ${CMAKE_DL_LIBS})
   endif(SDL2_FOUND)
 endif()
 

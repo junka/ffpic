@@ -20,7 +20,7 @@
 VLOG_REGISTER(heif, DEBUG)
 
 static int
-HEIF_probe(const char *filename)
+HEIF_probe(FILE *f)
 {
     static char* heif_types[] = {
         "heic",
@@ -31,18 +31,14 @@ HEIF_probe(const char *filename)
         "hevx",
     };
 
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(heif, "fail to open %s\n", filename);
         return -ENOENT;
     }
     struct ftyp_box h;
     int len = read_ftyp(f, &h);
     if (len < 0) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if (h.major_brand == TYPE2UINT("ftyp")) {
         // VDBG(heif, "len %d minor_version %s", len , type2name(h.minor_version));
         if (len > 12 && (h.minor_version == TYPE2UINT("mif1")||h.minor_version == TYPE2UINT("msf1"))) {

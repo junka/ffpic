@@ -39,26 +39,21 @@ static const uint8_t zigzag[64] = {
 };
 
 static int
-JPG_probe(const char *filename)
+JPG_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(jpg, "fail to open %s", filename);
         return -ENOENT;
     }
     uint16_t soi, eoi;
     int len = fread(&soi, 2, 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
     fseek(f, -2, SEEK_END);
     len = fread(&eoi, 2, 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if (SOI == soi && eoi == EOI)
         return 0;
 

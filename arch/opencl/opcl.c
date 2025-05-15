@@ -1,6 +1,12 @@
+#ifdef __APPLE__
 #include <OpenCL/OpenCL.h>
+#else
+#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
+#include <CL/cl.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <inttypes.h>
 #include <assert.h>
 
@@ -127,6 +133,7 @@ void opcl_amd_init(void) {
                 did = dev_ids[j];
 
                 clGetDeviceInfo(did, CL_DEVICE_NAME, sizeof(dname), dname, NULL);
+                priv.device_id = did;
                 if (strstr(dname, "AMD")) {
                     // choose high-performace gpu automatically
                     VINFO(opcl, "Device #%u: Name: %s", j + 1, dname);
@@ -205,3 +212,4 @@ void opcl_amd_init(void) {
 
     accl_ops_register(&opcl_accl);
 }
+

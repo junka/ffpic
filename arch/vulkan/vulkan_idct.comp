@@ -1,0 +1,63 @@
+#version 450 core
+
+#extension GL_EXT_scalar_block_layout : enable
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_int16: require
+#extension GL_EXT_shader_16bit_storage : require
+
+// Vulkan compute shader for accelerating IDCT transformation
+
+layout(local_size_x = 4, local_size_y = 4) in;
+
+layout(std430, binding = 0) readonly uniform InputBuffer {
+    i16vec4 data[4];
+} uInput;
+
+layout(std430, binding = 1) readonly uniform TransMatrixBuffer {
+    i16vec4 data[4];
+} uTrans;
+
+layout(std430, binding = 2) writeonly buffer OutputBuffer {
+    int16_t outputData[];
+};
+
+layout(push_constant) uniform PushConstants {
+    int depth;
+};
+
+shared int tmp[16]; // Shared memory for intermediate results
+
+void main() {
+    const int c1 = 20091;
+    const int c2 = 35468;
+    uint x = gl_LocalInvocationID.x;
+    uint y = gl_LocalInvocationID.y;
+    uint idx = 4*y + x;
+
+    // First pass: row transformation
+    int a0 = uInput.data[0][x] + uInput.data[2][x];
+    int a1 = uInput.data[0][x] - uInput.data[2][x];
+    int a2 = ((uInput.data[1][x] * c2) >> 16) - uInput.data[3][x] - ((uInput.data[3][x] * c1) >> 16);
+    int a3 = uInput.data[1][x] + ((uInput.data[1][x] * c1) >> 16) + ((uInput.data[3][x] * c2) >> 16);
+
+    tmp[x + 0] = int16_t(clamp(a0 + a3, -32768, 32767));
+    tmp[x + 12] = int16_t(clamp(a0 - a3,-32768, 32767));
+    tmp[x + 4] = int16_t(clamp(a1 + a2,-32768, 32767));
+    tmp[x + 8] = int16_t(clamp(a1 - a2,-32768, 32767));
+
+    groupMemoryBarrier();
+    barrier();
+
+    // Second pass: column transformation
+    a0 = tmp[y * 4 + 0] + tmp[y * 4 + 2];
+    a1 = tmp[y * 4 + 0] - tmp[y * 4 + 2];
+    a2 = ((tmp[y * 4 + 1] * c2) >> 16) - tmp[y * 4 + 3] - ((tmp[y * 4 + 3] * c1) >> 16);
+    a3 = tmp[y * 4 + 1] + ((tmp[y * 4 + 1] * c1) >> 16) + ((tmp[y * 4 + 3] * c2) >> 16);
+
+    outputData[y * 4 + 0] = int16_t(clamp((a0 + a3 + 4) >> 3, -32768, 32767));
+    outputData[y * 4 + 3] = int16_t(clamp((a0 - a3 + 4) >> 3, -32768, 32767));
+    outputData[y * 4 + 1] = int16_t(clamp((a1 + a2 + 4) >> 3, -32768, 32767));
+    outputData[y * 4 + 2] = int16_t(clamp((a1 - a2 + 4) >> 3, -32768, 32767));
+}

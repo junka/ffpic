@@ -75,6 +75,7 @@ int main(int argc, char *argv[])
     file_info(ops, p);
 
     file_free(ops, p);
+    accl_ops_uninit();
 exit:
 
 #ifndef NDEBUG

@@ -18,17 +18,14 @@ VLOG_REGISTER(jp2, DEBUG)
 
 
 static int
-JP2_probe(const char *filename)
+JP2_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
         return -ENOENT;
     }
     struct jp2_signature_box h;
     read_box(f, &h);
 
-    fclose(f);
     if (h.type == TYPE2UINT("jP  ") || 
         h.type == TYPE2UINT("jP2 ")) {
         return 0;

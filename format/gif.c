@@ -269,20 +269,16 @@ GIF_load(const char *filename, int skip_flag)
 }
 
 static int 
-GIF_probe(const char* filename)
+GIF_probe(FILE *f)
 {
     struct gif_file_header head;
-    FILE* f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(gif, "fail to open %s", filename);
         return -ENOENT;
     }
     int len = fread(&head, 1, GIF_FILE_HEADER_LEN, f);
     if (len < 6) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if (!memcmp(&head, "GIF89a", GIF_FILE_HEADER_LEN) || 
         !memcmp(&head, "GIF87a", GIF_FILE_HEADER_LEN)) {
         return 0;

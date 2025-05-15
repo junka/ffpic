@@ -10,11 +10,9 @@
 #include "utils.h"
 
 static int 
-TGA_probe(const char *filename)
+TGA_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        printf("fail to open %s\n", filename);
         return -ENOENT;
     }
     // size_t extra_size = 0;
@@ -23,12 +21,10 @@ TGA_probe(const char *filename)
     // size_t filesize = ftell(f) + sizeof(struct tga_footer);
     size_t len = fread(&tailer, sizeof(struct tga_footer), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
     if(tailer.end == '.' && tailer.zero == 0 &&
         !memcmp(tailer.signature, "TRUEVISION-XFILE", 16)) {
-        fclose(f);
         return 0;
     }
 
@@ -37,10 +33,8 @@ TGA_probe(const char *filename)
     fseek(f, 0, SEEK_SET);
     len = fread(&header, sizeof(struct tga_header), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     // extra_size += header.ident_size;
     // if (header.color_map_type == 1) {
     //     extra_size += header.color_map_length * (header.color_map_entry_size >> 3);

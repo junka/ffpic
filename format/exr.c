@@ -14,17 +14,14 @@
 VLOG_REGISTER(exr, INFO)
 
 static int 
-EXR_probe(const char* filename)
+EXR_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(exr, "fail to open %s", filename);
         return -ENOENT;
     }
     uint32_t magic;
     FFREAD(&magic, sizeof(magic), 1, f);
 
-    fclose(f);
     if (SWAP(magic) == 0x762f3101) {
         return 0;
     }

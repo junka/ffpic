@@ -18,7 +18,7 @@ extern "C" {
 struct file_ops {
     const char *name;
     const char *alias;
-    int (*probe)(const char *filename);
+    int (*probe)(FILE *f);
     struct pic* (*load)(const char *filename, int skip_flag);
     void (*free)(struct pic *p);
     void (*info)(FILE *f, struct pic* p);

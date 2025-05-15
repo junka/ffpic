@@ -14,20 +14,16 @@
 VLOG_REGISTER(tiff, INFO)
 
 static int
-TIFF_probe(const char *filename)
+TIFF_probe(FILE *f)
 {
-    FILE *f = fopen(filename, "rb");
     if (f == NULL) {
-        VERR(tiff, "fail to open %s", filename);
         return -ENOENT;
     }
     struct tiff_file_header h;
     int len = fread(&h, sizeof(h), 1, f);
     if (len < 1) {
-        fclose(f);
         return -EBADF;
     }
-    fclose(f);
     if (h.byteorder == 0x4D4D) {
         h.version = SWAP(h.version);
     }

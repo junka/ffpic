@@ -57,3 +57,16 @@ void mb_dump(FILE *f, const char *title, const uint8_t *buf, int size, int strid
         fprintf(f, "\n");
     }
 }
+
+//for block int16_t
+void block_dump(FILE *f, const char *title, const int16_t *buf, int size)
+{
+    fprintf(f, "%s:\n", title);
+    for (int i = 0; i < size; i ++) {
+        for (int j = 0; j < size; j ++) {
+            fprintf(f, "%02d ", *(buf+j));
+        }
+        buf += size;
+        fprintf(f, "\n");
+    }
+}

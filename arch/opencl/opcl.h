@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 void opcl_amd_init(void);
+void opcl_amd_uninit(void);
 
 #ifdef __cplusplus
 }

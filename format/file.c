@@ -31,10 +31,15 @@ struct file_ops*
 file_probe(const char *filename)
 {
     struct file_ops* ops;
+    FILE *f = fopen(filename, "rb");
     TAILQ_FOREACH(ops, &ops_list, next) {
-        if(ops->probe(filename) == 0)
+        fseek(f, 0, SEEK_SET);
+        if(ops->probe(f) == 0) {
+            fclose(f);
             return ops;
+        }
     }
+    fclose(f);
     return NULL;
 }
 

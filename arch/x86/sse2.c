@@ -140,10 +140,11 @@ static void x86_idct_4x4_sse2_16bit(int16_t *in, int bitdepth UNUSED) {
       const __m128i tmp1 = _mm_add_epi16(b, c);
       const __m128i tmp2 = _mm_sub_epi16(b, c);
       const __m128i tmp3 = _mm_sub_epi16(a, d);
-      const __m128i shifted0 = _mm_srai_epi16(tmp0, 3);
-      const __m128i shifted1 = _mm_srai_epi16(tmp1, 3);
-      const __m128i shifted2 = _mm_srai_epi16(tmp2, 3);
-      const __m128i shifted3 = _mm_srai_epi16(tmp3, 3);
+      const __m128i rounding = _mm_set1_epi16(4); // 2^(3-1)
+      const __m128i shifted0 = _mm_srai_epi16(_mm_add_epi16(tmp0, rounding), 3);
+      const __m128i shifted1 = _mm_srai_epi16(_mm_add_epi16(tmp1, rounding), 3);
+      const __m128i shifted2 = _mm_srai_epi16(_mm_add_epi16(tmp2, rounding), 3);
+      const __m128i shifted3 = _mm_srai_epi16(_mm_add_epi16(tmp3, rounding), 3);
 
       // Transpose the two 4x4.
       x86_idct_1dx4_sse2_16bit(&shifted0, &shifted1, &shifted2, &shifted3, &T0,

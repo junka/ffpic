@@ -14,6 +14,7 @@ enum simd_type {
     SIMD_TYPE_SSE2 = 1,
     SIMD_TYPE_AVX2 = 2,
     GPU_TYPE_OPENCL = 25,
+    GPU_TYPE_VULKAN = 26,
 };
 
 struct accl_ops {
@@ -26,6 +27,7 @@ struct accl_ops {
 void accl_ops_register(struct accl_ops *ops);
 
 void accl_ops_init(void);
+void accl_ops_uninit(void);
 
 struct accl_ops *accl_first_available(void);
 

@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <assert.h>
 
 #include "utils.h"
 #include "idct.h"
@@ -9,10 +10,10 @@ static void
 idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, int bdShift)
 {
     const int8_t transMatrix[4][4] = {
-    {29, 55, 74, 84},
-    {74, 74, 0, -74},
-    {84, -29, -74, 55},
-    {55, -84, 74, -29}
+        {29, 55, 74, 84},
+        {74, 74, 0, -74},
+        {84, -29, -74, 55},
+        {55, -84, 74, -29}
     };
 
     int last_nz = 0;
@@ -30,10 +31,10 @@ idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, i
         out[i] = clip3(mincoeff, maxcoeff, (tmp + (bdShift - 1)) >> bdShift);
     }
 }
+
 // hevc spec 8.6.4.1
 void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp)
 {
-
     int bdShift = MAX(20 - bitdepth, (epp ? 11 : 0));
     int mincoeff = -(1 << (epp ? MAX(15, bitdepth + 6) : 15));
     int maxcoeff = (1 << (epp ? MAX(15, bitdepth + 6) : 15)) - 1;
@@ -55,10 +56,12 @@ void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp)
 #endif
 void idct_1d_4_8bits(const uint8_t *in, uint8_t out[4], int mincoeff,
                      int maxcoeff, int bdShift) {
-    const int8_t transMatrix[4][4] = {{29, 55, 74, 84},
-                                      {74, 74, 0, -74},
-                                      {84, -29, -74, 55},
-                                      {55, -84, 74, -29}};
+    const int8_t transMatrix[4][4] = {
+        {29, 55, 74, 84},
+        {74, 74, 0, -74},
+        {84, -29, -74, 55},
+        {55, -84, 74, -29}
+    };
 
     int last_nz = 0;
     for (int i = 3; i >= 0; i--) {
@@ -118,7 +121,7 @@ static void idct_4x4_16(void *input, int bitdepth UNUSED)
 #if 1
     static const int c1 = 20091;
     static const int c2 = 35468;
-    int tmp[16];
+    int16_t tmp[16];
     int i;
     for (i = 0; i < 4; ++i) {
         const int a0 = in[0 + i] + in[8 + i];
@@ -352,7 +355,7 @@ idct_float(int *buf, int *output, int stride)
 // idct_transform[8*x+u] = alpha(u)*cos((2*x+1)*u*M_PI/16)*sqrt(2), with fixed 13
 // bit precision, where alpha(0) = 1/sqrt(2) and alpha(u) = 1 for u > 0.
 // Some coefficients are off by +-1 to mimick libjpeg's behaviour.
-static const int idct_transform[64] = {
+static const int idct_transform_p13[64] = {
     8192,  11363,  10703, 9633, 8192, 6437, 4433, 2260,
     8192,  9633, 4433, -2259, -8192, -11362, -10704, -6436,
     8192, 6437, -4433, -11362, -8192, 2261, 10704, 9633,
@@ -368,18 +371,18 @@ idct_1d_8_8bit(const uint8_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++) {
         int tmp = 0;
         for (int u = 0; u < 8; ++u) {
-            tmp += idct_transform[8 * i + u] * in[u * stride];
+            tmp += idct_transform_p13[8 * i + u] * in[u * stride];
         }
         out[i] = tmp;
     }
 }
 
 static inline void 
-idct_1d_8(const int16_t *in, const int stride, int out[8]) {
+idct_1d_8_16bit(const int16_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++) {
         out[i] = 0;
         for (int u = 0; u < 8; ++u) {
-            out[i] += idct_transform[8 * i + u] * in[u * stride];
+            out[i] += idct_transform_p13[8 * i + u] * in[u * stride];
         }
     }
 #if 0
@@ -514,7 +517,7 @@ static void idct_8x8_16(void *block, int depth UNUSED) {
     const int kColRound = 1 << (kColScale - 1);
     for (int x = 0; x < 8; ++x) {
         int colbuf[8] = {0};
-        idct_1d_8(in + x, 8, colbuf);
+        idct_1d_8_16bit(in + x, 8, colbuf);
         for (int y = 0; y < 8; ++y) {
             colidcts[8 * y + x] = (colbuf[y] + kColRound) >> kColScale;
         }
@@ -523,9 +526,9 @@ static void idct_8x8_16(void *block, int depth UNUSED) {
     const int kRowRound = 257 << (kRowScale - 1); // includes offset by 128
     for (int y = 0; y < 8; ++y) {
         int rowbuf[8] = {0};
-        idct_1d_8(&colidcts[8 * y], 1, rowbuf);
+        idct_1d_8_16bit(&colidcts[8 * y], 1, rowbuf);
         for (int x = 0; x < 8; ++x) {
-            out[y * 8 + x] = clamp(((rowbuf[x] + kRowRound) >> kRowScale), 255);
+            out[y * 8 + x] = clamp(((rowbuf[x] + kRowRound) >> kRowScale), 65535);
         }
     }
 }
@@ -750,15 +753,7 @@ void dct_float(float *data) {
     }
 }
 
-static const int dct_transform[64] = {
-    // 2896,  2896,  2896,  2896,  2896,  2896,  2896,  2896,
-    // 4017,  3405, 2275,  799,   -799,  -2275, -3405, -4017,
-    // 3784,  1567,  -1567, -3784, -3784, -1567, 1567,  3784,
-    // 3405,  -799,  -4017, -2275, 2275,  4017, 799,   -3405,
-    // 2896,  -2896, -2896, 2896,  2896,  -2896, -2896, 2896,
-    // 2275,  -4017, 799,   3405,  -3405, -799,  4017,  -2275,
-    // 1567,  -3784, 3784,  -1567, -1567, 3784,  -3784, 1567,
-    // 799,   -2275, 3405,  -4017, 4017,  -3405, 2275,  -799,
+static const int dct_transform_p13[64] = {
     5792,     5792,     5792,     5792,     5792,     5792,     5792,     5792, 
     8034,     6811,     4551,     1598,    -1598,    -4551,    -6811,    -8034, 
     7568,     3134,    -3134,    -7568,    -7568,    -3134,     3134,     7568, 
@@ -774,7 +769,7 @@ dct_1d_8(const int16_t *in, const int stride, int out[8]) {
     for (int i = 0; i < 8; i++){
         out[i] = 0;
         for (int u = 0; u < 8; ++u) {
-            out[i] += dct_transform[8 * i + u] * in[u * stride];
+            out[i] += dct_transform_p13[8 * i + u] * in[u * stride];
         }
         out[i] >>= 1;
     }
@@ -798,14 +793,7 @@ fdct_8x8_8(void *data) {
             // coldcts[y * 8 + x] = colbuff[y];
         }
     }
-    // printf("intermedia:\n");
-    // for (int i = 0; i < 8; i++) {
-    //     for (int j = 0; j < 8; j++) {
-    //         printf("%d ", rowdcts[8 * i + j]);
-    //     }
-    //     printf("\n");
-    // }
-    // printf("\n");
+
     const int kColScale = 13;
     const int kColRound = 1 << (kColScale - 1);
     for (int x = 0; x < 8; x++) {

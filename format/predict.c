@@ -505,7 +505,7 @@ void pred_luma(int16_t *coff, int ymode, uint8_t imodes[16], uint8_t *dst, int s
             } else {
                 memcpy(top, dst + (ys * 4)* stride + xs * 4 - stride, 4);
                 if (xs == 3) {
-                    memcpy(topright, dst + 3 * 4 - stride + 4, 4);
+                    memset(topright, 127, 4);
                 } else if (xs < 3) {
                     memcpy(topright, dst + (ys * 4)* stride + xs * 4 - stride + 4, 4);
                 }

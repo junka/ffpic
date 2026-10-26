@@ -94,7 +94,7 @@ RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int dep
             struct bmp_color_entry *ct)
 {
     int p = 0;
-    uint8_t px;
+    uint8_t px = 0;
     int y = height > 0 ? height - 1 : 0;
     int delta = (height > 0) ? -1 : 1;
     int x = 0;
@@ -174,7 +174,7 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
 
     for (int i = top; i >= bottom; i += delta) {
         for (int j = 0; j < width; j++) {
-            uint8_t px = 0, pxlo;
+            uint8_t px = 0, pxlo = 0;
             if (bit_count == 8) {
                 px = fgetc(f);
             } else if (bit_count == 4) {

@@ -353,7 +353,7 @@ int test_fdct8x8(void) {
     return test_verify(64, data, data1);
 }
 
-int test_idct8x8_8bit()
+int test_idct8x8_8bit(void)
 {
     int16_t data[] = {
         511, 55, -11, 0, 0, 0, 0, 0, 
@@ -379,7 +379,7 @@ int test_idct8x8_8bit()
     return test_verify(64, data, data1);
 }
 
-int test_idct8x8_16bit()
+int test_idct8x8_16bit(void)
 {
     int16_t data[] = {
         873, 55, -11, 0, 0, 0, 0, 0, 

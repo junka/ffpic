@@ -153,7 +153,7 @@ read_pixels(struct pic *p, FILE *f)
     BMP *b = p->pic;
     /* For read bmp pic data from bottom to up */
     for (int i = top; i >= bottom; i += delta) {
-        fread(b->data + p->pitch * i, p->depth / 8, width, f);
+        FFREAD_IGNORE(b->data + p->pitch * i, p->depth / 8, width, f);
         for (int j = 0; j < width; j++) {
             if (p->depth == 32) {
                 b->data[p->pitch * i + j * p->depth / 8 + 3] = 0xFF;
@@ -208,11 +208,11 @@ BMP_load(const char* filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&b->file_header, sizeof(struct bmp_file_header), 1, f);
+    FFREAD_IGNORE(&b->file_header, sizeof(struct bmp_file_header), 1, f);
     uint32_t size;
-    fread(&size, 4, 1, f);
+    FFREAD_IGNORE(&size, 4, 1, f);
     fseek(f, -4, SEEK_CUR);
-    fread(&b->dib, size, 1, f);
+    FFREAD_IGNORE(&b->dib, size, 1, f);
 
     /* FIXME: header length and later struct */
     if (size == 12) {
@@ -225,7 +225,7 @@ BMP_load(const char* filename, int skip_flag UNUSED)
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
-                fread(b->palette, 4, 1, f);
+                FFREAD_IGNORE(b->palette, 4, 1, f);
                 VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
                      b->palette[i].red, b->palette[i].alpha);
             }
@@ -235,12 +235,12 @@ BMP_load(const char* filename, int skip_flag UNUSED)
         p->width = b->dib.v2.width;
         p->height = b->dib.v2.height;
         if (b->dib.v2.compression == BI_BITFIELDS) {
-            fread(&b->color, 12, 1, f);
+            FFREAD_IGNORE(&b->color, 12, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
         } else if (b->dib.v2.compression == BI_ALPHABITFIELDS) {
-            fread(&b->color, 16, 1, f);
+            FFREAD_IGNORE(&b->color, 16, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
@@ -252,7 +252,7 @@ BMP_load(const char* filename, int skip_flag UNUSED)
                                 ? b->dib.v2.colors_used
                                 : ((uint32_t)1 << b->dib.v2.bit_count);
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
-            fread(b->palette, 4, color_num, f);
+            FFREAD_IGNORE(b->palette, 4, color_num, f);
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
                 VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
@@ -288,13 +288,13 @@ BMP_load(const char* filename, int skip_flag UNUSED)
         } else {
             if (b->dib.v2.compression == BI_RLE8) {
                 uint8_t *compressed = malloc(b->dib.v2.size_image);
-                fread(compressed, b->dib.v2.size_image, 1, f);
+                FFREAD_IGNORE(compressed, b->dib.v2.size_image, 1, f);
                 RLE8_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
                             p->height, p->depth, b->palette);
                 free(compressed);
             } else if (b->dib.v2.compression == BI_RLE4) {
                 uint8_t *compressed = malloc(b->dib.v2.size_image);
-                fread(compressed, b->dib.v2.size_image, 1, f);
+                FFREAD_IGNORE(compressed, b->dib.v2.size_image, 1, f);
                 RLE4_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
                             p->height, p->depth, b->palette);
                 free(compressed);

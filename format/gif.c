@@ -8,6 +8,7 @@
 #include "gif.h"
 #include "file.h"
 #include "lzw.h"
+#include "utils.h"
 #include "vlog.h"
 
 VLOG_REGISTER(gif, INFO)
@@ -135,7 +136,7 @@ void read_image(GIF* gif, FILE* f) {
         if (image->local_ct == NULL)
             ct_size = 0;
         else
-            fread(image->local_ct, sizeof(Color), entries, f);
+            FFREAD_IGNORE(image->local_ct, sizeof(Color), entries, f);
     } else {
         image->local_ct = NULL;
     }
@@ -231,7 +232,7 @@ read_plaintext_ext(GIF* gif, FILE* f)
 {
     // no one ever uses this, but hey. if you want it, it's here.
     PlainText* plaintext = (PlainText*)malloc(sizeof(PlainText));
-    fread(&plaintext->text_ext, sizeof(struct plaintext_extension), 1, f);
+    FFREAD_IGNORE(&plaintext->text_ext, sizeof(struct plaintext_extension), 1, f);
     plaintext->text_length = read_blocks((uint8_t**)(&plaintext->text), f);
     fgetc(f);
 
@@ -244,7 +245,7 @@ void
 read_graphic_control_ext(GIF* gif, FILE* file) 
 {
     struct graphic_control_extension *ctrl = malloc(sizeof(struct graphic_control_extension));
-    fread(ctrl, sizeof(struct graphic_control_extension), 1, file);
+    FFREAD_IGNORE(ctrl, sizeof(struct graphic_control_extension), 1, file);
 
     Graphic* graphic = gif_increment_graphics(gif);
     graphic->has_control = true;
@@ -273,7 +274,7 @@ void read_comment_ext(GIF* gif, FILE* file) {
 void read_application_ext(GIF* gif, FILE* f) {
     Application* application = (Application*)malloc(sizeof(Application));
     
-    fread(&application->app_ext, sizeof(struct application_extension), 1, f);
+    FFREAD_IGNORE(&application->app_ext, sizeof(struct application_extension), 1, f);
     application->data_length = read_blocks(&application->data, f);
 
     Extension* extension = gif_increment_extensions(gif);
@@ -333,7 +334,7 @@ void read_gif(FILE* f, GIF *gif) {
     gif->extension_count = 0;
     gif->graphics = NULL;
     gif->extensions = NULL;
-    fread(&gif->file_h, 1, GIF_FILE_HEADER_LEN, f);
+    FFREAD_IGNORE(&gif->file_h, 1, GIF_FILE_HEADER_LEN, f);
     if (fread(&gif->ls_dsc, 1, sizeof(struct logical_screen_descriptor), f) !=
         sizeof(struct logical_screen_descriptor)) {
         gif->ls_dsc.global_color_table_flag = 0;
@@ -343,7 +344,7 @@ void read_gif(FILE* f, GIF *gif) {
     if (gif->ls_dsc.global_color_table_flag) {
         gif->global_ct = (Color*)calloc(GIF_MAX_COLOR_TABLE, sizeof(Color));
         if (gif->global_ct)
-            fread(gif->global_ct, sizeof(Color),
+            FFREAD_IGNORE(gif->global_ct, sizeof(Color),
                   color_table_size(gif->ls_dsc.global_color_table_size), f);
         else
             gif->ls_dsc.global_color_table_flag = 0;

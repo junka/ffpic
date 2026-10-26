@@ -36,22 +36,22 @@ ICO_load(const char *filename, int skip_flag UNUSED)
     ICO *c = p->pic;
     p->depth = 32;
     FILE *f = fopen(filename, "rb");
-    fread(&c->head, sizeof(struct ico_header), 1, f);
+    FFREAD_IGNORE(&c->head, sizeof(struct ico_header), 1, f);
     c->dir = (struct ico_directory *)malloc(sizeof(struct ico_directory) * c->head.num);
     c->images = (struct ico_image_data*)malloc(sizeof(struct ico_image_data) * c->head.num);
     for (int i = 0; i < c->head.num; i ++) {
-        fread(c->dir + i, sizeof(struct ico_directory), 1, f);
+        FFREAD_IGNORE(c->dir + i, sizeof(struct ico_directory), 1, f);
     }
 
     for (int i = 0; i < c->head.num; i++) {
         fseek(f, c->dir[i].offset, SEEK_SET);
-        fread(&c->images[i].bmpinfo, sizeof(struct icobmp_info_header), 1, f);
+        FFREAD_IGNORE(&c->images[i].bmpinfo, sizeof(struct icobmp_info_header), 1, f);
         /* for some reason, we can not trust the color_num in directory or in bmpinfo 
            check both of them */
         int color_n = c->dir[i].color_num == 0 ? c->images[i].bmpinfo.colors_used : 0;
         if (color_n > 0) {
             c->images[i].color = malloc(sizeof(struct icobmp_color_entry) * color_n);
-            fread(c->images[i].color, sizeof(struct icobmp_color_entry), color_n, f);
+            FFREAD_IGNORE(c->images[i].color, sizeof(struct icobmp_color_entry), color_n, f);
         }
         int width = ((c->dir[i].width + 3) >> 2) << 2;
         int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
@@ -89,7 +89,7 @@ ICO_load(const char *filename, int skip_flag UNUSED)
                     // for (int n = 0; n < (c->dir[i].depth >> 3); n ++) {
                     //    c->images[i].data[pitch * j + k * 4 + n] = (uint8_t)fgetc(f);
                     // }
-                    fread(c->images[i].data + pitch * j + k * 4, (c->dir[i].depth >> 3), 1, f);
+                    FFREAD_IGNORE(c->images[i].data + pitch * j + k * 4, (c->dir[i].depth >> 3), 1, f);
                 }
             }
             

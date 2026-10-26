@@ -61,7 +61,7 @@ get_tag_type_size(uint16_t type)
 static void
 read_de(TIFF *t, struct tiff_directory_entry *de, FILE *f)
 {
-    fread(de, 12, 1, f);
+    FFREAD_IGNORE(de, 12, 1, f);
     BYTEORDER(de->tag);
     BYTEORDER(de->type);
     BYTEORDER(de->num);
@@ -75,7 +75,7 @@ read_de(TIFF *t, struct tiff_directory_entry *de, FILE *f)
         de->value = malloc(tlen);
         long pos = ftell(f);
         fseek(f, de->offset, SEEK_SET);
-        fread(de->value, tlen, 1, f);
+        FFREAD_IGNORE(de->value, tlen, 1, f);
         fseek(f, pos, SEEK_SET);
     }
 }
@@ -89,13 +89,13 @@ read_ifd(TIFF *t, FILE *f)
     else {
         t->ifd = realloc(t->ifd, t->ifd_num * sizeof(struct tiff_file_directory));
     }
-    fread(&t->ifd[t->ifd_num-1].num, 2, 1, f);
+    FFREAD_IGNORE(&t->ifd[t->ifd_num-1].num, 2, 1, f);
     BYTEORDER(t->ifd[t->ifd_num-1].num);
     t->ifd[t->ifd_num-1].de = malloc(sizeof(struct tiff_directory_entry) * t->ifd[t->ifd_num-1].num);
     for (int i = 0; i < t->ifd[t->ifd_num-1].num; i++) {
         read_de(t, t->ifd[t->ifd_num-1].de + i, f);
     }
-    fread(&t->ifd[t->ifd_num-1].next_offset, 4, 1, f);
+    FFREAD_IGNORE(&t->ifd[t->ifd_num-1].next_offset, 4, 1, f);
     BYTEORDER(t->ifd[t->ifd_num-1].next_offset);
     if(t->ifd[t->ifd_num-1].next_offset) {
         fseek(f, t->ifd[t->ifd_num-1].next_offset, SEEK_SET);
@@ -184,7 +184,7 @@ read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
     uint8_t *raw = malloc(ifd->strip_byte_counts[id]);
     uint8_t *decode;
     int n = 0;
-    fread(raw, ifd->strip_byte_counts[id], 1, f);
+    FFREAD_IGNORE(raw, ifd->strip_byte_counts[id], 1, f);
     if (ifd->compression == COMPRESSION_NONE) {
         decode = raw;
         raw = NULL;
@@ -351,7 +351,7 @@ TIFF_load(const char *filename, int skip_flag UNUSED)
     FILE *f = fopen(filename, "rb");
     p->pic = t;
     p->depth = 32;
-    fread(&t->ifh, sizeof(struct tiff_file_header), 1, f);
+    FFREAD_IGNORE(&t->ifh, sizeof(struct tiff_file_header), 1, f);
     BYTEORDER(t->ifh.version);
     BYTEORDER(t->ifh.start_offset);
     fseek(f, t->ifh.start_offset, SEEK_SET);

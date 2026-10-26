@@ -65,6 +65,15 @@ static inline int clip3(int minv, int maxv, int v)
     }                                                                          \
   } while (0)
 
+/* read and discard the result, for the callers that do not act on a short
+ * read and still have to build with -Werror=unused-result
+ */
+#define FFREAD_IGNORE(ptr, size, nitems, stream)                               \
+  do {                                                                         \
+    size_t ffread_ignored = fread(ptr, size, nitems, stream);                  \
+    (void)ffread_ignored;                                                      \
+  } while (0)
+
 float fix16_16(uint32_t v);
 
 #ifdef __cplusplus

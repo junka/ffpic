@@ -121,7 +121,7 @@ read_attrs(FILE *f, struct xml_node* n, char endch)
                     attr = &n->attr[n->attr_num ++];
                     attr->tag = malloc(l+1);
                     fseek(f, -l-1, SEEK_CUR);
-                    fread(attr->tag, l, 1, f);
+                    FFREAD_IGNORE(attr->tag, l, 1, f);
                     attr->tag[l] = '\0';
                 }
                 break;
@@ -138,7 +138,7 @@ read_attrs(FILE *f, struct xml_node* n, char endch)
                     int l = ftell(f) - start;
                     attr->value = malloc(l+1);
                     fseek(f, -l, SEEK_CUR);
-                    fread(attr->value, l, 1, f);
+                    FFREAD_IGNORE(attr->value, l, 1, f);
                     attr->value[l] = '\0';
                 }
                 break;
@@ -179,7 +179,7 @@ read_start_tag(struct xml_node * n, FILE *f)
                         len = ftell(f) -1 - start;
                         n->tag = malloc(len);
                         fseek(f, -len-1, SEEK_CUR);
-                        fread(n->tag, len, 1, f);
+                        FFREAD_IGNORE(n->tag, len, 1, f);
                         n->tag[len] = '\0';
                     }
                 }
@@ -230,7 +230,7 @@ read_ins(struct xml_node * n, FILE *f)
                     len = ftell(f) - start;
                     n->tag = malloc(len);
                     fseek(f, -len, SEEK_CUR);
-                    fread(n->tag, len, 1, f);
+                    FFREAD_IGNORE(n->tag, len, 1, f);
                     state = (s != '>') ? ATTR : END;
                 }
                 break;
@@ -291,7 +291,7 @@ read_dtd(struct xml_node * n, FILE *f)
                     len = ftell(f) - 1 - start;
                     n->tag = malloc(len);
                     fseek(f, -len - 1, SEEK_CUR);
-                    fread(n->tag, len, 1, f);
+                    FFREAD_IGNORE(n->tag, len, 1, f);
                     state = PRE_SYSTEM;
                 }
                 break;

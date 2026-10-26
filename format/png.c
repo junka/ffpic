@@ -587,18 +587,18 @@ PNG_load(const char* filename, int skip_flag)
                     data = calloc(1, length);
 
                     assert(data);
-                    fread(data, length, 1, f);
+                    FFREAD_IGNORE(data, length, 1, f);
                     crc32 = update_crc(crc32, (uint8_t*)data, length);
                     free(data);
                 }
                 break;
         }
 
-        fread(&crc, sizeof(uint32_t), 1, f);
+        FFREAD_IGNORE(&crc, sizeof(uint32_t), 1, f);
         crc32 = finish_crc32(crc32);
         CRC_ASSER(crc32, crc);
         length = read_u32(f);
-        fread(&chunk_type, sizeof(uint32_t), 1, f);
+        FFREAD_IGNORE(&chunk_type, sizeof(uint32_t), 1, f);
     }
     /* check iEND chunk */
     read_iend(f);

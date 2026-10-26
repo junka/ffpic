@@ -71,9 +71,9 @@ read_ppm_bin_data(PNM* m, FILE *f)
 
     //RGB color need do reorder for display
     for(int i = 0; i < last-off / 3; i++) {
-        fread(m->data + 4*i + 2, 1, 1, f);
-        fread(m->data + 4*i + 1, 1, 1, f);
-        fread(m->data + 4*i, 1, 1, f);
+        FFREAD_IGNORE(m->data + 4*i + 2, 1, 1, f);
+        FFREAD_IGNORE(m->data + 4*i + 1, 1, 1, f);
+        FFREAD_IGNORE(m->data + 4*i, 1, 1, f);
     }
 }
 
@@ -139,7 +139,7 @@ read_pbm_bin_data(PNM* m, FILE *f)
 
         }
     }
-    fread(m->data , 1, last - off, f);
+    FFREAD_IGNORE(m->data , 1, last - off, f);
 }
 
 uint8_t 
@@ -289,7 +289,7 @@ PNM_load(const char *filename, int skip_flag UNUSED)
     struct pic * p = pic_alloc(sizeof(PNM));
     PNM *m = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&m->pn, sizeof(struct file_header), 1, f);
+    FFREAD_IGNORE(&m->pn, sizeof(struct file_header), 1, f);
     fgetc(f);
     uint8_t v = m->pn.version - '0';
 

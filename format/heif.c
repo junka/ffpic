@@ -220,8 +220,8 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
         VDBG(heif, "read item %d, length %" PRIu64 ", method %d", idx,
              h->items[idx].length, h->items[idx].item->construct_method);
         if (h->items[idx].item->construct_method == 0) {//file offset
-            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET),
-            fread(h->items[idx].data, h->items[idx].length, 1, f);
+            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET);
+            FFREAD_IGNORE(h->items[idx].data, h->items[idx].length, 1, f);
         } else if (h->items[idx].item->construct_method == 1) {//idat offset
             memcpy(h->items[idx].data, h->meta.idat.data + h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, h->items[idx].length);
             // hexdump(stdout, "idat", "", h->items[idx].data, h->items[idx].length);
@@ -233,8 +233,8 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
         uint64_t total = 0;
         for (int i = 0; i < h->items[idx].item->extent_count; i ++) {
             h->items[idx].data = realloc(h->items[idx].data, h->items[idx].item->extents[i].extent_length);
-            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET),
-            fread(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
+            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET);
+            FFREAD_IGNORE(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
             total += h->items[idx].item->extents[i].extent_length;
         }
         h->items[idx].length = total;
@@ -450,7 +450,7 @@ decode_moov(FILE *f, struct moov_box *b)
             for (int k = 0; k < sample_num; k++) {
                 size = b->trak[i].mdia.minf.stbl.stsz.entry_size[k];
                 uint8_t *data = malloc(size);
-                fread(data, size, 1, f);
+                FFREAD_IGNORE(data, size, 1, f);
                 // printf("load one for %d, length %d\n", k, size);
                 struct pic *p1 = HEIF_load_one(width, height, data,size, NULL);
                 file_enqueue_pic(p1);

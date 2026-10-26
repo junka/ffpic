@@ -80,7 +80,7 @@ read_dqt(JPG *j, FILE *f)
 {
     uint8_t c;
     uint16_t tlen;
-    fread(&tlen, 2, 1, f);
+    FFREAD_IGNORE(&tlen, 2, 1, f);
     tlen = SWAP(tlen);
     tlen -= 2;
     while (tlen) {
@@ -94,7 +94,7 @@ read_dqt(JPG *j, FILE *f)
         j->dqt[id].id = id;
         j->dqt[id].precision = precision;
         for (int i = 0; i < 64; i ++) {
-            fread(&j->dqt[id].tdata[zigzag[i]], precision + 1, 1, f);
+            FFREAD_IGNORE(&j->dqt[id].tdata[zigzag[i]], precision + 1, 1, f);
             if (precision == 1) {
                 j->dqt[id].tdata[zigzag[i]] = SWAP(j->dqt[id].tdata[zigzag[i]]);
             }
@@ -125,27 +125,27 @@ static void
 read_dht(JPG* j, FILE *f)
 {
     uint16_t tlen;
-    fread(&tlen, 2, 1, f);
+    FFREAD_IGNORE(&tlen, 2, 1, f);
     tlen = SWAP(tlen);
     tlen -= 2;
     while (tlen)
     {
         struct dht d;
-        fread(&d, 1, 1, f);
+        FFREAD_IGNORE(&d, 1, 1, f);
         uint8_t ac = d.table_class;
         uint8_t id = d.huffman_id;
         VDBG(jpg, "ac %d, id %d, %02x", ac, id, *(uint8_t *)&d);
         j->dht[ac][id].table_class = d.table_class;
         j->dht[ac][id].huffman_id = d.huffman_id;
         tlen --;
-        fread(j->dht[ac][id].num_codecs, 16, 1, f);
+        FFREAD_IGNORE(j->dht[ac][id].num_codecs, 16, 1, f);
         tlen -= 16;
         int len = 0;
         for (int i =0; i < 16; i ++) {
             len += j->dht[ac][id].num_codecs[i];
         }
         j->dht[ac][id].data = malloc(len);
-        fread(j->dht[ac][id].data, len, 1, f);
+        FFREAD_IGNORE(j->dht[ac][id].data, len, 1, f);
         j->dht[ac][id].len = len;
         tlen -= len;
     }
@@ -639,10 +639,10 @@ read_compressed_scan(FILE *f, int *len)
 static void
 read_sos(JPG* j, FILE *f, bool skip_flag)
 {
-    fread(&j->sos, 3, 1, f);
-    fread(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
+    FFREAD_IGNORE(&j->sos, 3, 1, f);
+    FFREAD_IGNORE(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
     VDBG(jpg, "component %d", j->sos.nums);
-    fread(&j->sos.predictor_start, 3, 1, f);
+    FFREAD_IGNORE(&j->sos.predictor_start, 3, 1, f);
     VINFO(jpg, "sos spectual selection start %d, end %d", j->sos.predictor_start,
          j->sos.predictor_end);
     VINFO(jpg, "sos successive approximation bits high %d, low %d", j->sos.approx_bits_h,
@@ -679,11 +679,11 @@ write_sos(FILE *f)
 static void
 read_sof(JPG *j, FILE *f)
 {
-    fread(&j->sof, 8, 1, f);
+    FFREAD_IGNORE(&j->sof, 8, 1, f);
     j->sof.len = SWAP(j->sof.len);
     j->sof.height = SWAP(j->sof.height);
     j->sof.width = SWAP(j->sof.width);
-    fread(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num,
+    FFREAD_IGNORE(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num,
           f);
     VDBG(jpg, "height %d, width %d, comp %d", j->sof.height, j->sof.width,
          j->sof.components_num);
@@ -735,13 +735,13 @@ write_eoi(FILE *f)
 static void
 read_app0(JPG *j, FILE *f)
 {
-    fread(&j->app0, 16, 1, f);
+    FFREAD_IGNORE(&j->app0, 16, 1, f);
     j->app0.len = SWAP(j->app0.len);
     j->app0.xdensity = SWAP(j->app0.xdensity);
     j->app0.ydensity = SWAP(j->app0.ydensity);
     if ((j->app0.xthumbnail * j->app0.ythumbnail) > 0) {
         j->app0.data = malloc(3 * j->app0.xthumbnail * j->app0.ythumbnail);
-        fread(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail, f);
+        FFREAD_IGNORE(j->app0.data, 3, j->app0.xthumbnail * j->app0.ythumbnail, f);
     }
 }
 
@@ -775,7 +775,7 @@ JPG_load_one(FILE *f, int skip_flag)
     JPG *j = p->pic;
     j->data = NULL;
     uint16_t soi, m, len;
-    fread(&soi, 2, 1, f);
+    FFREAD_IGNORE(&soi, 2, 1, f);
     if (soi != SOI) {
         return NULL;
     }
@@ -823,14 +823,14 @@ JPG_load_one(FILE *f, int skip_flag)
             break;
         case COM:
             VDBG(jpg, "COM");
-            fread(&j->comment, 2, 1, f);
+            FFREAD_IGNORE(&j->comment, 2, 1, f);
             j->comment.len = SWAP(j->comment.len);
             j->comment.data = malloc(j->comment.len - 2);
-            fread(j->comment.data, j->comment.len - 2, 1, f);
+            FFREAD_IGNORE(j->comment.data, j->comment.len - 2, 1, f);
             break;
         case DRI:
             VDBG(jpg, "DRI");
-            fread(&j->dri, sizeof(struct dri), 1, f);
+            FFREAD_IGNORE(&j->dri, sizeof(struct dri), 1, f);
             j->dri.interval = SWAP(j->dri.interval);
             break;
         case APP1:
@@ -838,7 +838,7 @@ JPG_load_one(FILE *f, int skip_flag)
             // fall through
         default:
             VDBG(jpg, "skip marker %x", SWAP(m));
-            fread(&len, 2, 1, f);
+            FFREAD_IGNORE(&len, 2, 1, f);
             len = SWAP(len);
             fseek(f, len - 2, SEEK_CUR);
             break;

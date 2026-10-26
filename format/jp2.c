@@ -54,9 +54,9 @@ int
 read_jp2_colr_box(FILE *f, struct jp2_colr_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
-    fread(&b->method, 3, 1, f);
+    FFREAD_IGNORE(&b->method, 3, 1, f);
     if (b->method == ENUMERATED_COLORSPACE) {
-        fread(&b->enum_cs, 4, 1, f);
+        FFREAD_IGNORE(&b->enum_cs, 4, 1, f);
         b->enum_cs = SWAP(b->enum_cs);
         if (b->enum_cs == 16) {
             // sRGB
@@ -78,7 +78,7 @@ read_jp2_bpcc_box(FILE *f, struct jp2_bpcc_box *b, int num)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('b', 'p', 'c', 'c'));
     b->bits_per_comp = malloc(num);
-    fread(b->bits_per_comp, 1, num, f);
+    FFREAD_IGNORE(b->bits_per_comp, 1, num, f);
     return b->size;
 }
 
@@ -118,18 +118,18 @@ int
 read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'c', 'l', 'r'));
-    fread(&b->num_entry, 5, 1, f);
+    FFREAD_IGNORE(&b->num_entry, 5, 1, f);
     b->num_entry = SWAP(b->num_entry);
     b->num_channel = fgetc(f);
     b->palette_input = SWAP(b->palette_input);
     b->component = calloc(b->num_channel, 2);
     b->depth = malloc(b->num_channel);
-    fread(b->component, 2, b->num_channel, f);
-    fread(b->depth, 1, b->num_channel, f);
+    FFREAD_IGNORE(b->component, 2, b->num_channel, f);
+    FFREAD_IGNORE(b->depth, 1, b->num_channel, f);
     for (int i = 0; i < b->num_entry; i ++) {
         for (int j = 0; j < b->num_channel; j ++) {
             int n = (b->entries[j] + 8) >> 3;
-            fread(b->entries + i * b->num_entry + j, n, 1, f);
+            FFREAD_IGNORE(b->entries + i * b->num_entry + j, n, 1, f);
         }
     }
     return b->size;
@@ -199,7 +199,7 @@ read_jp2_ulst_box(FILE * f, struct jp2_ulst_box *b)
     b->num_uuid = read_u16(f);
     b->id = malloc(b->num_uuid * sizeof(uint128_t));
     for (int i = 0; i < b->num_uuid; i ++) {
-        fread(b->id + i, sizeof(uint128_t), 1, f);
+        FFREAD_IGNORE(b->id + i, sizeof(uint128_t), 1, f);
     }
     return b->size;
 }
@@ -255,7 +255,7 @@ read_siz(JP2* j, FILE *f)
 {
     int l = 0;
     struct siz *s = &j->main_h.siz;
-    fread(s, 38, 1, f);
+    FFREAD_IGNORE(s, 38, 1, f);
     s->length = SWAP(s->length);
     s->cap = SWAP(s->cap);
     s->width = SWAP(s->width);
@@ -270,7 +270,7 @@ read_siz(JP2* j, FILE *f)
 
     l += 38;
     s->comps = malloc(sizeof(struct scomponent)*s->component_num);
-    fread(s->comps, sizeof(struct scomponent), s->component_num, f);
+    FFREAD_IGNORE(s->comps, sizeof(struct scomponent), s->component_num, f);
     l += sizeof(struct scomponent)*s->component_num;
 
     int width = ((s->width + 7) >> 3) << 3;
@@ -283,16 +283,16 @@ int
 read_cod(JP2 *j, FILE *f)
 {
     int l = 0;
-    fread(&j->main_h.cod, 7, 1, f);
+    FFREAD_IGNORE(&j->main_h.cod, 7, 1, f);
     j->main_h.cod.length = SWAP(j->main_h.cod.length);
     j->main_h.cod.layers_num = SWAP(j->main_h.cod.layers_num);
     l += 7;
-    fread(&j->main_h.cod.p, 5, 1, f);
+    FFREAD_IGNORE(&j->main_h.cod.p, 5, 1, f);
     l += 5;
 
     if (j->main_h.cod.entropy) {
         j->main_h.cod.p.precinct_size = malloc(j->main_h.cod.p.decomp_level_num+1);
-        fread(j->main_h.cod.p.precinct_size, j->main_h.cod.p.decomp_level_num+1, 1, f);
+        FFREAD_IGNORE(j->main_h.cod.p.precinct_size, j->main_h.cod.p.decomp_level_num+1, 1, f);
         l += (j->main_h.cod.p.decomp_level_num + 1);
     }
     return l;
@@ -302,12 +302,12 @@ int
 read_cap(JP2 *j, FILE *f)
 {
     int l = 0;
-    fread(&j->main_h.cap, 6, 1, f);
+    FFREAD_IGNORE(&j->main_h.cap, 6, 1, f);
     l += 6;
     j->main_h.cap.length = SWAP(j->main_h.cap.length);
     j->main_h.cap.bitmap = SWAP(j->main_h.cap.bitmap);
     j->main_h.cap.extensions = malloc(j->main_h.cap.length - 6);
-    fread(j->main_h.cap.extensions, 2, j->main_h.cap.length - 6/2, f);
+    FFREAD_IGNORE(j->main_h.cap.extensions, 2, j->main_h.cap.length - 6/2, f);
     l += j->main_h.cap.length - 6;
     return l;
 }
@@ -316,12 +316,12 @@ int
 read_cme(JP2 *j, FILE *f)
 {
     int l = 0;
-    fread(&j->main_h.cme, 4, 1, f);
+    FFREAD_IGNORE(&j->main_h.cme, 4, 1, f);
     j->main_h.cme.length = SWAP(j->main_h.cme.length);
     j->main_h.cme.use = SWAP(j->main_h.cme.use);
     if (j->main_h.cme.length - 4) {
         j->main_h.cme.str = malloc(j->main_h.cme.length - 4 + 1);
-        fread(j->main_h.cme.str, j->main_h.cme.length - 4, 1, f);
+        FFREAD_IGNORE(j->main_h.cme.str, j->main_h.cme.length - 4, 1, f);
         j->main_h.cme.str[j->main_h.cme.length - 4] = '\0';
     }
     l += j->main_h.cme.length;
@@ -332,22 +332,22 @@ int
 read_qcd(JP2 *j, FILE *f)
 {
     int l = 0;
-    fread(&j->main_h.qcd, 3, 1, f);
+    FFREAD_IGNORE(&j->main_h.qcd, 3, 1, f);
     l += 3;
     j->main_h.qcd.length = SWAP(j->main_h.qcd.length);
     VDBG(jp2, "guard num %d table len %d, decomp %d\n", j->main_h.qcd.guard_num,
            j->main_h.qcd.length - 3, j->main_h.cod.p.decomp_level_num);
     if (j->main_h.qcd.guard_num == 0) {
         j->main_h.qcd.table = malloc(3*j->main_h.cod.p.decomp_level_num + 1);
-        fread(j->main_h.qcd.table, 3*j->main_h.cod.p.decomp_level_num + 1, 1, f);
+        FFREAD_IGNORE(j->main_h.qcd.table, 3*j->main_h.cod.p.decomp_level_num + 1, 1, f);
         l += 3*j->main_h.cod.p.decomp_level_num + 1;
     } else if (j->main_h.qcd.guard_num == 1) {  //scalar
         j->main_h.qcd.table = malloc(2);
-        fread(j->main_h.qcd.table, 2, 1, f);
+        FFREAD_IGNORE(j->main_h.qcd.table, 2, 1, f);
         l += 2;
     } else if (j->main_h.qcd.guard_num == 2) {
         j->main_h.qcd.table = malloc(6*j->main_h.cod.p.decomp_level_num + 2);
-        fread(j->main_h.qcd.table, 6*j->main_h.cod.p.decomp_level_num + 2, 1, f);
+        FFREAD_IGNORE(j->main_h.qcd.table, 6*j->main_h.cod.p.decomp_level_num + 2, 1, f);
         l += 6 * j->main_h.cod.p.decomp_level_num + 2;
     } else {
         printf("invalid guard num");
@@ -373,7 +373,7 @@ read_sot(JP2 *j, FILE *f)
 
     /* record tile starting point to calc len in sod */
     t->sot.offset_start = ftell(f) - 2;
-    fread(&t->sot, 10, 1, f);
+    FFREAD_IGNORE(&t->sot, 10, 1, f);
     l += 10;
     t->sot.length = SWAP(t->sot.length);
     t->sot.tile_id = SWAP(t->sot.tile_id);
@@ -455,7 +455,7 @@ read_sod(JP2 *j, FILE *f) {
     int len = j->tiles[j->tile_nums-1].sot.tile_size -
         (start - j->tiles[j->tile_nums-1].sot.offset_start);
     uint8_t *data = malloc(len);
-    fread(data, len, 1, f);
+    FFREAD_IGNORE(data, len, 1, f);
     struct bits_vec *v =
         bits_vec_alloc(data, len, BITS_MSB);
     VDBG(jp2, "tile id %d, total tile len %d, at %p", tile_id, len, (void *)data);
@@ -488,7 +488,7 @@ read_sod(JP2 *j, FILE *f) {
 // see A.6.6
 int read_poc(JP2 *j, FILE *f)
 {
-    fread(&j->main_h.poc, 3, 1, f);
+    FFREAD_IGNORE(&j->main_h.poc, 3, 1, f);
     j->main_h.poc.length = SWAP(j->main_h.poc.length);
     if (j->main_h.siz.component_num < 257) {
         j->main_h.poc.comp_start_index = fgetc(f);

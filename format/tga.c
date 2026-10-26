@@ -56,7 +56,7 @@ read_color_map(TGA *t, FILE *f)
     }
     t->cmap = malloc(num * t->head.color_map_entry_size>>3);
     for (int i = 0; i < num; i ++) {
-        fread(t->cmap + i, t->head.color_map_entry_size/8, 1, f);
+        FFREAD_IGNORE(t->cmap + i, t->head.color_map_entry_size/8, 1, f);
     }
 }
 
@@ -68,13 +68,13 @@ read_uncompress_data(TGA *t, FILE *f)
         for (int i = t->head.height-1; i >= 0; i --) {
             if (t->head.bits_depth >16) { //24, 32
                 for (int j = 0; j < t->head.width; j ++) {
-                    fread(t->data + pitch * i + j * 4, t->head.bits_depth>>3, 1, f);
+                    FFREAD_IGNORE(t->data + pitch * i + j * 4, t->head.bits_depth>>3, 1, f);
                 }
             } else if (t->head.bits_depth == 16) {
                 //take it as RGB555
                 for (int j = 0; j < t->head.width; j ++) {
                     uint16_t svalue;
-                    fread(&svalue, 2, 1, f);
+                    FFREAD_IGNORE(&svalue, 2, 1, f);
                     t->data[pitch * i + j * 4] = (svalue >> 10) & 0x1F;
                     t->data[pitch * i + j * 4 + 1] = (svalue >> 5) & 0x1F;
                     t->data[pitch * i + j * 4 + 2] = (svalue) & 0x1F;
@@ -108,13 +108,13 @@ read_compress_data(TGA *t, FILE *f)
                         vl = fgetc(f);
                         if (vl & 0x80) { //RLE
                             rl = (vl & 0x7F) + 1;
-                            fread(&vl, (t->head.bits_depth>>3), 1, f);
+                            FFREAD_IGNORE(&vl, (t->head.bits_depth>>3), 1, f);
                         } else { //RAW
                             raw = (vl + 1);
                         }
                     }
                     if (rl == 0 && raw != 0) {
-                        fread(t->data +pitch * i + j * 4, (t->head.bits_depth>>3), 1, f);
+                        FFREAD_IGNORE(t->data +pitch * i + j * 4, (t->head.bits_depth>>3), 1, f);
                         raw --;
                     } else if (rl != 0 && raw == 0) {
                         *(uint32_t *)(t->data + pitch * i + j * 4) = vl;
@@ -133,7 +133,7 @@ TGA_load(const char *filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(TGA));
     TGA *t = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&t->head, sizeof(struct tga_header), 1, f);
+    FFREAD_IGNORE(&t->head, sizeof(struct tga_header), 1, f);
     p->depth = 32;
     p->width = ((t->head.width + 3) >> 2) << 2;
     p->height = t->head.height;

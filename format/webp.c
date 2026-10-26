@@ -436,7 +436,7 @@ read_token_partition(WEBP *w, struct bool_dec *br, FILE *f)
 
     uint8_t size[3 * MAX_PARTI_NUM];
     if (num) {
-        fread(size, 3, num, f);
+        FFREAD_IGNORE(size, 3, num, f);
     }
     uint32_t next_part = ftell(f);
     for (int i = 0; i < num; i ++)
@@ -1872,7 +1872,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 int WEBP_read_frame(WEBP *w, FILE *f)
 {
     // unsigned char b[3]; // code for I frame 10byte， P frame 3byte.
-    fread(&w->fh, sizeof(w->fh), 1, f);
+    FFREAD_IGNORE(&w->fh, sizeof(w->fh), 1, f);
 
     if (w->fh.frame_type != KEY_FRAME) {
         VERR(webp, "not a key frame for vp8\n");
@@ -1880,7 +1880,7 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     }
 
     /* key frame, more info */
-    fread(&w->fi, 7, 1, f);
+    FFREAD_IGNORE(&w->fi, 7, 1, f);
     if (w->fi.start1 != 0x9d || w->fi.start2 != 0x01 || w->fi.start3 != 0x2a) {
         VERR(webp, "not a valid start code for vp8\n");
         return -1;
@@ -1888,7 +1888,7 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     int partition0_size = ((int)w->fh.size_h | w->fh.size << 3);
 
     uint8_t *buf = malloc(partition0_size);
-    fread(buf, partition0_size, 1, f);
+    FFREAD_IGNORE(buf, partition0_size, 1, f);
 
     struct bool_dec *first_bt = bool_dec_init(buf, partition0_size);
 
@@ -1905,7 +1905,7 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     for (int i = 0; i < w->k.nbr_partitions; i++) {
         uint8_t *parts = malloc(w->p[i].len);
         fseek(f, w->p[i].start, SEEK_SET);
-        fread(parts, 1, w->p[i].len, f);
+        FFREAD_IGNORE(parts, 1, w->p[i].len, f);
         VDBG(webp, "part %d: len %d, 0x%x", i, w->p[i].len, parts[0]);
         // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_dec_init(parts, w->p[i].len);
@@ -1979,13 +1979,13 @@ static void webpl_read_transform(WEBP *w, struct bits_vec *v) {
 int WEBP_read_lossless(WEBP *w, FILE *f)
 {
     unsigned char b; // magic byte 0x2f
-    fread(&b, 1, 1, f);
+    FFREAD_IGNORE(&b, 1, 1, f);
     if (b != 0x2f) {
         VERR(webp, "invalid magic value %x", b);
         return -1;
     }
     uint8_t *buf = malloc(w->vp8l.size);
-    fread(buf, w->vp8l.size, 1, f);
+    FFREAD_IGNORE(buf, w->vp8l.size, 1, f);
     // struct bool_dec *d = bool_dec_init(buf, w->vp8l.size);
     struct bits_vec * v = bits_vec_alloc(buf, w->vp8l.size, BITS_LSB);
     w->fi.width = READ_BITS(v, 14) + 1;
@@ -2005,7 +2005,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
     WEBP *w = p->pic;
     FILE *f = fopen(filename, "rb");
     // read riff 12 bytes header
-    fread(&w->header, sizeof(w->header), 1, f);
+    FFREAD_IGNORE(&w->header, sizeof(w->header), 1, f);
     if (w->header.riff != CHUNCK_HEADER("RIFF") ||
         w->header.webp != CHUNCK_HEADER("WEBP")) {
         pic_free(p);
@@ -2016,10 +2016,10 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
     uint32_t chead;
     uint32_t chunk_size;
     while (!feof(f)) {
-        fread(&chead, 4, 1, f);
+        FFREAD_IGNORE(&chead, 4, 1, f);
         if (chead == CHUNCK_HEADER("VP8X")) {
             fseek(f, -4, SEEK_CUR);
-            fread(&w->vp8x, sizeof(struct webp_vp8x), 1, f);
+            FFREAD_IGNORE(&w->vp8x, sizeof(struct webp_vp8x), 1, f);
             VINFO(webp, "VP8X\n");
             if (w->vp8x.size != sizeof(struct webp_vp8x) - 8) {
                 pic_free(p);
@@ -2030,7 +2030,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
             p->width = READ_UINT24(w->vp8x.canvas_width);
         } else if (chead == CHUNCK_HEADER("ALPH")) {
             fseek(f, -4, SEEK_CUR);
-            fread(&w->alpha, sizeof(struct webp_alpha), 1, f);
+            FFREAD_IGNORE(&w->alpha, sizeof(struct webp_alpha), 1, f);
             VINFO(webp, "ALPH\n");
             if (w->alpha.size != sizeof(struct webp_alpha) - 8) {
                 pic_free(p);
@@ -2040,7 +2040,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
         } else if (chead == CHUNCK_HEADER("VP8 ")) {
             //VP8 data chuck
             fseek(f, -4, SEEK_CUR);
-            fread(&w->vp8, sizeof(struct webp_vp8), 1, f);
+            FFREAD_IGNORE(&w->vp8, sizeof(struct webp_vp8), 1, f);
             if (WEBP_read_frame(w, f) < 0) {
                 pic_free(p);
                 fclose(f);
@@ -2050,7 +2050,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
         } else if (chead == CHUNCK_HEADER("VP8L")) {
             // VP8 lossless chuck
             fseek(f, -4, SEEK_CUR);
-            fread(&w->vp8l, sizeof(struct webp_vp8l), 1, f);
+            FFREAD_IGNORE(&w->vp8l, sizeof(struct webp_vp8l), 1, f);
             VINFO(webp, "VP8L\n");
             if (WEBP_read_lossless(w, f) < 0) {
                 pic_free(p);
@@ -2060,7 +2060,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
             break;
         } else {
             // skip other chuck as optional
-            fread(&chunk_size, 4, 1, f);
+            FFREAD_IGNORE(&chunk_size, 4, 1, f);
             fseek(f, chunk_size, SEEK_CUR);
         }
     }

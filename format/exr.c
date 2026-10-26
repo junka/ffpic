@@ -58,7 +58,7 @@ read_chlist(EXR *e, FILE *f, int size)
         e->chnls[i].name = malloc(s);
         memcpy(e->chnls[i].name, name, s);
         size -= s;
-        fread(&e->chnls[i].pixel_type, 16, 1, f);
+        FFREAD_IGNORE(&e->chnls[i].pixel_type, 16, 1, f);
         i ++;
         size -= 16;
     }
@@ -76,21 +76,21 @@ read_attribute_value(EXR *e, FILE *f, char *name, int size)
     } else if (!strcmp("channels", name)) {
         read_chlist(e, f, size);
     } else if (!strcmp("dataWindow", name)) {
-        fread(&e->data_win, size, 1, f);
+        FFREAD_IGNORE(&e->data_win, size, 1, f);
     } else if (!strcmp("displayWindow", name)) {
-        fread(&e->display_win, size, 1, f);
+        FFREAD_IGNORE(&e->display_win, size, 1, f);
     } else if (!strcmp("lineOrder", name)) {
         e->lineorder = fgetc(f);
     } else if (!strcmp("pixelAspectRatio", name)) {
-        fread(&e->aspect_ratio, 4, 1, f);
+        FFREAD_IGNORE(&e->aspect_ratio, 4, 1, f);
     } else if (!strcmp("screenWindowWidth", name)) {
-        fread(&e->win_width, sizeof(float), 1, f);
+        FFREAD_IGNORE(&e->win_width, sizeof(float), 1, f);
     } else if (!strcmp("screenWindowCenter", name)) {
-        fread(&e->win_center, sizeof(struct exr_v2f), 1, f);
+        FFREAD_IGNORE(&e->win_center, sizeof(struct exr_v2f), 1, f);
     }
     else {
         uint8_t *d = malloc(size);
-        fread(d, size, 1, f);
+        FFREAD_IGNORE(d, size, 1, f);
         free(d);
     }
 }
@@ -102,7 +102,7 @@ read_attribute(EXR *e, FILE *f)
     int size;
     read_str_till_null(f, name);
     read_str_till_null(f, type);
-    fread(&size, 4, 1, f);
+    FFREAD_IGNORE(&size, 4, 1, f);
     VINFO(exr, "%s: %s: %d", name, type, size);
     read_attribute_value(e, f, name, size);
 }
@@ -158,16 +158,16 @@ read_pixel(FILE *f, int type)
     int data_len[3] = {4, 2, 4};
     if (type == 2) {
         float data;
-        fread(&data, data_len[type], 1, f);
+        FFREAD_IGNORE(&data, data_len[type], 1, f);
         return data;
     } else if (type == 1) {
         uint16_t data;
-        fread(&data, data_len[type], 1, f);
+        FFREAD_IGNORE(&data, data_len[type], 1, f);
         float b = uint16_cov_float(data);
         return b;
     } else {
         uint32_t data;
-        fread(&data, data_len[type], 1, f);
+        FFREAD_IGNORE(&data, data_len[type], 1, f);
         return data;
     }
 
@@ -179,7 +179,7 @@ EXR_load(const char* filename, int skip_flag UNUSED)
     struct pic * p = pic_alloc(sizeof(EXR));
     EXR * e = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&e->h, sizeof(struct exr_header), 1, f);
+    FFREAD_IGNORE(&e->h, sizeof(struct exr_header), 1, f);
 
     /* read headers */
     while (!test_next_null(f)) {
@@ -202,7 +202,7 @@ EXR_load(const char* filename, int skip_flag UNUSED)
     /* read offset table */
     if (!e->h.multipart) {
         offset = (uint64_t*)malloc(sizeof(uint64_t) * height);
-        fread(offset, sizeof(uint64_t), height, f);
+        FFREAD_IGNORE(offset, sizeof(uint64_t), height, f);
     } else {
         //TBD
     }
@@ -221,7 +221,7 @@ EXR_load(const char* filename, int skip_flag UNUSED)
     }
     for (int y = ystart; (ydelta * (yend - y)) >= 0; y += ydelta) {
         fseek(f, offset[y], SEEK_SET);
-        fread(&data_size, 4, 1, f);
+        FFREAD_IGNORE(&data_size, 4, 1, f);
         for (int i = 0; i < e->chnl_num; i ++) {
             for (uint32_t x = 0; x < width; x ++) {
                 float a = read_pixel(f, e->chnls[i].pixel_type);

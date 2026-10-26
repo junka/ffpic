@@ -24,7 +24,7 @@ BPG_probe(FILE *f)
     if (f == NULL) {
       return -ENOENT;
     }
-    fread(&header, sizeof(header), 1, f);
+    FFREAD_IGNORE(&header, sizeof(header), 1, f);
     if (SWAP(header.file_magic) == 0x425047fb) {
         return 0;
     }
@@ -51,7 +51,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(BPG));
     BPG *h = p->pic;
     FILE *f = fopen(filename, "rb");
-    fread(&h->head, sizeof(struct bpg_file), 1, f);
+    FFREAD_IGNORE(&h->head, sizeof(struct bpg_file), 1, f);
     h->head.file_magic = SWAP(h->head.file_magic);
     h->picture_width = read_ue7(f);
     h->picture_height = read_ue7(f);

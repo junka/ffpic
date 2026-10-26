@@ -376,7 +376,7 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
                     
                 } else if (r->type == TYPE2UINT("Exif") && ref->type == TYPE2UINT("cdsc")) {
                     VDBG(heif, "exif %" PRIu64 "", r->length);
-                    struct exif_block ex;
+                    struct exif_block ex UNUSED;
                     ex.exif_tiff_header_offset = ((uint32_t)r->data[0]<<24|r->data[1]<<16|r->data[2]<<8|r->data[3]);
                     ex.payload = r->data+5;
                     VDBG(heif, "exif tiff %d payload %s", ex.exif_tiff_header_offset, ex.payload);

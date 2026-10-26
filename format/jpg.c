@@ -286,8 +286,8 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
         // }
     }
     if (end > 0) {
-        int positive;
-        int negative;
+        int positive = 1 << low;
+        int negative = (uint32_t)(-1) << high;
 #if 0
         fprintf(vlog_get_stream(), "AC before:\n ");
         for (int i = 0; i < 8; i++) {

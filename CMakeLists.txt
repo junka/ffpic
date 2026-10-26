@@ -34,6 +34,8 @@ if (NOT MSVC)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pedantic -Wall -Wextra")
+  # the lock free queue stores its tagged head/tail through uintptr_t casts
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-strict-aliasing")
 
   set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -rdynamic")
 
@@ -175,7 +177,7 @@ add_executable(transbmp "${FFPIC_ROOT}/app/transbmp.c")
 add_executable(transcode "${FFPIC_ROOT}/app/transcode.c")
 
 if(Vulkan_FOUND)
-  target_include_directories(ffpic PRIVATE $(Vulkan_INCLUDE_DIRS))
+  target_include_directories(ffpic PRIVATE ${Vulkan_INCLUDE_DIRS})
   include_directories(ffpic "${FFPIC_ROOT}/arch/vulkan/")
   target_compile_options(ffpic PRIVATE -DENABLE_VULKAN)
 endif()
@@ -203,6 +205,7 @@ endif(SDL2_FOUND)
 
 if(OpenCL_FOUND)
   target_include_directories(ffpic PRIVATE ${OpenCL_INCLUDE_DIRS})
+  target_compile_definitions(ffpic PRIVATE CL_SILENCE_DEPRECATION)
   target_link_libraries(ffpic OpenCL::OpenCL)
   target_link_libraries(picinfo OpenCL::OpenCL)
   target_link_libraries(transbmp OpenCL::OpenCL)

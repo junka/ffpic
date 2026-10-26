@@ -205,10 +205,10 @@ lzw_decode_tiff(int legacy, int codesize, const uint8_t *raw,
     int ii, tsize;
     int len;
     int second;
-    int buf;
+    int buf = code_clear;
     int tempcode;
-    int ch;
-    int buffer;
+    int ch = 0;
+    int buffer = 0;
     int buffer_size = 0;
 
     Entry *table = malloc(sizeof(Entry) * (1 << 12));

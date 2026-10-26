@@ -182,7 +182,7 @@ read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
     int pitch = ((width * 32 + 31) >> 5) << 2;
     fseek(f, ifd->strip_offsets[id], SEEK_SET);
     uint8_t *raw = malloc(ifd->strip_byte_counts[id]);
-    uint8_t *decode;
+    uint8_t *decode = NULL;
     int n = 0;
     FFREAD_IGNORE(raw, ifd->strip_byte_counts[id], 1, f);
     if (ifd->compression == COMPRESSION_NONE) {
@@ -198,6 +198,7 @@ read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
         }
 
         free(raw);
+        raw = NULL;
     } else if (ifd->compression == COMPRESSION_PACKBITS) {
         decode = malloc(ifd->rows_per_strip * pitch);
         int i = 0, j =0, rep;
@@ -222,6 +223,13 @@ read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
             }
         }
         free(raw);
+        raw = NULL;
+    }
+
+    /* an unsupported compression has no decoder above */
+    if (decode == NULL) {
+        free(raw);
+        return;
     }
 
     for (uint32_t i = 0; i < ifd->rows_per_strip; i ++) {

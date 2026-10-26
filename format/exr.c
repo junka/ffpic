@@ -173,6 +173,9 @@ read_pixel(FILE *f, int type)
 
 }
 
+static void
+EXR_free(struct pic* p);
+
 static struct pic* 
 EXR_load(const char* filename, int skip_flag UNUSED)
 {
@@ -198,13 +201,21 @@ EXR_load(const char* filename, int skip_flag UNUSED)
     
     e->data = malloc(height * p->pitch);
     // int data_len;
-    uint64_t* offset;
+    uint64_t* offset = NULL;
     /* read offset table */
     if (!e->h.multipart) {
         offset = (uint64_t*)malloc(sizeof(uint64_t) * height);
         FFREAD_IGNORE(offset, sizeof(uint64_t), height, f);
     } else {
-        //TBD
+        /* multipart images are not supported */
+        fclose(f);
+        EXR_free(p);
+        return NULL;
+    }
+    if (offset == NULL) {
+        fclose(f);
+        EXR_free(p);
+        return NULL;
     }
 
     /*read pixel data*/

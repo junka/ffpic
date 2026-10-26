@@ -448,7 +448,6 @@ void read_packet_header(struct bits_vec *v, int tile_id UNUSED) {
 int
 read_sod(JP2 *j, FILE *f) {
     /* read till eoc */
-    struct sop sop;
     // uint8_t *p = j->data;
     int start = ftell(f);
     int tile_id = j->tiles[j->tile_nums - 1].sot.tile_id;
@@ -464,10 +463,9 @@ read_sod(JP2 *j, FILE *f) {
         assert((data[1]<<8|data[0]) == SOP);
         data += 2;
         SKIP_BITS(v, 16);
-        sop.length = (data[0] << 8 | data[1]);
+        assert((data[0] << 8 | data[1]) == 4);
         data += 2;
-        assert(sop.length == 4);
-        sop.seq_num = (data[0] << 8 | data[1]);
+        /* sequence number, not used yet */
         data += 2;
     }
     // if we have ppm in main header or ppt in tile header

@@ -327,7 +327,7 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
         VDBG(huffman, "%c %d", n[i]->sym, n[i]->freq);
     }
 
-    hnode *p;
+    hnode *p = NULL;
     int start = 0;
     while (start + 1 < sym_count) {
         hnode *prev = n[start];
@@ -346,7 +346,17 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
         n[i-1] = p;
         start ++;
     }
-    p->codelen = 0;
+    if (p == NULL) {
+        /* less than two distinct bytes, no merge is needed */
+        if (sym_count == 0) {
+            free(n);
+            return NULL;
+        }
+        p = n[0];
+        p->codelen = 1;
+    } else {
+        p->codelen = 0;
+    }
     calc_huffman_codelen(p, count);
     free_hnode(p);
 

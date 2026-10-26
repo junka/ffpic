@@ -226,7 +226,7 @@ void vulkan_uninit(void) {
     dlclose(priv.lib);
 }
 
-void vulkan_init()
+void vulkan_init(void)
 {
     void *lib;
 #ifdef __APPLE__
@@ -235,7 +235,7 @@ void vulkan_init()
         lib = dlopen("libvulkan.1.dylib", RTLD_LAZY | RTLD_LOCAL);
     if (!lib)
         lib = dlopen("libMoltenVK.dylib", RTLD_NOW | RTLD_LOCAL);
-    if (!lib && getenv("DYLD_FALLBACK_LIBRARY_PATH") == nullptr)
+    if (!lib && getenv("DYLD_FALLBACK_LIBRARY_PATH") == NULL)
         lib = dlopen("/usr/local/lib/libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
 #elif defined __linux__
     lib = dlopen("libvulkan.so.1", RTLD_LAZY | RTLD_LOCAL);

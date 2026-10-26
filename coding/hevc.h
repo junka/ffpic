@@ -995,7 +995,7 @@ struct sao {
     // uint32_t sao_type_idx_chroma;
     uint8_t SaoEoClass[3]; // 0: 1d 0-degree; 1: 1d 90-degree; 2: 1d 135-degree; 3: 1d 45-degree;
     uint8_t SaoTypeIdx[3]; // 0: not applied; 1: band offset; 2: edge offset;
-    int saoOffsetVal[3][4];
+    int saoOffsetVal[3][5];
 };
 
 

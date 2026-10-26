@@ -105,7 +105,7 @@ void opcl_amd_init(void) {
     const char *prog_src = (char *)&srcstr[0];
     cl_platform_id platform_ids[8];  // OpenCL platform
     cl_uint num_platforms;
-    cl_device_id did;
+    cl_device_id did = NULL;
     cl_int ret;
     char dname[512];
     cl_int err = clGetPlatformIDs(8, platform_ids, &num_platforms);
@@ -142,6 +142,11 @@ void opcl_amd_init(void) {
                 }
             }
         }
+    }
+
+    if (did == NULL) {
+        fprintf(stderr, "no OpenCL device found\n");
+        return;
     }
 
     clGetDeviceInfo(did, CL_DEVICE_VERSION, sizeof(dname), dname, NULL);

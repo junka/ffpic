@@ -4952,7 +4952,7 @@ static int8_t process_chroma_intra_prediction_mode(struct slice_segment_header* 
     struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
     struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
 
-    int modeIdx;
+    int modeIdx = 0;
     int IntraPredModeY = get_IntraPredModeY(sps, p, xPb, yPb);
     int IntraPredModeC;
     /* table 8-2 */
@@ -5351,10 +5351,10 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     }
     int remainingNumIndices = pc->num_palette_indices_minus1 + 1;
     int PaletteScanPos = 0;
-    int CurrPaletteIndex;
+    int CurrPaletteIndex = 0;
     int runPos;
     int log2BlockSize = log2floor(nCbS);
-    int xC, yC, xR, yR, xcPrev, ycPrev;
+    int xC, yC, xR, yR, xcPrev = 0, ycPrev = 0;
     uint8_t CopyAboveIndicesFlag[64][64] = {0};
 
     while (PaletteScanPos < nCbS * nCbS ) {

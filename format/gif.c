@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "colorspace.h"
 #include "gif.h"
@@ -10,6 +11,8 @@
 #include "vlog.h"
 
 VLOG_REGISTER(gif, INFO)
+
+void GIF_free(struct pic *p);
 
 #define GRAPHIC_PLAINTEXT      0x01
 #define GRAPHIC_IMAGE          0x2C
@@ -21,19 +24,72 @@ VLOG_REGISTER(gif, INFO)
 #define EXTENSION_INTRODUCER   0x21
 #define TRAILER                0x3B
 
+/* the gif spec puts the lzw minimum code size in 2..8 */
+#define GIF_MIN_CODE_SIZE      2
+#define GIF_MAX_CODE_SIZE      8
+
+/* upper bound for a decoded image, keep it in sync with the callers of
+ * image_data_length_of()
+ */
+#define GIF_MAX_IMAGE_BYTES    (512 * 1024 * 1024)
+
+/* the gif spec stores the color table size as a 3 bit field, the table holds
+ * 2 << n entries, n == 7 is the only valid value for 256 entries
+ */
+#define GIF_MAX_COLOR_TABLE    256
+
+static uint32_t color_table_size(uint8_t table_size)
+{
+    if (table_size >= 7)
+        return GIF_MAX_COLOR_TABLE;
+    return 2u << table_size;
+}
+
+/* the number of bytes the lzw decoder has to produce for an image, the
+ * decoder writes one byte per pixel hooking up to image_data_length(). zero
+ * means the descriptor is not usable
+ */
+static uint64_t image_data_length_of(const struct image_descriptor* dsc)
+{
+    if (dsc->width == 0 || dsc->height == 0)
+        return 0;
+
+    uint64_t length = (uint64_t)dsc->width * dsc->height;
+    if (length == 0 || length * 4 > GIF_MAX_IMAGE_BYTES)
+        return 0;
+
+    return length;
+}
+
 int read_blocks(uint8_t** data, FILE* file) 
 {
-    uint8_t block_length = (uint8_t)fgetc(file);
+    *data = NULL;
     int total_length = 0;
-    while (block_length) {
-        if (total_length == 0) {
-            *data = (uint8_t*)malloc(block_length);
-        } else {
-            *data = (uint8_t*)realloc(*data, total_length + block_length);
+    for (;;) {
+        int c = fgetc(file);
+        if (c == EOF)
+            break;
+        uint8_t block_length = (uint8_t)c;
+        if (block_length == 0)
+            break;
+        /* fgetc told us a sub block is coming but the file may end inside */
+        if (total_length > INT_MAX - block_length - 1)
+            break;
+        uint8_t* block = (uint8_t*)realloc(*data, (size_t)total_length + block_length + 1);
+        if (block == NULL) {
+            free(*data);
+            *data = NULL;
+            return 0;
         }
-        fread(*data + total_length, 1, block_length, file);
-        total_length += block_length;
-        block_length = (uint8_t)fgetc(file);
+        *data = block;
+        size_t got = fread(*data + total_length, 1, block_length, file);
+        total_length += (int)got;
+        /* a comment or plaintext block is printed with %s by the info
+         * callbacks, the block itself has no terminator
+         */
+        (*data)[total_length] = '\0';
+        if (got < block_length)
+            break;
     }
     return total_length;
 }
@@ -47,6 +103,10 @@ Graphic* gif_increment_graphics(GIF* gif) {
     }
     Graphic* newest = gif->graphics + gif->graphic_count - 1;
     newest->has_control = false;
+    newest->control = NULL;
+    newest->type = 0;
+    newest->image = NULL;
+    newest->plaintext = NULL;
     return newest;
 }
 
@@ -61,50 +121,109 @@ Graphic* gif_next_dataless_graphic(GIF* gif) {
 }
 
 void read_image(GIF* gif, FILE* f) {
-    Image* image = (Image*)malloc(sizeof(Image));
-    fread(&image->image_dsc, sizeof(struct image_descriptor), 1, f);
+    Image* image = (Image*)calloc(1, sizeof(Image));
+    if (image == NULL)
+        return;
+    if (fread(&image->image_dsc, sizeof(struct image_descriptor), 1, f) != 1)
+        image->image_dsc.width = image->image_dsc.height = 0;
 
+    uint32_t ct_size = 0;
     if (image->image_dsc.local_color_table_flag) {
-        image->local_ct = (Color*)malloc(sizeof(Color) * (2 << image->image_dsc.local_color_table_size));
-        for (int i = 0; i < 2 << image->image_dsc.local_color_table_size; i ++) {
-            fread(image->local_ct, 3, 2 << image->image_dsc.local_color_table_size, f);
-        }
+        ct_size = color_table_size(image->image_dsc.local_color_table_size);
+        size_t entries = ct_size;
+        image->local_ct = (Color*)calloc(entries, sizeof(Color));
+        if (image->local_ct == NULL)
+            ct_size = 0;
+        else
+            fread(image->local_ct, sizeof(Color), entries, f);
     } else {
         image->local_ct = NULL;
     }
 
-    int width = ((image->image_dsc.width + 3) >> 2) << 2;
-    int image_data_length = width * image->image_dsc.height;
-    image->data = (uint8_t*)malloc(image_data_length * 4);
-    
+    uint64_t image_data_length = image_data_length_of(&image->image_dsc);
     uint8_t* compressed = NULL;
-    uint8_t lzw_code_size = (uint8_t)fgetc(f);
-    int compressed_length = read_blocks(&compressed, f);
-    // lzw_decode
-    // loadlzw
-    lzw_decode_gif(1, lzw_code_size, compressed, compressed_length, image->data);
-    uint8_t *p = image->data;
-    Color *ct = NULL;
-    if (image->local_ct == NULL) {
-        ct = gif->global_ct;
-    } else {
-        ct = image->local_ct;
+    int compressed_length = 0;
+    image->data = NULL;
+
+    if (image_data_length == 0) {
+        VERR(gif, "invalid image size %dx%d",
+             image->image_dsc.width, image->image_dsc.height);
+        goto out;
     }
-    for (int j = image->image_dsc.height - 1; j >= 0; j --) {
-        for(int i = width- 1; i >=0; i -- ) {
-            uint8_t cindex = *(p+i+j*width);
-            *(p +  (j * 4 * width)+ 4*i) = ct[cindex].b;
-            *(p +  (j * 4 * width)+ 4*i + 1) = ct[cindex].g;
-            *(p +  (j * 4 * width)+ 4*i + 2 ) = ct[cindex].r; 
-            // *(p +  (j * 4 * width)+ 4*i + 3 ) = 0;
+
+    image->data = (uint8_t*)calloc((size_t)image_data_length, 4);
+    if (image->data == NULL)
+        goto out;
+
+    {
+        int lzw_code_size = fgetc(f);
+        if (lzw_code_size < GIF_MIN_CODE_SIZE || lzw_code_size > GIF_MAX_CODE_SIZE) {
+            VERR(gif, "invalid lzw minimum code size [%d]", lzw_code_size);
+            goto out;
+        }
+        compressed_length = read_blocks(&compressed, f);
+        if (compressed == NULL || compressed_length <= 0)
+            goto out;
+
+        /* lzw_decode
+         * loadlzw
+         * the decoder writes one byte per pixel, so a valid stream can never
+         * need more room than the frame holds
+         */
+        if (lzw_decode_gif(1, lzw_code_size, compressed, compressed_length,
+                           image->data, (int)image_data_length) != (int)image_data_length) {
+            VERR(gif, "lzw stream does not match the image size");
+            goto out;
+        }
+    }
+
+    {
+        /* resolve the color table the way the decoder output has to be
+         * mapped, a frame without any color table can not be rendered
+         */
+        Color* ct = image->local_ct ? image->local_ct : gif->global_ct;
+        uint32_t resolved_ct_size =
+            image->local_ct ? ct_size : color_table_size(gif->ls_dsc.global_color_table_size);
+        if (!gif->ls_dsc.global_color_table_flag && image->local_ct == NULL)
+            resolved_ct_size = 0;
+        if (ct == NULL || resolved_ct_size == 0) {
+            VERR(gif, "no color table available for the image");
+            goto out;
+        }
+
+        uint8_t* p = image->data;
+        for (int j = image->image_dsc.height - 1; j >= 0; j --) {
+            for (int i = image->image_dsc.width - 1; i >= 0; i --) {
+                uint8_t cindex = *(p + i + j * image->image_dsc.width);
+                /* a byte written by the decoder is not guaranteed to index
+                 * the color table, the lzw code size says nothing about how
+                 * many entries the table has
+                 */
+                if (cindex >= resolved_ct_size) {
+                    VERR(gif, "color index [%d] out of the %d entry color table",
+                         cindex, resolved_ct_size);
+                    goto out;
+                }
+                *(p +  (j * 4 * image->image_dsc.width) + 4*i) = ct[cindex].b;
+                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 1) = ct[cindex].g;
+                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 2 ) = ct[cindex].r;
+                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 3 ) = 0xFF;
+            }
         }
     }
 
     free(compressed);
 
-    Graphic* graphic = gif_next_dataless_graphic(gif);
-    graphic->type = GRAPHIC_IMAGE;
-    graphic->image = image;
+    {
+        Graphic* graphic = gif_next_dataless_graphic(gif);
+        graphic->type = GRAPHIC_IMAGE;
+        graphic->image = image;
+    }
+    return;
+
+out:
+    free(compressed);
+    image_free(image);
 }
 
 void 
@@ -215,11 +334,19 @@ void read_gif(FILE* f, GIF *gif) {
     gif->graphics = NULL;
     gif->extensions = NULL;
     fread(&gif->file_h, 1, GIF_FILE_HEADER_LEN, f);
-    fread(&gif->ls_dsc, 1, sizeof(struct logical_screen_descriptor), f);
+    if (fread(&gif->ls_dsc, 1, sizeof(struct logical_screen_descriptor), f) !=
+        sizeof(struct logical_screen_descriptor)) {
+        gif->ls_dsc.global_color_table_flag = 0;
+        gif->ls_dsc.global_color_table_size = 0;
+    }
 
     if (gif->ls_dsc.global_color_table_flag) {
-        gif->global_ct = (Color*)malloc(3 * (2<< gif->ls_dsc.global_color_table_size));
-        fread(gif->global_ct, 3, 2 << gif->ls_dsc.global_color_table_size, f);
+        gif->global_ct = (Color*)calloc(GIF_MAX_COLOR_TABLE, sizeof(Color));
+        if (gif->global_ct)
+            fread(gif->global_ct, sizeof(Color),
+                  color_table_size(gif->ls_dsc.global_color_table_size), f);
+        else
+            gif->ls_dsc.global_color_table_flag = 0;
     } else {
         gif->global_ct = NULL;
     }
@@ -243,27 +370,49 @@ GIF_load_one(Graphic *g)
     return p;
 }
 
+static bool
+graphic_is_image(const Graphic* g)
+{
+    return g->type == GRAPHIC_IMAGE && g->image && g->image->data;
+}
+
 static struct pic *
 GIF_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(GIF));
     GIF* g = (GIF *)p->pic;
     FILE* f = fopen(filename, "rb");
+    if (f == NULL) {
+        pic_free(p);
+        return NULL;
+    }
     read_gif(f, g);
     fclose(f);
     if (!skip_flag) {
         if (g->graphic_count > 1) {
+            struct pic *last = NULL;
             for (int i = 0; i < g->graphic_count; i++) {
-                p = GIF_load_one(&g->graphics[i]);
-                file_enqueue_pic(p);
+                if (!graphic_is_image(&g->graphics[i]))
+                    continue;
+                last = GIF_load_one(&g->graphics[i]);
+                file_enqueue_pic(last);
             }
-            p->pic = g;
+            if (last == NULL) {
+                VERR(gif, "no image in the file");
+                GIF_free(p);
+                return NULL;
+            }
+            //for GIF, the info will be stored in the last frame
+            last->pic = g;
             return NULL;
-        } else {
+        } else if (g->graphic_count == 1 && graphic_is_image(&g->graphics[0])) {
             p = GIF_load_one(g->graphics);
             p->pic = g;
             return p;
         }
+        VERR(gif, "no image in the file");
+        GIF_free(p);
+        return NULL;
     }
     return p;
 }
@@ -286,10 +435,19 @@ GIF_probe(FILE *f)
     return -EINVAL;
 }
 
+static Graphic*
+gif_graphic_at(GIF* g, int index)
+{
+    if (index < 0 || index >= g->graphic_count)
+        return NULL;
+    return &g->graphics[index];
+}
+
 static void 
 GIF_info(FILE* f, struct pic* p)
 {
     GIF *g = (GIF*)(p->pic);
+    Graphic* first = gif_graphic_at(g, 0);
     fprintf(f, "GIF file format:\n");
     fprintf(f, "version %c%c%c\n", g->file_h.version[0], g->file_h.version[1], g->file_h.version[2]);
     fprintf(f, "\timage width %d height %d:\n", g->ls_dsc.screen_witdh, g->ls_dsc.screen_height);
@@ -303,36 +461,48 @@ GIF_info(FILE* f, struct pic* p)
     fprintf(f, "------------------------------\n");
     fprintf(f, "\tgraphic_count: %d\n", g->graphic_count);
     fprintf(f, "\textension_count: %d\n", g->extension_count);
-    if (g->graphics->control) {
-        fprintf(f, "\tfirst image: disposal_method %d\n", g->graphics->control->disposal_method);
-        fprintf(f, "\tfirst image: delay_time %d\n", g->graphics->control->delay_time);
+    if (first == NULL) {
+        fprintf(f, "\tno graphic block\n");
+        return;
     }
-    fprintf(f, "\tfirst image: width %d height %d\n", g->graphics->image->image_dsc.width,
-                g->graphics->image->image_dsc.height);
-    fprintf(f, "\tfirst image: left %d top %d\n", g->graphics->image->image_dsc.left,
-                g->graphics->image->image_dsc.top);
-    fprintf(f, "\tfirst image: interlace %d\n", g->graphics->image->image_dsc.interlace_flag);
-    fprintf(f, "\tfirst image: local_color_flag %d\n", g->graphics->image->image_dsc.local_color_table_flag);
+    if (first->has_control) {
+        fprintf(f, "\tfirst image: disposal_method %d\n", first->control->disposal_method);
+        fprintf(f, "\tfirst image: delay_time %d\n", first->control->delay_time);
+    }
+    if (first->image == NULL) {
+        fprintf(f, "\tfirst graphic: image type %d\n", first->type);
+        return;
+    }
+    fprintf(f, "\tfirst image: width %d height %d\n", first->image->image_dsc.width,
+                first->image->image_dsc.height);
+    fprintf(f, "\tfirst image: left %d top %d\n", first->image->image_dsc.left,
+                first->image->image_dsc.top);
+    fprintf(f, "\tfirst image: interlace %d\n", first->image->image_dsc.interlace_flag);
+    fprintf(f, "\tfirst image: local_color_flag %d\n", first->image->image_dsc.local_color_table_flag);
 
     if (g->graphic_count > 1) {
-        if (g->graphics->control) {
-            fprintf(f, "\tsecond image: disposal_method %d\n", g->graphics[1].control->disposal_method);
-            fprintf(f, "\tsecond image: delay_time %d\n", g->graphics[1].control->delay_time);
+        Graphic* second = &g->graphics[1];
+        if (second->has_control) {
+            fprintf(f, "\tsecond image: disposal_method %d\n", second->control->disposal_method);
+            fprintf(f, "\tsecond image: delay_time %d\n", second->control->delay_time);
         }
-        fprintf(f, "\tsecond image: image type %d\n", g->graphics[1].type);
-        fprintf(f, "\tsecond image: width %d height %d\n", g->graphics[1].image->image_dsc.width,
-                    g->graphics[1].image->image_dsc.height);
-        fprintf(f, "\tsecond image: left %d top %d\n", g->graphics[1].image->image_dsc.left,
-                    g->graphics[1].image->image_dsc.top);
-        fprintf(f, "\tsecond image: interlace %d\n", g->graphics[1].image->image_dsc.interlace_flag);
-        fprintf(f, "\tsecond image: local_color_flag %d\n", g->graphics[1].image->image_dsc.local_color_table_flag);
+        fprintf(f, "\tsecond image: image type %d\n", second->type);
+        if (second->image) {
+            fprintf(f, "\tsecond image: width %d height %d\n", second->image->image_dsc.width,
+                        second->image->image_dsc.height);
+            fprintf(f, "\tsecond image: left %d top %d\n", second->image->image_dsc.left,
+                        second->image->image_dsc.top);
+            fprintf(f, "\tsecond image: interlace %d\n", second->image->image_dsc.interlace_flag);
+            fprintf(f, "\tsecond image: local_color_flag %d\n", second->image->image_dsc.local_color_table_flag);
+        }
         fprintf(f, "------------------------------\n");
         if (g->extension_count) {
             for(int i = 0; i < g->extension_count; i ++) {
                 switch(g->extensions[i].type) {
                     case EXTENSION_COMMENT:
                         fprintf(f, "\tcomment extension:\n");
-                        fprintf(f, "\t%s\n", g->extensions[i].comment->text);
+                        fprintf(f, "\t%s\n", g->extensions[i].comment->text ?
+                                g->extensions[i].comment->text : "");
                         break;
                     case EXTENSION_APPLICATION:
                         fprintf(f, "\tapp extension:\n");

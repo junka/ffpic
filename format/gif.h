@@ -57,6 +57,11 @@ struct image_descriptor {
 #endif
 };
 
+/* the structs above map the on disk layout, the ones below only live in
+ * memory and must keep the natural alignment of their pointers
+ */
+#pragma pack(pop)
+
 typedef struct {
     struct image_descriptor image_dsc;
     Color* local_ct;
@@ -66,6 +71,8 @@ typedef struct {
 
     uint8_t* data;
 } Image;
+
+#pragma pack(push, 1)
 
 struct plaintext_extension {
     uint8_t block_size;
@@ -78,6 +85,8 @@ struct plaintext_extension {
     uint8_t foreground_color_index;
     uint8_t background_color_index;
 };
+
+#pragma pack(pop)
 
 typedef struct {
     struct plaintext_extension text_ext;
@@ -94,11 +103,15 @@ typedef struct {
     PlainText* plaintext;
 } Graphic;
 
+#pragma pack(push, 1)
+
 struct application_extension {
     uint8_t block_size;
     uint8_t identifier[8];
     uint8_t auth_code[3];
 };
+#pragma pack(pop)
+
 typedef struct {
     struct application_extension app_ext;
     uint8_t* data;
@@ -117,6 +130,8 @@ typedef struct {
 } Extension;
 
 #define GIF_FILE_HEADER_LEN (6)
+
+#pragma pack(push, 1)
 
 struct gif_file_header
 {
@@ -154,6 +169,8 @@ typedef struct {
 
 
 void GIF_init(void);
+
+void image_free(Image* image);
 
 #ifdef __cplusplus
 }

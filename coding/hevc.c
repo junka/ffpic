@@ -2513,6 +2513,7 @@ static void calc_pps_params(struct sps *sps, struct pps *pps) {
     free(rowBd);
     // see 6.5.2 z-scan order array initialization process
     // see (6-10)
+    pps->MinTbAddrZsWidth = sps->PicWidthInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
     pps->MinTbAddrZs = init_zscan_array(sps, pps->CtbAddrRsToTs);
 }
 
@@ -7183,6 +7184,18 @@ static void inloop_filter(struct slice_segment_header*slice, struct pps *pps, st
     }
 }
 
+static void
+free_slice_segment_header(struct slice_segment_header *slice)
+{
+    for (int log2blocksize = 0; log2blocksize < 6; log2blocksize++) {
+        for (int i = 0; i < 4; i++) {
+            free(slice->ScanOrder[log2blocksize][i]);
+        }
+    }
+    free(slice->st);
+    free(slice);
+}
+
 static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                       struct bits_vec *v,
                                       struct hevc_param_set *hps,
@@ -7286,7 +7299,8 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     if (hslice.rps) {
         free(hslice.rps);
     }
-    free(hslice.slice);
+    free_slice_segment_header(hslice.slice);
+    free(p.slices);
 }
 
 uint16_t
@@ -7376,6 +7390,11 @@ void free_hevc_param_set(struct hevc_param_set *hps)
                 free(hps->pps[i]->pps_3d_ext);
             if (hps->pps[i]->pps_multilayer_ext)
                 free(hps->pps[i]->pps_multilayer_ext);
+            if (hps->pps[i]->MinTbAddrZs) {
+                for (int j = 0; j < hps->pps[i]->MinTbAddrZsWidth; j++)
+                    free(hps->pps[i]->MinTbAddrZs[j]);
+                free(hps->pps[i]->MinTbAddrZs);
+            }
             free(hps->pps[i]->column_width_minus1);
             free(hps->pps[i]->row_height_minus1);
             free(hps->pps[i]->CtbAddrTsToRs);
@@ -7397,6 +7416,8 @@ void free_hevc_param_set(struct hevc_param_set *hps)
                 free(hps->sps[i]->sps_lt_ref);
             if (hps->sps[i]->vui)
                 free(hps->sps[i]->vui);
+            if (hps->sps[i]->sps_profile_tier_level.sublayers)
+                free(hps->sps[i]->sps_profile_tier_level.sublayers);
             free(hps->sps[i]);
             hps->sps[i] = NULL;
         }
@@ -7409,6 +7430,8 @@ void free_hevc_param_set(struct hevc_param_set *hps)
                 free(hps->vps[i]->vps_ext);
             if (hps->vps[i]->vps_3d_ext)
                 free(hps->vps[i]->vps_3d_ext);
+            if (hps->vps[i]->vps_profile_tier_level.sublayers)
+                free(hps->vps[i]->vps_profile_tier_level.sublayers);
             free(hps->vps[i]);
             hps->vps[i] = NULL;
         }

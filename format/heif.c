@@ -79,6 +79,7 @@ void free_hvcc_box(struct box *bn)
     if (b->nal_arrays) {
         free(b->nal_arrays);
     }
+    free_hevc_param_set(&b->hps);
 }
 
 int

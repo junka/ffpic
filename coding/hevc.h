@@ -680,6 +680,7 @@ struct pps {
     int *CtbAddrRsToTs;
     int *TileId;
     int ** MinTbAddrZs;
+    int MinTbAddrZsWidth;
 };
 
 

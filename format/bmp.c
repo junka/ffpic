@@ -400,7 +400,8 @@ static uint8_t *alloc_bmp_with_head(uint32_t w, uint32_t h)
     info_p->size_image = w * h * 4;
     info_p->x_pixels_per_meter = 0x60;
     info_p->y_pixels_per_meter = 0x60;
-    info_p->colors_used = 2;
+    // a 32bpp bi_rgb bitmap carries no colour table
+    info_p->colors_used = 0;
     info_p->colors_important = 0;
 
     return d_ptr;
@@ -410,19 +411,27 @@ void
 BMP_encode(struct pic *p, const char * fname)
 {
     FILE *fd = fopen(fname, "w");
-    int width = ((p->width + 3) >> 2) << 2;
-    uint8_t *data = alloc_bmp_with_head(width, p->height);
-    long file_length = (p->height * p->pitch) + 54;
-    uint8_t *file_p = data;
-    uint8_t *file_p_tmp = NULL;
+    // the header written below is always 32bpp, so every row has to leave with
+    // four bytes a pixel even when the decoder held three
+    int pitch = p->width * 4;
+    int bytes = p->depth >> 3;
+    uint8_t *data = alloc_bmp_with_head(p->width, p->height);
+    long file_length = 54L + (long)pitch * p->height;
+    uint8_t *out = data + 54;
     uint8_t *b = (uint8_t *)p->pixels;
 
-    file_p_tmp = file_p;
-    file_p_tmp += 54;
     for (int i = 0; i < p->height; i++) {
-        memcpy(file_p_tmp + (p->height-1-i) * p->pitch, b + i * p->pitch, p->pitch);
+        // a positive height means the rows are stored bottom up
+        uint8_t *line = out + (p->height - 1 - i) * pitch;
+        uint8_t *src = b + (long)i * p->pitch;
+        for (int x = 0; x < p->width; x++) {
+            line[x * 4 + 0] = src[x * bytes + 0];
+            line[x * 4 + 1] = src[x * bytes + 1];
+            line[x * 4 + 2] = src[x * bytes + 2];
+            line[x * 4 + 3] = bytes > 3 ? src[x * bytes + 3] : 0xFF;
+        }
     }
-    fwrite(file_p, file_length, 1, fd);
+    fwrite(data, file_length, 1, fd);
     fclose(fd);
     free(data);
 }

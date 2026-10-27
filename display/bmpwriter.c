@@ -39,7 +39,8 @@ uint8_t* alloc_bmp_with_head(uint32_t w, uint32_t h)
     bmp_p->biSizeImage = w*h*4;
     bmp_p->biXPelsPerMeter = 0x60;
     bmp_p->biYPelsPerMeter = 0x60;
-    bmp_p->biClrUsed = 2;
+    /* a 32bpp bi_rgb bitmap carries no colour table */
+    bmp_p->biClrUsed = 0;
     bmp_p->biClrImportant = 0;
     
     return d_ptr;
@@ -58,11 +59,13 @@ bmp_writer_init(const char* title, int w, int h)
 }
 
 int 
-bmp_writer_puts(void *buff, int left UNUSED, int top UNUSED, int width, int height, int depth, int pitch UNUSED, int format UNUSED)
+bmp_writer_puts(void *buff, int left UNUSED, int top UNUSED, int width, int height, int depth UNUSED, int pitch UNUSED, int format UNUSED)
 {
 
     FILE *fd = bmp_pri.fp;
-    long file_length = (width * height * (depth>>3)) + 54;
+    /* the loop below always moves four bytes a pixel, so the length has to
+     * agree with it and with the 32bpp header, not with the source depth */
+    long file_length = (width * height * 4) + 54;
     uint8_t *file_p = bmp_pri.data;
     uint8_t *file_p_tmp = NULL;
     uint8_t *b = (uint8_t *)buff;

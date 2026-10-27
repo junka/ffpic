@@ -69,3 +69,46 @@ jobs:
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
       run: ctest --build-config ${{ matrix.build_type }}
+
+  # The build job only proves the code compiles. This one runs the same tests
+  # instrumented, so an out of bounds read, an uninitialized value or a leak
+  # fails the job instead of quietly decoding garbage. Debug is deliberate: the
+  # project adds -fno-omit-frame-pointer -g there, which is what makes the
+  # reports readable. Linux only, since that is where ASan and LeakSanitizer
+  # both work.
+  sanitizers:
+    name: Sanitizers (${{ matrix.c_compiler }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - c_compiler: gcc
+            cpp_compiler: g++
+          - c_compiler: clang
+            cpp_compiler: clang++
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ github.workspace }}/san-build
+        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        -DCMAKE_BUILD_TYPE=Debug
+        -DBUILD_TESTING=ON
+        -DFFPIC_ENABLE_SANITIZERS=ON
+        -S ${{ github.workspace }}
+
+    - name: Build
+      run: cmake --build ${{ github.workspace }}/san-build -j 3
+
+    - name: Test
+      working-directory: ${{ github.workspace }}/san-build
+      env:
+        ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+      run: ctest --output-on-failure

@@ -110,6 +110,9 @@ int test_encoder(void)
         return -1;
     }
 
+    // got points into the codec buffer, freed with the codec
+    huffman_codec_free(codec);
+    huffman_cleanup(tree);
     return 0;
 }
 

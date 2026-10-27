@@ -46,6 +46,12 @@ if (CMAKE_COMPILER_IS_GNUCXX)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pedantic -Wall -Wextra")
 endif(CMAKE_COMPILER_IS_GNUCXX)
 
+option(FFPIC_ENABLE_SANITIZERS "Instrument the build with address and undefined behaviour sanitizers" OFF)
+if (FFPIC_ENABLE_SANITIZERS AND NOT MSVC)
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -fno-sanitize-recover=all")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2)
 
 list(APPEND FFPIC_DIRS

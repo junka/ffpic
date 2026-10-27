@@ -113,10 +113,15 @@ read_bits(struct bits_vec *v, int n)
 #endif
 
 int bits_vec_read_bit(struct bits_vec *v) {
-  if (v->ptr - v->start > (long)v->len) {
-    printf("bits longer than expect\n");
-    exit(-1);
-    return -1;
+  if (v->ptr - v->start >= (long)v->len) {
+    // coders peek a few bits past the last byte to fill their lookup key;
+    // pad with zeros rather than reading outside the buffer
+    v->offset++;
+    if (v->offset == 8) {
+      v->ptr++;
+      v->offset = 0;
+    }
+    return 0;
   }
   int ret, shift;
   if (v->msb)
@@ -207,11 +212,14 @@ void bits_vec_reinit_cur(struct bits_vec *v) {
 
 //--- below is for bitstream writer ---
 #define DELTA_PART (4096)
+#define INIT_PART (2048)
 struct bits_vec *bits_writer_reserve(uint8_t msb) {
   struct bits_vec *vec = (struct bits_vec *)malloc(sizeof(struct bits_vec));
-  vec->buff = vec->start = vec->ptr = malloc(2048);
+  // the writer ors every bit into the byte it fills, so those bytes must be zero
+  vec->buff = vec->start = vec->ptr = calloc(INIT_PART, 1);
   vec->offset = 0;
   vec->len = 0;
+  vec->reserve = INIT_PART;
   vec->msb = msb;
   return vec;
 }

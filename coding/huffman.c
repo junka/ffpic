@@ -357,6 +357,7 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     calc_huffman_codelen(p->left, count, 1);
     calc_huffman_codelen(p->right, count, 1);
     free_hnode(p);
+    free(n);
 
     struct huffman_symbol *sym = huffman_symbol_alloc(count, symbols);
 

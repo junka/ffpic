@@ -15,6 +15,7 @@ void *test_enqueue(void *arg) {
         sprintf(k, "A%d", i);
         if (!ring_enqueue(rq, k)) {
             printf("enenque fail %d, total %d\n", i, ring_count(rq));
+            free(k);
         }
     }
     return NULL;
@@ -33,6 +34,7 @@ int main(void) {
         sprintf(k, "a%d", i);
         if (!ring_enqueue(rq, k)) {
             printf("enenque fail %d\n", i);
+            free(k);
         }
     }
     void *blk[28];
@@ -42,6 +44,9 @@ int main(void) {
     }
     if (!ring_enqueue_bulk(rq, blk, 28)) {
         printf("enqueu bulk fail\n");
+        for (int i = 0; i < 28; i++) {
+            free(blk[i]);
+        }
     }
     usleep(1);
     for (int i = 32; i < 64; i++) {
@@ -49,6 +54,7 @@ int main(void) {
         sprintf(k, "a%d", i);
         if (!ring_enqueue(rq, k)) {
         printf("enenque fail %d\n", i);
+        free(k);
         }
     }
     pthread_join(tid, NULL);

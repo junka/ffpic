@@ -13,7 +13,7 @@ void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
 
 void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                             int16_t *uout, int16_t *vout, int y_stride,
-                            int uv_stride, int mbrows, int mbcols, int ctbsize);
+                            int uv_stride, int width, int height, int ctbsize);
 
 void BGR24_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
                       int16_t *V);

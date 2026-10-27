@@ -634,13 +634,14 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     }
 
     // extract some info from meta box
-    for (int i = 0; i < 2; i ++) {
-        if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("ispe")) {
-            p->width = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_width;
-            p->height = ((struct ispe_box *)(h->meta.iprp.ipco.property[i]))->image_height;
+    for (int i = 0; i < h->meta.iprp.ipco.n_property; i ++) {
+        struct box *prop = h->meta.iprp.ipco.property[i];
+        if (prop && prop->type == TYPE2UINT("ispe")) {
+            p->width = ((struct ispe_box *)prop)->image_width;
+            p->height = ((struct ispe_box *)prop)->image_height;
         }
     }
-    h->items = malloc(h->meta.iloc.item_count * sizeof(struct avif_item));
+    h->items = calloc(h->meta.iloc.item_count, sizeof(struct avif_item));
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
         h->items[i].item = &h->meta.iloc.items[i];
         for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
@@ -678,8 +679,16 @@ AVIF_free(struct pic *p)
 {
     AVIF * a = (AVIF *)p->pic;
     if (a->items) {
+        for (int i = 0; i < a->meta.iloc.item_count; i++) {
+            free(a->items[i].data);
+        }
         free(a->items);
     }
+    if (a->ftyp.compatible_brands) {
+        free(a->ftyp.compatible_brands);
+    }
+    free_meta_box(&a->meta);
+    free(p->pixels);
     pic_free(p);
 }
 

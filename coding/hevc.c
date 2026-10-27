@@ -2451,14 +2451,14 @@ static void calc_pps_params(struct sps *sps, struct pps *pps) {
             rowHeight[pps->num_tile_rows_minus1] -= rowHeight[j];
         }
     }
-    int *colBd = calloc((pps->num_tile_columns_minus1 + 1), 4);
+    int *colBd = calloc((pps->num_tile_columns_minus1 + 2), 4);
     // see (6-5)
     colBd[0] = 0;
     for (int i = 0; i <= (int)pps->num_tile_columns_minus1; i++) {
         colBd[i + 1] = colBd[i] + colWidth[i];
     }
     // see (6-6)
-    int *rowBd = calloc((pps->num_tile_rows_minus1 + 1), 4);
+    int *rowBd = calloc((pps->num_tile_rows_minus1 + 2), 4);
     rowBd[0] = 0;
     for (int j = 0; j <= (int)pps->num_tile_rows_minus1; j++) {
         rowBd[j + 1] = rowBd[j] + rowHeight[j];
@@ -3791,7 +3791,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
                 d[x + y * nTbS] =
                     clip3(coeffMin, coeffMax,
                         ((tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0] *
-                        m * levelScale[qP % 6] << (qP / 6)) + (1 << (bdShift - 1))) >> bdShift);
+                        m * levelScale[qP % 6] * (1 << (qP / 6))) + (1 << (bdShift - 1))) >> bdShift);
             }
         }
     } else {
@@ -3800,7 +3800,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
                 m = slice->ScalingFactor[sizeid][mid][x][y];
                 d[x + y * nTbS] = clip3(coeffMin, coeffMax,
                           ((tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0] *
-                          m * levelScale[qP % 6]<< (qP / 6)) + (1 << (bdShift - 1))) >> bdShift);
+                          m * levelScale[qP % 6] * (1 << (qP / 6))) + (1 << (bdShift - 1))) >> bdShift);
             }
         }
     }
@@ -4846,9 +4846,7 @@ static int8_t process_luma_intra_prediction_mode(
         /*step 2*/
         bool availableA = process_zscan_order_block_availablity(
             slice, hps, xPb, yPb, xNbA, yNbA);
-        VDBG(hevc, "availableA (%d, %d), %d get_IntraPredModeY %d, cuPredMode %d, pcm_flag %d", xNbA, yNbA,
-             availableA, get_IntraPredModeY(sps, p, xNbA, yNbA), get_CuPredMode(sps, p, xNbA, yNbA),
-             get_pcm_flag(sps, p, xNbA, yNbA));
+        VDBG(hevc, "availableA (%d, %d), %d", xNbA, yNbA, availableA);
         if (availableA == false) {
             candIntraPredModeA = INTRA_DC;
         } else if (get_CuPredMode(sps, p, xNbA, yNbA) != MODE_INTRA ||
@@ -7020,13 +7018,6 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             }
         }
 
-        VDBG(hevc, "CtbAddrInTs %d TileId[CtbAddrInTs] %d, "
-             "CtbAddrRsToTs[CtbAddrInRs - 1] %d, "
-             "TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]] %d",
-             CtbAddrInTs, pps->TileId[CtbAddrInTs],
-             pps->CtbAddrRsToTs[CtbAddrInRs - 1],
-             pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]]);
-
         if (!end_of_slice_segment_flag && ((pps->tiles_enabled_flag && pps->TileId[CtbAddrInTs] != pps->TileId[CtbAddrInTs - 1]) ||
                 (pps->entropy_coding_sync_enabled_flag && (CtbAddrInRs % sps->PicWidthInCtbsY == 0 ||
                 pps->TileId[CtbAddrInTs] != pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]])))) {
@@ -7259,9 +7250,10 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     inloop_filter(hslice.slice, pps, sps, &p);
 
     if (sps->chroma_format_idc == CHROMA_420) {
-        YUV420_to_BGRA32_16bit(*pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel,
-                p.pixel+p.size, p.pixel+p.size * 3/2, y_stride, uv_stride, divceil(height, (1 << sps->CtbLog2SizeY)),
-                divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
+        YUV420_to_BGRA32_16bit(*pixels, ((((width + 15) >> 4) * 16 * 32 + 31) >> 5) << 2,
+                p.pixel, p.pixel+p.size, p.pixel+p.size * 3/2, y_stride, uv_stride,
+                sps->pic_width_in_luma_samples, sps->pic_height_in_luma_samples,
+                1 << sps->CtbLog2SizeY);
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
 

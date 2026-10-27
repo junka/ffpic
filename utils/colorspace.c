@@ -626,36 +626,31 @@ void BGRA32_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
 }
 
 void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
-                      int16_t *vout, int y_stride, int uv_stride, int mbrows,
-                      int mbcols, int ctbsize) {
-    uint8_t *p = ptr, *p2 = ptr;
-    int width = mbcols * ctbsize;
-    int right_space = pitch - width * 4;
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize) {
     int16_t *Y, *U, *V;
     int16_t yy, u, v;
     uint8_t r, g, b;
 
-    for (int y = 0; y < mbrows; y++) {
-        for (int x = 0; x < mbcols; x++) {
-            Y = yout + y_stride * y * ctbsize + x * ctbsize;
-            U = uout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
-            V = vout + ctbsize / 2 * uv_stride * y + x * ctbsize/2;
-            p = p2;
-            p2 = p + ctbsize * 4;
-            for (int i = 0; i < ctbsize; i++) {
-                for (int j = 0; j < ctbsize; j++) {
+    /* The last CTB column and row are usually partial, so clip every block
+     * to the real picture size; writing the full ctbsize would run past the
+     * destination buffer for any image that is not ctbsize aligned. */
+    for (int y = 0; y < height; y += ctbsize) {
+        for (int x = 0; x < width; x += ctbsize) {
+            int cw = (width - x < ctbsize) ? width - x : ctbsize;
+            int ch = (height - y < ctbsize) ? height - y : ctbsize;
+            Y = yout + y_stride * y + x;
+            U = uout + (y / 2) * uv_stride + x / 2;
+            V = vout + (y / 2) * uv_stride + x / 2;
+            uint8_t *p = ptr + y * pitch + x * 4;
+            for (int i = 0; i < ch; i++) {
+                for (int j = 0; j < cw; j++) {
                     yy = Y[i * y_stride + j];
                     u = U[(i / 2) * uv_stride + (j / 2)] - 128;
                     v = V[(i / 2) * uv_stride + (j / 2)] - 128;
-                    // r = clamp(yy + 1.4075 * v, 255);
-                    // g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
-                    // b = clamp(yy + 1.779 * u, 255);
                     r = clamp(yy + 1.280 * v, 255);
                     g = clamp(yy - 0.215 * u - 0.381 * v, 255);
                     b = clamp(yy + 2.128 * u, 255);
-                    // r = clamp(yy + v2r_8bit[v], 255);
-                    // g = clamp(yy + u2g_8bit[u] + v2g_8bit[v], 255);
-                    // b = clamp(yy + u2b_8bit[u], 255);
                     p[4 * j] = b;
                     p[4 * j + 1] = g;
                     p[4 * j + 2] = r;
@@ -664,7 +659,6 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uou
                 p += pitch;
             }
         }
-        p2 = p - pitch + ctbsize * 4 + right_space;
     }
 }
 

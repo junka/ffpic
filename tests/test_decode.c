@@ -5,9 +5,9 @@
  *
  * The check is that the right parser was picked and that it produced an
  * image of the right size without touching memory it does not own. Pixel
- * values are deliberately not compared: they are the job of the format
- * tests, and pinning them here would make a decoder fix look like a
- * regression. */
+ * values are deliberately not compared for the hand written streams: they
+ * only carry a container. The one exception is data/quad.heic, a real HEVC
+ * stream, where the decoded colours are the whole point. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -42,11 +42,23 @@ put_le32(uint8_t *p, uint32_t v) {
 }
 
 static void
+put_be16(uint8_t *p, uint16_t v) {
+    p[0] = v >> 8;
+    p[1] = v & 0xFF;
+}
+
+static void
 put_be32(uint8_t *p, uint32_t v) {
     p[0] = v >> 24;
     p[1] = (v >> 16) & 0xFF;
     p[2] = (v >> 8) & 0xFF;
     p[3] = v & 0xFF;
+}
+
+static void
+put_box_header(uint8_t *p, const char *type, uint32_t size) {
+    put_be32(p, size);
+    memcpy(p + 4, type, 4);
 }
 
 /* written out rather than reused from utils/crc.c, which is under test here */
@@ -119,6 +131,63 @@ check(const char *name, const char *expect, int width, int height) {
     return 0;
 }
 
+/* Probe only. AVIF has no AV1 decoder yet and HEIF needs a real HEVC slice,
+ * neither of which can be written out by hand here, so these pin format
+ * detection. A NULL expect means no parser may claim the file. */
+static int
+check_claim(const char *name, const char *expect) {
+    struct file_ops *ops = file_probe(name);
+    int rc = 0;
+
+    if (expect == NULL) {
+        if (ops) {
+            printf("%s: claimed as %s, expected no format\n", name, ops->name);
+            rc = -1;
+        }
+    } else if (!ops) {
+        printf("%s: no format claimed it, expected %s\n", name, expect);
+        rc = -1;
+    } else if (strcmp(ops->name, expect)) {
+        printf("%s: probed as %s, expected %s\n", name, ops->name, expect);
+        rc = -1;
+    }
+
+    remove(name);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
+/* A file the parser recognises but cannot turn into a picture must be
+ * rejected cleanly: no abort, no garbage pic handed back. */
+static int
+check_reject(const char *name, const char *expect) {
+    struct file_ops *ops = file_probe(name);
+    int rc = 0;
+
+    if (!ops) {
+        printf("%s: no format claimed it, expected %s\n", name, expect);
+        rc = -1;
+    } else if (strcmp(ops->name, expect)) {
+        printf("%s: probed as %s, expected %s\n", name, ops->name, expect);
+        rc = -1;
+    } else {
+        struct pic *p = file_load(ops, name, 0);
+        if (p) {
+            printf("%s: decoded, expected the file to be rejected\n", name);
+            file_free(ops, p);
+            rc = -1;
+        }
+    }
+
+    remove(name);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 static int
 emit_bmp(void) {
     int row = W * 3;
@@ -166,7 +235,7 @@ emit_pbm(void) {
 static int
 emit_pgm(void) {
     char file[16 + W * H];
-    size_t n = (size_t)sprintf(file, "P5\n%d %d\n255\n", W, H);
+    size_t n = (size_t)snprintf(file, sizeof(file), "P5\n%d %d\n255\n", W, H);
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             file[n++] = pixel_r(x, y);
@@ -178,7 +247,7 @@ emit_pgm(void) {
 static int
 emit_ppm(void) {
     char file[16 + W * H * 3];
-    size_t n = (size_t)sprintf(file, "P6\n%d %d\n255\n", W, H);
+    size_t n = (size_t)snprintf(file, sizeof(file), "P6\n%d %d\n255\n", W, H);
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
             file[n++] = pixel_r(x, y);
@@ -336,6 +405,242 @@ emit_tiff(void) {
     return rc;
 }
 
+/* the probe reads bytes 4 and 8 as a box type and a brand, so both have to
+ * carry the fourcc the loader looks for */
+static void
+put_avif_ftyp(uint8_t *p) {
+    put_box_header(p, "ftyp", 24);
+    memcpy(p + 8, "avif", 4);      /* major brand */
+    put_be32(p + 12, 0);           /* minor version */
+    memcpy(p + 16, "mif1", 4);     /* compatible brands */
+    memcpy(p + 20, "avif", 4);
+}
+
+static int
+emit_avif(void) {
+    /* AVIF has no AV1 decoder here, so decode_av01 only walks the sample
+     * length and the pixels come back untouched. What this pins is the meta
+     * box parse: item table, property list and the ispe driven size. */
+    enum { FTYP = 24, META = 117, MDAT = 12, TOTAL = FTYP + META + MDAT };
+    uint8_t *file = calloc(1, TOTAL);
+    size_t at = FTYP;
+
+    put_avif_ftyp(file);
+
+    put_box_header(file + at, "meta", META);
+    put_be32(file + at + 8, 0);            /* version and flags */
+
+    /* iinf: one item, type av01 */
+    put_box_header(file + at + 12, "iinf", 35);
+    put_be32(file + at + 20, 0);           /* version and flags */
+    put_be16(file + at + 24, 1);           /* entry_count */
+    put_box_header(file + at + 26, "infe", 21);
+    put_be32(file + at + 34, 2 << 24);     /* version 2, flags 0 */
+    put_be16(file + at + 38, 1);           /* item_id */
+    put_be16(file + at + 40, 0);           /* item_protection_index */
+    memcpy(file + at + 42, "av01", 4);
+    /* the item name is the empty string, feed the null terminator */
+    at += 12 + 35;
+
+    /* iloc: version 0, 4 byte offsets and lengths, one extent in mdat */
+    put_box_header(file + at, "iloc", 34);
+    put_be32(file + at + 8, 0);            /* version and flags */
+    file[at + 12] = 0x44;                  /* offset size 4, length size 4 */
+    file[at + 13] = 0x40;                  /* base offset size 4, no index */
+    put_be16(file + at + 14, 1);           /* item_count */
+    put_be16(file + at + 16, 1);           /* item_id */
+    put_be16(file + at + 18, 0);           /* data_ref_id */
+    put_be32(file + at + 20, FTYP + META + 8); /* base offset, mdat payload */
+    put_be16(file + at + 24, 1);           /* extent_count */
+    put_be32(file + at + 26, 0);           /* extent_offset */
+    put_be32(file + at + 30, 4);           /* extent_length */
+    at += 34;
+
+    /* iprp: a single ispe property, which is where the size comes from */
+    put_box_header(file + at, "iprp", 36);
+    put_box_header(file + at + 8, "ipco", 28);
+    put_box_header(file + at + 16, "ispe", 20);
+    put_be32(file + at + 24, 0);           /* version and flags */
+    put_be32(file + at + 28, W);
+    put_be32(file + at + 32, H);
+    at += 36;
+
+    /* mdat last: the top level loop does not seek past it, only its size
+     * has to land on the end of the file */
+    put_box_header(file + at, "mdat", MDAT);
+    at += MDAT;
+
+    int rc = write_file("decode.avif", file, TOTAL);
+    free(file);
+    return rc;
+}
+
+static int
+emit_avif_probe(void) {
+    uint8_t file[24];
+    put_avif_ftyp(file);
+    return write_file("probe.avif", file, sizeof(file));
+}
+
+static int
+emit_heif_probe(void) {
+    /* a short ftyp whose only brand is heic */
+    uint8_t file[16];
+    put_box_header(file, "ftyp", 16);
+    memcpy(file + 8, "heic", 4);
+    put_be32(file + 12, 0);
+    return write_file("probe.heic", file, sizeof(file));
+}
+
+static int
+emit_heif_probe_mif1(void) {
+    /* mif1 files are only accepted when a heif brand is listed after it */
+    uint8_t file[24];
+    put_box_header(file, "ftyp", 24);
+    memcpy(file + 8, "mif1", 4);
+    put_be32(file + 12, 0);
+    memcpy(file + 16, "heic", 4);
+    memcpy(file + 20, "mif1", 4);
+    return write_file("probe_mif1.heic", file, sizeof(file));
+}
+
+static int
+emit_ftyp_truncated(void) {
+    /* ftyp promises two compatible brands but the file stops after one */
+    uint8_t file[20];
+    put_box_header(file, "ftyp", 24);
+    memcpy(file + 8, "mif1", 4);
+    put_be32(file + 12, 0);
+    memcpy(file + 16, "heic", 4);
+    return write_file("trunc.heic", file, sizeof(file));
+}
+
+static int
+emit_heif_grid(void) {
+    /* a grid item whose extent is shorter than the 8 byte grid header: the
+     * loader has to reject it rather than abort on the size check */
+    enum { FTYP = 24, META = 151, MDAT = 14, TOTAL = FTYP + META + MDAT };
+    uint8_t *file = calloc(1, TOTAL);
+    size_t at = FTYP;
+
+    put_box_header(file, "ftyp", FTYP);
+    memcpy(file + 8, "mif1", 4);
+    put_be32(file + 12, 0);
+    memcpy(file + 16, "heic", 4);
+    memcpy(file + 20, "mif1", 4);
+
+    put_box_header(file + at, "meta", META);
+    put_be32(file + at + 8, 0);
+    at += 12;
+
+    put_box_header(file + at, "pitm", 14);
+    put_be32(file + at + 8, 0);
+    put_be16(file + at + 12, 1);           /* the grid item is primary */
+    at += 14;
+
+    /* iinf: one item of type grid */
+    put_box_header(file + at, "iinf", 35);
+    put_be32(file + at + 8, 0);
+    put_be16(file + at + 12, 1);           /* entry_count */
+    put_box_header(file + at + 14, "infe", 21);
+    put_be32(file + at + 22, 2 << 24);     /* version 2, flags 0 */
+    put_be16(file + at + 26, 1);           /* item_id */
+    put_be16(file + at + 28, 0);           /* item_protection_index */
+    memcpy(file + at + 30, "grid", 4);
+    at += 35;
+
+    /* iloc: one item, one 6 byte extent in mdat */
+    put_box_header(file + at, "iloc", 34);
+    put_be32(file + at + 8, 0);
+    file[at + 12] = 0x44;
+    file[at + 13] = 0x40;
+    put_be16(file + at + 14, 1);           /* item_count */
+    put_be16(file + at + 16, 1);           /* item_id */
+    put_be16(file + at + 18, 0);           /* data_ref_id */
+    put_be32(file + at + 20, FTYP + META + 8);
+    put_be16(file + at + 24, 1);           /* extent_count */
+    put_be32(file + at + 26, 0);           /* extent_offset */
+    put_be32(file + at + 30, 6);           /* extent_length */
+    at += 34;
+
+    /* iprp: an ispe for the grid item, associated through ipma */
+    put_box_header(file + at, "iprp", 56);
+    put_box_header(file + at + 8, "ipco", 28);
+    put_box_header(file + at + 16, "ispe", 20);
+    put_be32(file + at + 24, 0);
+    put_be32(file + at + 28, W);
+    put_be32(file + at + 32, H);
+    put_box_header(file + at + 36, "ipma", 20);
+    put_be32(file + at + 44, 0);           /* version 0, flags 0 */
+    put_be32(file + at + 48, 1);           /* entry_count */
+    put_be16(file + at + 52, 1);           /* item_id */
+    file[at + 54] = 1;                     /* association_count */
+    file[at + 55] = 1;                     /* property index 1 */
+    at += 56;
+
+    put_box_header(file + at, "mdat", MDAT);
+    at += MDAT;
+
+    int rc = write_file("reject.heic", file, TOTAL);
+    free(file);
+    return rc;
+}
+
+/* data/quad.heic is a 32x32 HEVC still produced with
+ *     sips -s format heic quad.ppm --out quad.heic
+ * from four 16x16 quadrants: red, green, blue, white. Lossy coding moves the
+ * values a little, so compare with a tolerance instead of exact bytes. */
+static int
+check_heif_sample(void) {
+    const char *name = TEST_DATA_DIR "/quad.heic";
+    static const int xs[4] = {8, 24, 8, 24};
+    static const int ys[4] = {8, 8, 24, 24};
+    static const int want[4][3] = {
+        {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255},
+    };
+    enum { TOL = 56 };
+    int rc = 0;
+
+    struct file_ops *ops = file_probe(name);
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", name);
+        return -1;
+    }
+
+    struct pic *p = file_load(ops, name, 0);
+    if (!p) {
+        printf("%s: did not decode\n", name);
+        return -1;
+    }
+    if (p->width != 32 || p->height != 32) {
+        printf("%s: decoded as %dx%d, expected 32x32\n", name, p->width,
+               p->height);
+        rc = -1;
+    } else {
+        for (int i = 0; i < 4; i++) {
+            uint8_t *q = (uint8_t *)p->pixels + ys[i] * p->pitch + xs[i] * 4;
+            int b = q[0], g = q[1], r = q[2], a = q[3];
+            if (abs(r - want[i][0]) > TOL || abs(g - want[i][1]) > TOL ||
+                abs(b - want[i][2]) > TOL) {
+                printf("%s: (%d,%d) is bgra %d %d %d %d, expected %d %d %d\n",
+                       name, xs[i], ys[i], b, g, r, a, want[i][2], want[i][1],
+                       want[i][0]);
+                rc = -1;
+            } else if (a != 0xFF) {
+                printf("%s: (%d,%d) alpha %d, expected 255\n", name, xs[i],
+                       ys[i], a);
+                rc = -1;
+            }
+        }
+    }
+
+    file_free(ops, p);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 int main(void)
 {
     int failed = 0;
@@ -354,6 +659,7 @@ int main(void)
         {emit_tga, "decode.tga", "TGA"},
         {emit_png, "decode.png", "PNG"},
         {emit_tiff, "decode.tif", "TIFF"},
+        {emit_avif, "decode.avif", "AVIF"},
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -368,6 +674,37 @@ int main(void)
         if (check(cases[i].name, cases[i].format, width, height)) {
             failed++;
         }
+    }
+
+    struct {
+        int (*emit)(void);
+        const char *name;
+        const char *format;
+        int reject;
+    } probes[] = {
+        {emit_avif_probe, "probe.avif", "AVIF", 0},
+        {emit_heif_probe, "probe.heic", "HEIF", 0},
+        {emit_heif_probe_mif1, "probe_mif1.heic", "HEIF", 0},
+        {emit_ftyp_truncated, "trunc.heic", NULL, 0},
+        {emit_heif_grid, "reject.heic", "HEIF", 1},
+    };
+
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        if (probes[i].emit()) {
+            printf("%s: could not write\n", probes[i].name);
+            failed++;
+            continue;
+        }
+        int rc = probes[i].reject ?
+                 check_reject(probes[i].name, probes[i].format) :
+                 check_claim(probes[i].name, probes[i].format);
+        if (rc) {
+            failed++;
+        }
+    }
+
+    if (check_heif_sample()) {
+        failed++;
     }
 
     file_ops_deinit();

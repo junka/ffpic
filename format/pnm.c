@@ -321,7 +321,8 @@ PNM_load(const char *filename, int skip_flag UNUSED)
     p->height = m->height;
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    m->data = malloc(p->pitch * p->height);
+    // the readers below fill only the 3 color bytes of each pixel
+    m->data = calloc(1, p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGB888;
 
     switch (v) {

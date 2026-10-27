@@ -59,8 +59,11 @@ struct huffman_symbol *huffman_symbol_alloc(uint8_t count[16], uint8_t *syms)
     for (int i = 0; i < 16; i++) {
         total += count[i];
     }
-    sym->syms = malloc(total);
-    memcpy(sym->syms, syms, total);
+    sym->syms = NULL;
+    if (total > 0) {
+        sym->syms = malloc(total);
+        memcpy(sym->syms, syms, total);
+    }
     return sym;
 }
 

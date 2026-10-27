@@ -10,6 +10,8 @@
 #include "file.h"
 #include "vlog.h"
 
+static void ICO_free(struct pic *p);
+
 VLOG_REGISTER(ico, INFO)
 
 static int
@@ -55,7 +57,18 @@ ICO_load(const char *filename, int skip_flag UNUSED)
         }
         int width = ((c->dir[i].width + 3) >> 2) << 2;
         int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-        c->images[i].data = malloc((c->images[i].bmpinfo.height >> 1) * pitch);
+        int rows = c->images[i].bmpinfo.height >> 1;
+        long long bytes = (long long)rows * pitch;
+        if (rows <= 0 || bytes > (1LL << 31)) {
+            // a png compressed ico entry puts the png magic where the
+            // BITMAPINFOHEADER sizes belong
+            VERR(ico, "unsupported ico entry, height %d pitch %d",
+                 c->images[i].bmpinfo.height, pitch);
+            fclose(f);
+            ICO_free(p);
+            return NULL;
+        }
+        c->images[i].data = malloc((size_t)bytes);
         int upper = c->dir[i].height > 0 ? c->dir[i].height - 1 : 0;
         int bottom = c->dir[i].height > 0 ? 0 : 1 - c->dir[i].height;
         int delta = c->dir[i].height > 0 ? -1 : 1;

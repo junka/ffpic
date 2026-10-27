@@ -126,6 +126,7 @@ struct dqt {
     uint8_t id : 4;          /* 0 - 3 */
     uint8_t precision : 4;   /* 0 means 8bits, 1 means 16bits*/
 #endif
+    uint8_t pad;             /* keeps tdata 2 byte aligned under pack(1) */
     uint16_t tdata[64]; // this should work for both precision 0, 1
 };
 

@@ -140,7 +140,8 @@ TGA_load(const char *filename, int skip_flag UNUSED)
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     p->left = t->head.xstart;
     p->top = t->head.ystart;
-    t->data = malloc(p->height * p->pitch);
+    // the readers below fill only the 3 color bytes of each pixel
+    t->data = calloc(1, p->height * p->pitch);
     if (t->head.color_map_type) {
         read_color_map(t, f);
     }

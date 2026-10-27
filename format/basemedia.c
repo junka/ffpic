@@ -20,18 +20,24 @@ read_u8(FILE *f)
     return (uint8_t)fgetc(f);
 }
 
+/* The bytes must be consumed one statement at a time: or-ing several fgetc
+ * calls into a single expression leaves their order unsequenced, so the
+ * compiler may read the bytes back to front. */
 uint16_t
 read_u16(FILE *f)
 {
-    uint16_t a = (uint16_t)fgetc(f) << 8 | fgetc(f);
-    return a;
+    uint32_t a = (uint32_t)fgetc(f);
+    a = (a << 8) | (uint32_t)fgetc(f);
+    return (uint16_t)a;
 }
 
 uint32_t
 read_u32(FILE *f)
 {
-    uint32_t a = (uint32_t)fgetc(f) << 24 | fgetc(f) << 16 |
-         fgetc(f) << 8 | fgetc(f);
+    uint32_t a = (uint32_t)fgetc(f);
+    a = (a << 8) | (uint32_t)fgetc(f);
+    a = (a << 8) | (uint32_t)fgetc(f);
+    a = (a << 8) | (uint32_t)fgetc(f);
     return a;
 }
 
@@ -108,7 +114,8 @@ read_full_box(FILE *f, void * d)
     uint32_t type = read_box(f, d);
     struct full_box* b = (struct full_box*)d;
     b->version = fgetc(f);
-    b->flags = fgetc(f) << 16 | fgetc(f) <<8| fgetc(f);
+    uint32_t flags = read_u16(f);
+    b->flags = (flags << 8) | (uint32_t)fgetc(f);
     return type;
 }
 

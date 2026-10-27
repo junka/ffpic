@@ -275,7 +275,7 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
         dc = get_vlc(READ_BITS(hdec->v, dc), dc);
         dc += d->prev_dc;
         d->prev_dc = dc;
-        buf[0] = dc << low;
+        buf[0] = dc * (1 << low);
         // VDBG(jpg, "DC read value is %d", dc);
         // fprintf(vlog_get_stream(), "DC Now:\n ");
         // for (int i = 0; i < 8; i++) {
@@ -393,7 +393,7 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
                     // VDBG(jpg, "AC read %d bits", ac);
                     ac = get_vlc(READ_BITS(hdec->v, ac), ac);
                     // VDBG(jpg, "AC read value is %d", ac);
-                    buf[zigzag[i++]] = ac << low;
+                    buf[zigzag[i++]] = ac * (1 << low);
                 }
             }
 

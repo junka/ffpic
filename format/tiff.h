@@ -9,7 +9,9 @@ extern "C" {
 #include <stdint.h>
 #include "byteorder.h"
 
-#pragma pack(push, 1)
+/* No packing here: tiff_directory_entry and tiff_file_header have no padding
+ * anyway, the IFD entry is read with an explicit 12 byte fread, and packing
+ * tiff_file_directory would put its uint32_t fields on odd offsets. */
 
 enum tag_type {
     TAG_BYTE = 1,
@@ -106,8 +108,6 @@ struct tiff_file_header {
     uint16_t version;
     uint32_t start_offset;
 };
-
-#pragma pack(pop)
 
 #define TID_NEWSUBFILETYPE 254
 #define TID_IMAGEWIDTH 256

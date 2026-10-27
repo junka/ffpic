@@ -270,7 +270,8 @@ read_image_data(TIFF *t, FILE *f)
         int height = t->ifd[n].height;
         int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
         if(t->ifd[n].data == NULL) {
-            t->ifd[n].data = malloc(pitch * height);
+            // strips may leave gaps in the pixel buffer
+            t->ifd[n].data = calloc(1, pitch * height);
         }
         if (t->ifd[n].strips_num == 1 && t->ifd[n].rows_per_strip == 0) {
             t->ifd[n].rows_per_strip = t->ifd[n].height;

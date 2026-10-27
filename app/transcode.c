@@ -71,6 +71,10 @@ int main(int argc, char *argv[])
 
     // int left = 0, top = 0;
     struct pic *p = file_load(ops, filename, 0);
+    if (!p) {
+        printf("No decoded image\n");
+        return -1;
+    }
     printf("width %d\n", p->width);
 
     struct file_ops *tops = file_find_codec(codec);

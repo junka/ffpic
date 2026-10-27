@@ -199,7 +199,8 @@ EXR_load(const char* filename, int skip_flag UNUSED)
     p->depth = 32;
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     
-    e->data = malloc(height * p->pitch);
+    // one byte per pixel is left unset unless the file carries 4 channels
+    e->data = calloc(1, height * p->pitch);
     // int data_len;
     uint64_t* offset = NULL;
     /* read offset table */

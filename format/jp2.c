@@ -490,14 +490,14 @@ int read_poc(JP2 *j, FILE *f)
     if (j->main_h.siz.component_num < 257) {
         j->main_h.poc.comp_start_index = fgetc(f);
     } else {
-        j->main_h.poc.comp_start_index = fgetc(f) << 8 | fgetc(f);
+        j->main_h.poc.comp_start_index = read_u16(f);
     }
-    j->main_h.poc.layer_end_index = fgetc(f) << 8 | fgetc(f);
+    j->main_h.poc.layer_end_index = read_u16(f);
     j->main_h.poc.res_end_index = fgetc(f);
     if (j->main_h.siz.component_num < 257) {
         j->main_h.poc.comp_end_index = fgetc(f);
     } else {
-        j->main_h.poc.comp_end_index = fgetc(f) << 8 | fgetc(f);
+        j->main_h.poc.comp_end_index = read_u16(f);
     }
     j->main_h.poc.progression_order = fgetc(f);
     return 0;

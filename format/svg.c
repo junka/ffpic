@@ -177,7 +177,7 @@ read_start_tag(struct xml_node * n, FILE *f)
                     state = (s != '>' && s != '/') ? ATTR : END;
                     if (state == ATTR) {
                         len = ftell(f) -1 - start;
-                        n->tag = malloc(len);
+                        n->tag = malloc(len + 1);
                         fseek(f, -len-1, SEEK_CUR);
                         FFREAD_IGNORE(n->tag, len, 1, f);
                         n->tag[len] = '\0';

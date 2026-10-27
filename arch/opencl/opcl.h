@@ -5,7 +5,10 @@ extern "C" {
 #endif
 
 #ifdef __APPLE__
-#include <OpenCL/opencl.h>
+// the umbrella header also pulls in the deprecated GCL and GL extensions,
+// which the Apple SDK annotates with _Nullable/_Nonnull; -pedantic rejects
+// those annotations, so include just the core API
+#include <OpenCL/cl.h>
 #else
 #include <CL/cl.h>
 #endif

@@ -1,5 +1,7 @@
 #ifdef __APPLE__
-#include <OpenCL/OpenCL.h>
+// the umbrella header also pulls in the deprecated GCL and GL extensions, so
+// include just the core API, matching opcl.h
+#include <OpenCL/cl.h>
 #else
 #define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 #include <CL/cl.h>

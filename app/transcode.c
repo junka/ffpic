@@ -73,6 +73,7 @@ int main(int argc, char *argv[])
     struct pic *p = file_load(ops, filename, 0);
     if (!p) {
         printf("No decoded image\n");
+        file_ops_deinit();
         return -1;
     }
     printf("width %d\n", p->width);
@@ -86,6 +87,7 @@ int main(int argc, char *argv[])
     printf("trancode to file %s\n", newfile);
 
     file_free(ops, p);
+    file_ops_deinit();
 #ifndef NDEBUG
     vlog_uninit();
 #endif

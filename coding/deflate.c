@@ -166,7 +166,8 @@ deflate_nocompression_block(struct deflate_decoder *d)
         return -2;
     }
 
-    if (EOF_BITS(d->v, 0) < length) {
+    // EOF_BITS is a yes/no predicate, the raw copy needs this many bits left
+    if (bits_vec_left_bits(d->v) < length * 8) {
         return -3;
     }
 

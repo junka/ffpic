@@ -70,6 +70,7 @@ struct pic *file_dequeue_pic(void);
 bool file_enqueue_pic(struct pic *p);
 
 void file_ops_init(void);
+void file_ops_deinit(void);
 
 #ifdef __cplusplus
 }

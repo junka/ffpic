@@ -106,40 +106,36 @@ read_pgm_bin_data(PNM* m, FILE *f)
     }
 }
 
-static void 
+static void
 read_pbm_bin_data(PNM* m, FILE *f)
 {
     int off = ftell(f);
     fseek(f, 0, SEEK_END);
     int last = ftell(f);
     fseek(f, off, SEEK_SET);
-    int n = 0;
-    for(int i = 0; i < last-off; i++) {
-        uint8_t c = fgetc(f);
-        for (int j = 7; j >= 0; j --) {
-            if (n < m->width) {
-                if (((c >> j) & 0x01) == 0) {
-                    m->data[32*i + 4*(7-j) + 2] = 0xFF;
-                    m->data[32*i + 4*(7-j) + 1] = 0xFF;
-                    m->data[32*i + 4*(7-j)] = 0xFF;
-                } else {
-                    m->data[32*i + 4*(7-j) + 2] = 0;
-                    m->data[32*i + 4*(7-j) + 1] = 0;
-                    m->data[32*i + 4*(7-j)] = 0;
+    int pitch = ((m->width * 32 + 31) >> 5) << 2;
+    int bytesperrow = (m->width + 7) / 8;
+    if (last - off < bytesperrow * m->height) {
+        printf("corrupt file size \n");
+        return;
+    }
+    for (int row = 0; row < m->height; row++) {
+        for (int byte = 0; byte < bytesperrow; byte++) {
+            uint8_t c = fgetc(f);
+            for (int bit = 7; bit >= 0; bit --) {
+                int col = byte * 8 + 7 - bit;
+                if (col >= m->width) {
+                    // the tail bits of a row are padding
+                    break;
                 }
-            } 
-            n ++;
-            if(n >= m->width && j > 0)
-            {
-                //do noting to skip bits
-            } 
-            else {
-                n = 0;
+                // a set bit is black in a pbm
+                uint8_t v = ((c >> bit) & 0x01) ? 0 : 0xFF;
+                m->data[row * pitch + col * 4 + 2] = v;
+                m->data[row * pitch + col * 4 + 1] = v;
+                m->data[row * pitch + col * 4] = v;
             }
-
         }
     }
-    FFREAD_IGNORE(m->data , 1, last - off, f);
 }
 
 uint8_t 

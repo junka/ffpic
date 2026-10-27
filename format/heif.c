@@ -34,32 +34,36 @@ HEIF_probe(FILE *f)
     if (f == NULL) {
         return -ENOENT;
     }
-    struct ftyp_box h;
+    struct ftyp_box h = {0};
     int len = read_ftyp(f, &h);
-    if (len < 0) {
-        return -EBADF;
-    }
-    if (h.major_brand == TYPE2UINT("ftyp")) {
+    int matched = 0;
+    if (len >= 0 && h.major_brand == TYPE2UINT("ftyp")) {
         // VDBG(heif, "len %d minor_version %s", len , type2name(h.minor_version));
         if (len > 12 && (h.minor_version == TYPE2UINT("mif1")||h.minor_version == TYPE2UINT("msf1"))) {
-            for (int j = 0; j < (len -12)>>2; j ++) {
+            for (int j = 0; j < (len -12)>>2 && !matched; j ++) {
                 for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
                     if (h.compatible_brands[j] == TYPE2UINT(heif_types[i])) {
-                        return 0;
+                        matched = 1;
+                        break;
                     }
                 }
             }
-            free(h.compatible_brands);
         } else {
             for (int i = 0; i < (int)(sizeof(heif_types)/sizeof(heif_types[0])); i ++) {
                 if (h.minor_version == TYPE2UINT(heif_types[i])) {
-                    return 0;
+                    matched = 1;
+                    break;
                 }
             }
         }
     }
+    // read_ftyp allocated this, so every exit has to release it
+    free(h.compatible_brands);
 
-    return -EINVAL;
+    if (len < 0) {
+        return -EBADF;
+    }
+    return matched ? 0 : -EINVAL;
 }
 
 void free_hvcc_box(struct box *bn)

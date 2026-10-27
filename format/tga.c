@@ -169,6 +169,8 @@ TGA_free(struct pic *p)
     TGA *t = (TGA *)p->pic;
     if(t->cmap)
         free(t->cmap);
+    if(t->data)
+        free(t->data);
     pic_free(p);
 }
 

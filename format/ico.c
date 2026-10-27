@@ -25,7 +25,9 @@ ICO_probe(FILE *f)
     if (len < 1) {
         return -EBADF;
     }
-    if (head.rsv_zero == 0 && (head.type == 1 || head.type == 2))
+    // a tga header also starts with two zero bytes and a small type field, so
+    // the entry count is what tells them apart
+    if (head.rsv_zero == 0 && (head.type == 1 || head.type == 2) && head.num > 0)
         return 0;
 
     return -EINVAL;
@@ -39,8 +41,9 @@ ICO_load(const char *filename, int skip_flag UNUSED)
     p->depth = 32;
     FILE *f = fopen(filename, "rb");
     FFREAD_IGNORE(&c->head, sizeof(struct ico_header), 1, f);
-    c->dir = (struct ico_directory *)malloc(sizeof(struct ico_directory) * c->head.num);
-    c->images = (struct ico_image_data*)malloc(sizeof(struct ico_image_data) * c->head.num);
+    // ICO_free walks these, so the entries a bail out skipped must be null
+    c->dir = (struct ico_directory *)calloc(c->head.num, sizeof(struct ico_directory));
+    c->images = (struct ico_image_data*)calloc(c->head.num, sizeof(struct ico_image_data));
     for (int i = 0; i < c->head.num; i ++) {
         FFREAD_IGNORE(c->dir + i, sizeof(struct ico_directory), 1, f);
     }

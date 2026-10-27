@@ -44,8 +44,22 @@ file_probe(const char *filename)
 }
 
 struct pic * file_load(struct file_ops *ops, const char *filename, int skip_flag) {
-    rq = ring_alloc(64);
+    // the loaders that produce several frames enqueue into this, so it has to
+    // outlive one load but must not be reallocated on top of the previous one
+    if (rq == NULL) {
+        rq = ring_alloc(64);
+        if (rq == NULL) {
+            return NULL;
+        }
+    }
     return ops->load(filename, skip_flag);
+}
+
+void
+file_ops_deinit(void)
+{
+    ring_free(rq);
+    rq = NULL;
 }
 
 struct pic *

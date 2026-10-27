@@ -5,7 +5,9 @@
 extern "C" {
 #endif
 
+#if defined(__i386__) || defined(__x86_64__)
 #include <immintrin.h>
+#endif
 
 #ifdef __AVX2__
 void x86_avx2_init(void);

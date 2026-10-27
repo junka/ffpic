@@ -119,7 +119,7 @@ struct chromaticities_white_point {
     uint32_t blue_y;
 };
 
-union background_color {
+struct background_color {
     uint16_t greyscale;
     uint16_t red;
     uint16_t green;
@@ -155,6 +155,7 @@ enum filter_type {
 typedef struct PNG {
     struct png_file_header sig;
     struct png_ihdr ihdr;
+    int malformed;
     
     struct color * palette;
     
@@ -164,7 +165,7 @@ typedef struct PNG {
     int compressed_size;
     uint8_t *compressed;
 
-    union background_color bcolor;
+    struct background_color bcolor;
     struct chromaticities_white_point cwp;
     uint32_t gamma;
     struct png_icc_profile icc;

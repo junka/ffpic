@@ -182,7 +182,15 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
                 pxlo = px & 0xF;
                 px = (px >> 4) & 0xF;
             }
-            struct bmp_color_entry *clr = b->palette + px;
+            /* colors_used may shrink the table below what the bit count
+             * allows, so an index can point past the entries we read
+             */
+            const struct bmp_color_entry *clr;
+            if (b->palette && px < b->palette_size) {
+                clr = b->palette + px;
+            } else {
+                clr = &(const struct bmp_color_entry){0, 0, 0, 0xFF};
+            }
             b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
             b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
             b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
@@ -190,7 +198,11 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
                 b->data[p->pitch * i + j * p->depth / 8 + 3] = clr->alpha;
             }
             if (bit_count == 4) {
-                clr = b->palette + pxlo;
+                if (b->palette && pxlo < b->palette_size) {
+                    clr = b->palette + pxlo;
+                } else {
+                    clr = &(const struct bmp_color_entry){0, 0, 0, 0xFF};
+                }
                 b->data[p->pitch * i + j * p->depth / 8] = clr->blue;
                 b->data[p->pitch * i + j * p->depth / 8 + 1] = clr->green;
                 b->data[p->pitch * i + j * p->depth / 8 + 2] = clr->red;
@@ -201,6 +213,8 @@ read_color_index(struct pic *p, int bit_count, FILE *f)
         }
     }
 }
+
+static void BMP_free(struct pic* p);
 
 static struct pic*
 BMP_load(const char* filename, int skip_flag UNUSED)
@@ -223,9 +237,15 @@ BMP_load(const char* filename, int skip_flag UNUSED)
             p->depth = 24;
             int color_num = (1 << b->dib.v1.bit_count);
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
+            if (b->palette == NULL) {
+                fclose(f);
+                BMP_free(p);
+                return NULL;
+            }
+            b->palette_size = color_num;
             VDBG(bmp, "palette");
             for (int i = 0; i < color_num; i++) {
-                FFREAD_IGNORE(b->palette, 4, 1, f);
+                FFREAD_IGNORE(b->palette + i, 4, 1, f);
                 VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
                      b->palette[i].red, b->palette[i].alpha);
             }
@@ -248,13 +268,28 @@ BMP_load(const char* filename, int skip_flag UNUSED)
 
         if (b->dib.v2.bit_count <= 8) {
             p->depth = 24;
-            int color_num = b->dib.v2.colors_used
+            uint32_t max_colors = (uint32_t)1 << b->dib.v2.bit_count;
+            uint32_t color_num = b->dib.v2.colors_used
                                 ? b->dib.v2.colors_used
-                                : ((uint32_t)1 << b->dib.v2.bit_count);
+                                : max_colors;
+            /* colors_used cannot promise more entries than the bit count
+             * allows, and a bogus count must not size the allocation
+             */
+            if (color_num > max_colors) {
+                VERR(bmp, "colors_used %u exceeds the %u entry table",
+                     color_num, max_colors);
+                color_num = max_colors;
+            }
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
+            if (b->palette == NULL) {
+                fclose(f);
+                BMP_free(p);
+                return NULL;
+            }
+            b->palette_size = (int)color_num;
             FFREAD_IGNORE(b->palette, 4, color_num, f);
             VDBG(bmp, "palette");
-            for (int i = 0; i < color_num; i++) {
+            for (uint32_t i = 0; i < color_num; i++) {
                 VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
                      b->palette[i].red, b->palette[i].alpha);
             }

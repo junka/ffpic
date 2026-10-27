@@ -125,6 +125,7 @@ typedef struct BMP {
     } dib;
     struct bmp_color_header color;
     struct bmp_color_entry * palette;
+    int palette_size;
     uint8_t *data;
 } BMP;
 

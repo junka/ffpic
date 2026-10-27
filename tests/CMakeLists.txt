@@ -26,3 +26,10 @@ add_executable(test_dct ${DCT_TEST})
 target_include_directories(test_dct PRIVATE ${FFPIC_DIRS})
 target_link_libraries(test_dct ffpic m)
 add_test(NAME test_dct COMMAND test_dct)
+
+
+set(DECODE_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_decode.c)
+add_executable(test_decode ${DECODE_TEST})
+target_include_directories(test_decode PRIVATE ${FFPIC_DIRS})
+target_link_libraries(test_decode ffpic m)
+add_test(NAME test_decode COMMAND test_decode)

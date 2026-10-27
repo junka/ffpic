@@ -311,8 +311,6 @@ decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[
                 }
             } else {
                 // ac refine
-                positive = 1 << low;
-                negative = (uint32_t)(-1) << high;
                 if ((*skip) > 0) {
                     for (; i <= end; i++) {
                         if (buf[zigzag[i]]!= 0) {

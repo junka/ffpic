@@ -223,11 +223,8 @@ read_strip(struct tiff_file_directory *ifd, int id, FILE *f)
             }
         }
         free(raw);
-        raw = NULL;
-    }
-
-    /* an unsupported compression has no decoder above */
-    if (decode == NULL) {
+    } else {
+        VERR(tiff, "unsupported compression %d", ifd->compression);
         free(raw);
         return;
     }

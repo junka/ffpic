@@ -26,7 +26,12 @@ huffman_tree_init(void)
 #if SLOW_HF_BITS > 0
     memset(tree->slow_codec, 0, sizeof(uint16_t*)*(SLOW_HF_BITS));
     memset(tree->slow_symbol, 0, sizeof(uint16_t*)*(SLOW_HF_BITS));
+    memset(tree->slow_cnt, 0, sizeof(tree->slow_cnt));
 #endif
+    /* an empty tree (fewer than two symbols) still has to decode safely */
+    tree->maxbitlen = 0;
+    tree->n_codes = 0;
+    tree->tid = 0;
     return tree;
 }
 
@@ -273,7 +278,6 @@ sort_symbol_descrease(int freq[FAST_HF_SIZE], uint8_t symbols[FAST_HF_SIZE])
 typedef struct hnode {
     unsigned char sym;
     unsigned int freq;
-    int codelen;
     struct hnode *left;
     struct hnode *right;
 } hnode;
@@ -290,22 +294,22 @@ static void free_hnode(hnode *parent) {
     free(parent);
 }
 
+// bitlen is the code length of parent, so a leaf fills count[bitlen - 1].
+// It is called on the two children of the root, which is always an internal
+// node once huffman_scan_buff has at least two symbols to merge.
 static void
-calc_huffman_codelen(hnode *parent, uint8_t count[16])
+calc_huffman_codelen(hnode *parent, uint8_t count[16], int bitlen)
 {
     hnode *left = parent->left;
     hnode *right = parent->right;
     if (!left && !right) {
-        count[parent->codelen-1]++;
-        // printf("%c count for %d: %d\n",parent->sym, parent->codelen, count[parent->codelen]);
+        count[bitlen - 1]++;
     }
     if (left) {
-        left->codelen = parent->codelen + 1;
-        calc_huffman_codelen(left, count);
+        calc_huffman_codelen(left, count, bitlen + 1);
     }
     if (right) {
-        right->codelen = parent->codelen + 1;
-        calc_huffman_codelen(right, count);
+        calc_huffman_codelen(right, count, bitlen + 1);
     }
 }
 
@@ -317,6 +321,10 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
     }
     int sym_count = sort_symbol_descrease(freq, symbols);
     uint8_t count[16] = {0}; // put codelen here
+    if (sym_count < 2) {
+        // building a code needs at least two symbols to merge
+        return huffman_tree_init();
+    }
     hnode **n = malloc(sizeof(hnode *) * sym_count);
     for (int i = 0; i < sym_count; i++) {
         n[i] = malloc(sizeof(hnode));
@@ -346,18 +354,8 @@ struct huffman_tree *huffman_scan_buff(uint8_t *data, int len, int id) {
         n[i-1] = p;
         start ++;
     }
-    if (p == NULL) {
-        /* less than two distinct bytes, no merge is needed */
-        if (sym_count == 0) {
-            free(n);
-            return NULL;
-        }
-        p = n[0];
-        p->codelen = 1;
-    } else {
-        p->codelen = 0;
-    }
-    calc_huffman_codelen(p, count);
+    calc_huffman_codelen(p->left, count, 1);
+    calc_huffman_codelen(p->right, count, 1);
     free_hnode(p);
 
     struct huffman_symbol *sym = huffman_symbol_alloc(count, symbols);

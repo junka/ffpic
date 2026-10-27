@@ -1447,7 +1447,7 @@ process_generating_unavailable_reference_pictures(struct hevc_nalu_header *headr
 
 //8.3.3.2
 static void
-process_gerneration_of_one_unavailable_picture()
+process_gerneration_of_one_unavailable_picture(void)
 {
     luma = 1 << (BitDepth -1);
     if (ChromaArrayType != 0) {
@@ -4992,7 +4992,8 @@ static int8_t process_chroma_intra_prediction_mode(struct slice_segment_header* 
             modeIdx = 1;
             break;
         }
-    } else if (intra_chroma_pred_mode == 4) {
+    } else {
+        // intra_chroma_pred_mode 4: derived from the luma mode
         modeIdx = IntraPredModeY;
     }
 
@@ -5354,21 +5355,22 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
     int CurrPaletteIndex = 0;
     int runPos;
     int log2BlockSize = log2floor(nCbS);
-    int xC, yC, xR, yR, xcPrev = 0, ycPrev = 0;
+    int xC, yC, xR, yR;
     uint8_t CopyAboveIndicesFlag[64][64] = {0};
 
     while (PaletteScanPos < nCbS * nCbS ) {
         xC = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].x;
         yC = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].y;
-        if (PaletteScanPos > 0) {
-            xcPrev = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].x;
-            ycPrev = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].y;
-        }
         int PaletteRunMinus1 = nCbS * nCbS - PaletteScanPos - 1;
         int RunToEnd UNUSED= 1;
         CopyAboveIndicesFlag[xC][yC] = 0;
-        if (pc->MaxPaletteIndex > 0) {
-            if (PaletteScanPos >= nCbS && CopyAboveIndicesFlag[xcPrev][ycPrev] == 0) {
+        if (pc->MaxPaletteIndex > 0 && PaletteScanPos >= nCbS) {
+            // PaletteScanPos >= nCbS means the previous position is in the same row
+            int xcPrev =
+                x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].x;
+            int ycPrev =
+                y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos - 1].y;
+            if (CopyAboveIndicesFlag[xcPrev][ycPrev] == 0) {
                 if (remainingNumIndices > 0 && PaletteScanPos < nCbS * nCbS - 1) {
                     uint8_t copy_above_palette_indices_flag = CABAC(
                         d, CTX_TYPE_PALETTE_CODING_COPY_ABOVE_PALLETTE_INDICES);
@@ -5383,10 +5385,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
             }
         }
 
-        if (CopyAboveIndicesFlag[xC][yC] == 0) {
-            int currNumIndices = pc->num_palette_indices_minus1 + 1 - remainingNumIndices;
-            CurrPaletteIndex = pc->PaletteIndexIdc[currNumIndices];
-        }
+        uint8_t copyAboveIndices = CopyAboveIndicesFlag[xC][yC];
         //7-83
         int adjustedRefPaletteIndex = pc->MaxPaletteIndex + 1;
         int log2BlkSize = log2floor(nCbS) - 2;
@@ -5401,17 +5400,19 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
                 adjustedRefPaletteIndex = cu->PaletteIndexMap[xC-x0][yC - 1-y0];
             }
         }
-        if (CopyAboveIndicesFlag[xC][yC] == 0) {
+        if (copyAboveIndices == 0) {
+            int currNumIndices = pc->num_palette_indices_minus1 + 1 - remainingNumIndices;
+            CurrPaletteIndex = pc->PaletteIndexIdc[currNumIndices];
             if (CurrPaletteIndex >= adjustedRefPaletteIndex) {
                 CurrPaletteIndex++;
             }
         }
         if (pc->MaxPaletteIndex > 0) {
-            if (CopyAboveIndicesFlag[xC][yC] == 0) {
+            if (copyAboveIndices == 0) {
                 remainingNumIndices -= 1;
             }
             int palette_run_prefix, palette_run_suffix;
-            if (remainingNumIndices > 0 || CopyAboveIndicesFlag[xC][yC] != pc->copy_above_indices_for_final_run_flag) {
+            if (remainingNumIndices > 0 || copyAboveIndices != pc->copy_above_indices_for_final_run_flag) {
                 int PaletteMaxRunMinus1 = nCbS * nCbS - PaletteScanPos -1 -remainingNumIndices - pc->copy_above_indices_for_final_run_flag;
                 RunToEnd = 0;
                 if (PaletteMaxRunMinus1 > 0) {
@@ -5433,7 +5434,7 @@ static void parse_palette_coding(cabac_dec *d, struct palette_coding *pc,
         while (runPos <= PaletteRunMinus1) {
             xR = x0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].x;
             yR = y0 + slice->ScanOrder[log2BlockSize][3][PaletteScanPos].y;
-            if (CopyAboveIndicesFlag[xC][yC] == 0 ) {
+            if (copyAboveIndices == 0 ) {
                 CopyAboveIndicesFlag[xR][yR] = 0;
                 cu->PaletteIndexMap[xR-x0][yR-y0] = CurrPaletteIndex;
             } else {

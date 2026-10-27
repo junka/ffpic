@@ -463,10 +463,9 @@ read_sod(JP2 *j, FILE *f) {
         assert((data[1]<<8|data[0]) == SOP);
         data += 2;
         SKIP_BITS(v, 16);
+        // a SOP segment is 4 bytes: its own length field and the sequence number
         assert((data[0] << 8 | data[1]) == 4);
-        data += 2;
-        /* sequence number, not used yet */
-        data += 2;
+        data += 4;
     }
     // if we have ppm in main header or ppt in tile header
     if (j->main_h.ppm.index) {

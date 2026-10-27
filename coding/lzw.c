@@ -205,6 +205,8 @@ lzw_decode_tiff(int legacy, int codesize, const uint8_t *raw,
     int ii, tsize;
     int len;
     int second;
+    // the stream starts as if just after a clear code, so the first code word
+    // is emitted on its own instead of extending a previous entry
     int buf = code_clear;
     int tempcode;
     int ch = 0;

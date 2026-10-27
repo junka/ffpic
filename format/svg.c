@@ -516,9 +516,13 @@ SVG_probe(FILE *f)
         return -ENOENT;
     }
     char buf[2048];
-    fgets(buf, 2048, f);
+    if (fgets(buf, sizeof(buf), f) == NULL) {
+        return -EINVAL;
+    }
     if (!strncmp("<?xml version=\"1.0\" standalone=\"no\"?>", buf, 37)) {
-        fgets(buf, 2048, f);
+        if (fgets(buf, sizeof(buf), f) == NULL) {
+            return -EINVAL;
+        }
         if (!strncmp("<!DOCTYPE svg PUBLIC ", buf, 21)) {
             return 0;
         }

@@ -10,6 +10,23 @@ typedef struct {
     int tag;
 } tagged_index_t;
 
+_Static_assert(sizeof(tagged_index_t) == sizeof(uintptr_t),
+               "a tagged index must fit in one atomic pointer");
+
+// head/tail are held in an atomic_uintptr_t, so the pair is copied byte for
+// byte rather than read through a cast, which would break strict aliasing.
+static inline uintptr_t tag_pack(tagged_index_t tagged) {
+    uintptr_t raw;
+    memcpy(&raw, &tagged, sizeof(raw));
+    return raw;
+}
+
+static inline tagged_index_t tag_unpack(uintptr_t raw) {
+    tagged_index_t tagged;
+    memcpy(&tagged, &raw, sizeof(tagged));
+    return tagged;
+}
+
 struct ring_queue *ring_alloc(int size) {
     struct ring_queue *queue;
     queue = (struct ring_queue *)malloc(sizeof(struct ring_queue));
@@ -17,11 +34,8 @@ struct ring_queue *ring_alloc(int size) {
         return NULL;
     }
 
-    tagged_index_t head = {0, 0};
-    tagged_index_t tail = {0, 0};
-
-    atomic_init(&queue->head, *(uintptr_t *)&head);
-    atomic_init(&queue->tail, *(uintptr_t *)&tail);
+    atomic_init(&queue->head, tag_pack((tagged_index_t){0, 0}));
+    atomic_init(&queue->tail, tag_pack((tagged_index_t){0, 0}));
     queue->size = size;
     queue->queue = (void **)malloc(size * sizeof(void *));
     if (!queue->queue) {
@@ -40,55 +54,49 @@ void ring_free(struct ring_queue *queue) {
 }
 
 bool ring_enqueue(struct ring_queue *queue, void *data) {
-    uintptr_t head, tail;
-    tagged_index_t *head_ptr, *tail_ptr;
-    tagged_index_t new_tail;
+    uintptr_t head, tail, next;
     int pos;
 
     do {
+        tagged_index_t tail_tagged, head_tagged;
         tail = atomic_load(&queue->tail);
-        tail_ptr = (tagged_index_t *)&tail;
-
         head = atomic_load(&queue->head);
-        head_ptr = (tagged_index_t *)&head;
-        int next = (tail_ptr->index + 1) % queue->size;
-        if (next == head_ptr->index)
+        tail_tagged = tag_unpack(tail);
+        head_tagged = tag_unpack(head);
+
+        int index = (tail_tagged.index + 1) % queue->size;
+        if (index == head_tagged.index)
             return false;
 
-        pos = tail_ptr->index;
-        new_tail.index = next;
-        new_tail.tag = tail_ptr->tag + 1;
-    } while (!atomic_compare_exchange_weak(&queue->tail, &tail,
-                                            *(uintptr_t *)&new_tail));
+        pos = tail_tagged.index;
+        next = tag_pack((tagged_index_t){index, tail_tagged.tag + 1});
+    } while (!atomic_compare_exchange_weak(&queue->tail, &tail, next));
 
     queue->queue[pos] = data;
     return true;
 }
 
 bool ring_enqueue_bulk(struct ring_queue *queue, void **data, int n) {
-    uintptr_t head, tail;
-    tagged_index_t *head_ptr, *tail_ptr;
-    tagged_index_t new_tail;
+    uintptr_t head, tail, next;
     int pos;
-    int avail;
+
     do {
+        tagged_index_t tail_tagged, head_tagged;
         tail = atomic_load(&queue->tail);
-        tail_ptr = (tagged_index_t *)&tail;
-
         head = atomic_load(&queue->head);
-        head_ptr = (tagged_index_t *)&head;
+        tail_tagged = tag_unpack(tail);
+        head_tagged = tag_unpack(head);
 
-        avail = queue->size -
-                (queue->size + tail_ptr->index - head_ptr->index) % queue->size;
-
+        int avail = queue->size -
+                    (queue->size + tail_tagged.index - head_tagged.index) %
+                        queue->size;
         if (avail < n)
             return false;
 
-        pos = tail_ptr->index;
-        new_tail.index = tail_ptr->index + n;
-        new_tail.tag = tail_ptr->tag + 1;
-    } while (!atomic_compare_exchange_weak(&queue->tail, &tail,
-                                            *(uintptr_t *)&new_tail));
+        pos = tail_tagged.index;
+        next = tag_pack(
+            (tagged_index_t){tail_tagged.index + n, tail_tagged.tag + 1});
+    } while (!atomic_compare_exchange_weak(&queue->tail, &tail, next));
 
     for (int i = 0; i < n; i++) {
         queue->queue[(pos + i) % queue->size] = data[i];
@@ -98,60 +106,53 @@ bool ring_enqueue_bulk(struct ring_queue *queue, void **data, int n) {
 }
 
 void *ring_dequeue(struct ring_queue *queue) {
-    uintptr_t head, tail;
-    tagged_index_t *head_ptr, *tail_ptr;
-    tagged_index_t new_head;
-    void *data = NULL;
+    uintptr_t head, tail, next;
     int pos;
 
     do {
+        tagged_index_t tail_tagged, head_tagged;
         tail = atomic_load(&queue->tail);
-        tail_ptr = (tagged_index_t *)&tail;
         head = atomic_load(&queue->head);
-        head_ptr = (tagged_index_t *)&head;
+        tail_tagged = tag_unpack(tail);
+        head_tagged = tag_unpack(head);
 
-        if (head_ptr->index == tail_ptr->index) {
+        if (head_tagged.index == tail_tagged.index) {
             return NULL;
         }
 
-        pos = head_ptr->index;
-        new_head.index = (head_ptr->index + 1) % queue->size;
-        new_head.tag = head_ptr->tag + 1;
+        pos = head_tagged.index;
+        next = tag_pack((tagged_index_t){(head_tagged.index + 1) % queue->size,
+                                         head_tagged.tag + 1});
+    } while (!atomic_compare_exchange_weak(&queue->head, &head, next));
 
-    } while (!atomic_compare_exchange_weak(&queue->head, &head,
-                                            *(uintptr_t *)&new_head));
-
-    data = queue->queue[pos];
-    return data;
+    return queue->queue[pos];
 }
 
 int ring_dequeue_bulk(struct ring_queue *queue, void **data, int n) {
-    uintptr_t head, tail;
-    tagged_index_t *head_ptr, *tail_ptr;
-    tagged_index_t new_head;
-    int inuse = 0;
+    uintptr_t head, tail, next;
     int pos;
 
     do {
+        tagged_index_t tail_tagged, head_tagged;
         tail = atomic_load(&queue->tail);
-        tail_ptr = (tagged_index_t *)&tail;
         head = atomic_load(&queue->head);
-        head_ptr = (tagged_index_t *)&head;
+        tail_tagged = tag_unpack(tail);
+        head_tagged = tag_unpack(head);
 
-        if (head_ptr->index == tail_ptr->index) {
+        if (head_tagged.index == tail_tagged.index) {
             return 0;
         }
 
-        inuse = (queue->size + tail_ptr->index - head_ptr->index) % queue->size;
+        int inuse =
+            (queue->size + tail_tagged.index - head_tagged.index) % queue->size;
         if (inuse < n) {
-        return 0;
+            return 0;
         }
-        pos = head_ptr->index;
-        new_head.index = (head_ptr->index + n) % queue->size;
-        new_head.tag = head_ptr->tag + 1;
 
-    } while (!atomic_compare_exchange_weak(&queue->head, &head,
-                                            *(uintptr_t *)&new_head));
+        pos = head_tagged.index;
+        next = tag_pack((tagged_index_t){(head_tagged.index + n) % queue->size,
+                                         head_tagged.tag + 1});
+    } while (!atomic_compare_exchange_weak(&queue->head, &head, next));
 
     for (int i = 0; i < n; i++) {
         data[i] = queue->queue[(pos + i) % queue->size];
@@ -161,16 +162,18 @@ int ring_dequeue_bulk(struct ring_queue *queue, void **data, int n) {
 }
 
 int ring_count(struct ring_queue *queue) {
-    uintptr_t tail, head;
-    tagged_index_t *head_ptr, *tail_ptr;
+    uintptr_t head, tail;
     int size = 0;
 
     do {
+        tagged_index_t tail_tagged, head_tagged;
         tail = atomic_load(&queue->tail);
-        tail_ptr = (tagged_index_t *)&tail;
         head = atomic_load(&queue->head);
-        head_ptr = (tagged_index_t *)&head;
-        size = (queue->size + tail_ptr->index - head_ptr->index) % queue->size;
+        tail_tagged = tag_unpack(tail);
+        head_tagged = tag_unpack(head);
+
+        size =
+            (queue->size + tail_tagged.index - head_tagged.index) % queue->size;
     } while (atomic_load(&queue->tail) != tail);
 
     return size;

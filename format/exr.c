@@ -230,7 +230,7 @@ EXR_load(const char* filename, int skip_flag UNUSED)
         ydelta = -1;
         yend = 0;
     }
-    for (int y = ystart; (ydelta * (yend - y)) >= 0; y += ydelta) {
+    for (int y = ystart; offset && (ydelta * (yend - y)) >= 0; y += ydelta) {
         fseek(f, offset[y], SEEK_SET);
         FFREAD_IGNORE(&data_size, 4, 1, f);
         for (int i = 0; i < e->chnl_num; i ++) {

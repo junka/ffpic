@@ -121,12 +121,15 @@ list(APPEND FFPIC_ACCL
   "${FFPIC_ROOT}/arch/x86/avx.c")
 if(OpenCL_FOUND)
   SET(CLSOURCE_COMPILER xxd)
+  set(OPENCL_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR})
   FILE(GLOB_RECURSE OPENCL_SOURCES "${FFPIC_ROOT}/arch/opencl/*.cl")
   FOREACH(INPUT_FILE ${OPENCL_SOURCES})
-      SET(OUTPUT_FILE ${INPUT_FILE}_xx.h)
+      get_filename_component(INPUT_NAME ${INPUT_FILE} NAME)
+      SET(OUTPUT_FILE ${OPENCL_GEN_DIR}/${INPUT_NAME}_xx.h)
       ADD_CUSTOM_COMMAND(
           OUTPUT ${OUTPUT_FILE}
           COMMAND ${CLSOURCE_COMPILER} -i ${INPUT_FILE} | sed 's/[a-z_A-Z0-9]*opcl_cl/srcstr/g' > ${OUTPUT_FILE}
+          DEPENDS ${INPUT_FILE}
           COMMENT "Compiling ${INPUT_FILE} to binary")
       LIST(APPEND FFPIC_ACCL ${OUTPUT_FILE})
   ENDFOREACH()
@@ -166,6 +169,8 @@ endif()
 
 add_library(ffpic ${FFPIC_DISPLAY} ${FFPIC_FORMART} ${FFPIC_ACCL} ${FFPIC_CODING})
 target_include_directories(ffpic PRIVATE ${FFPIC_DIRS})
+# the spirv blobs and opencl source arrays are generated into the build tree
+target_include_directories(ffpic PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 
 if (Vulkan_FOUND)

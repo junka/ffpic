@@ -2358,6 +2358,9 @@ parse_sei(struct bits_vec *v)
 {
     VDBG(hevc, "SEI");
     struct sei * sei = calloc(1, sizeof(struct sei));
+    if (!sei) {
+        return NULL;
+    }
     SKIP_BITS(v, v->len * 8);
     // do {
     //     sei->num ++;
@@ -2443,6 +2446,21 @@ static int **init_zscan_array(struct sps *sps, int *CtbAddrRsToTs) {
 }
 
 static void calc_pps_params(struct sps *sps, struct pps *pps) {
+
+    // the slice header calls this for every slice, so the arrays derived from
+    // the previous slice have to be released before they are rebuilt
+    if (pps->MinTbAddrZs) {
+        for (int j = 0; j < pps->MinTbAddrZsWidth; j++)
+            free(pps->MinTbAddrZs[j]);
+        free(pps->MinTbAddrZs);
+        pps->MinTbAddrZs = NULL;
+    }
+    free(pps->CtbAddrRsToTs);
+    pps->CtbAddrRsToTs = NULL;
+    free(pps->CtbAddrTsToRs);
+    pps->CtbAddrTsToRs = NULL;
+    free(pps->TileId);
+    pps->TileId = NULL;
 
     // see para 6.5.1: CTB raster and tile scanning conversion process
     // see (6-3)
@@ -7540,7 +7558,7 @@ parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
         /* this is not necessary for decoding a picture */
-        parse_sei(v);
+        free(parse_sei(v));
         ret = h.nal_unit_type;
         break;
     default:

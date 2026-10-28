@@ -153,7 +153,7 @@ int bits_vec_read_bits(struct bits_vec *v, int n) {
 }
 
 void bits_vec_skip_bits(struct bits_vec *v, int n) {
-  uint8_t skip = 0;
+  int skip = 0;
   int bytes = n / 8;
   while (skip < bytes) {
     v->ptr++;

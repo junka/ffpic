@@ -160,12 +160,50 @@ write_err:
     return -1;
 }
 
+/* a skip can span more than one byte's worth of counter: real hevc streams
+ * carry sei blocks of several hundred bytes */
+int test_skip_long(void)
+{
+    enum { LEN = 1100, BITS = 8000 };
+    uint8_t *data = calloc(1, LEN);
+    struct bits_vec *v;
+
+    if (!data) {
+        return -1;
+    }
+    v = bits_vec_alloc(data, LEN, BITS_MSB);
+    if (!v) {
+        free(data);
+        return -1;
+    }
+
+    SKIP_BITS(v, BITS);
+    if (bits_vec_position(v) != BITS) {
+        goto skip_err;
+    }
+    if (READ_BITS(v, 8) != 0) {
+        goto skip_err;
+    }
+    if (bits_vec_position(v) != BITS + 8) {
+        goto skip_err;
+    }
+
+    bits_vec_free(v);
+    return 0;
+skip_err:
+    bits_vec_free(v);
+    return -1;
+}
+
 int main(void)
 {
     if (test_reader()) {
         return -1;
     }
     if (test_writer()) {
+        return -1;
+    }
+    if (test_skip_long()) {
         return -1;
     }
     return 0;

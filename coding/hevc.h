@@ -1347,6 +1347,12 @@ struct hevc_slice {
 
 uint16_t parse_nalu(uint8_t *data, int len, uint8_t **pixels, struct hevc_param_set *hps);
 
+/* the coded picture is padded up to the coding block size, the conformance
+ * window crops it back to the display size. offsets and size are in luma
+ * samples. */
+void hevc_conformance_crop(const struct sps *sps, int *x, int *y,
+                           int *width, int *height);
+
 void free_hevc_param_set(struct hevc_param_set *hps);
 
 #ifdef __cplusplus

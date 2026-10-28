@@ -7196,6 +7196,21 @@ free_slice_segment_header(struct slice_segment_header *slice)
     free(slice);
 }
 
+void
+hevc_conformance_crop(const struct sps *sps, int *x, int *y,
+                      int *width, int *height)
+{
+    int left = sps->SubWidthC * (int)sps->conf_win_left_offset;
+    int right = sps->SubWidthC * (int)sps->conf_win_right_offset;
+    int top = sps->SubHeightC * (int)sps->conf_win_top_offset;
+    int bottom = sps->SubHeightC * (int)sps->conf_win_bottom_offset;
+
+    *x = left;
+    *y = top;
+    *width = (int)sps->pic_width_in_luma_samples - left - right;
+    *height = (int)sps->pic_height_in_luma_samples - top - bottom;
+}
+
 static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                       struct bits_vec *v,
                                       struct hevc_param_set *hps,
@@ -7263,10 +7278,21 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     inloop_filter(hslice.slice, pps, sps, &p);
 
     if (sps->chroma_format_idc == CHROMA_420) {
-        YUV420_to_BGRA32_16bit(*pixels, ((((width + 15) >> 4) * 16 * 32 + 31) >> 5) << 2,
-                p.pixel, p.pixel+p.size, p.pixel+p.size * 3/2, y_stride, uv_stride,
-                sps->pic_width_in_luma_samples, sps->pic_height_in_luma_samples,
-                1 << sps->CtbLog2SizeY);
+        /* the caller's buffer holds the display size, so the padded rows and
+         * columns of the coded picture have to be cropped away first */
+        int crop_x, crop_y, crop_w, crop_h;
+        int dst_pitch;
+        int16_t *y_plane, *u_plane, *v_plane;
+
+        hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
+        dst_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
+        y_plane = p.pixel + crop_y * y_stride + crop_x;
+        u_plane = p.pixel + p.size +
+                  (crop_y / 2) * uv_stride + crop_x / 2;
+        v_plane = p.pixel + p.size * 3 / 2 +
+                  (crop_y / 2) * uv_stride + crop_x / 2;
+        YUV420_to_BGRA32_16bit(*pixels, dst_pitch, y_plane, u_plane, v_plane,
+                y_stride, uv_stride, crop_w, crop_h, 1 << sps->CtbLog2SizeY);
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
 

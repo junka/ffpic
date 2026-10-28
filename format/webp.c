@@ -1996,8 +1996,10 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
     struct bits_vec * v = bits_vec_alloc(buf, w->vp8l.size, BITS_LSB);
     w->fi.width = READ_BITS(v, 14) + 1;
     w->fi.height = READ_BITS(v, 14) + 1;
-    int is_alpha_used = READ_BIT(v);
-    int version_num = READ_BITS(v, 3);
+    /* both are only reported by the info log, which is compiled out of the
+     * release build, so mark them to keep -Wunused-variable quiet */
+    int is_alpha_used UNUSED = READ_BIT(v);
+    int version_num UNUSED = READ_BITS(v, 3);
     VINFO(webp, "VP8L %dx%d alpha %d version %d", w->fi.width, w->fi.height,
           is_alpha_used, version_num);
     bits_vec_free(v);

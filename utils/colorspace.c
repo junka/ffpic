@@ -288,43 +288,45 @@ void BGR24_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
     }
 }
 
+/* ITU-R BT.601 constants in 14 bit fixed point, same as libwebp:
+ *   R = (19077 * y             + 26149 * v - 14234) >> 6
+ *   G = (19077 * y -  6419 * u - 13320 * v +  8708) >> 6
+ *   B = (19077 * y + 33050 * u             - 17685) >> 6
+ * y, u and v are the raw 0..255 samples. */
+static inline uint8_t yuv_to_rgb_clip(int v) {
+    v = (v + (1 << 5)) >> 6;
+    return (uint8_t)clip3(0, 255, v);
+}
+
+static inline int yuv_mult_hi(int v, int coeff) {
+    return (v * coeff) >> 8;
+}
+
 void YUV420_to_BGRA32(uint8_t *ptr, int pitch, uint8_t *yout, uint8_t *uout,
                       uint8_t *vout, int y_stride, int uv_stride, int mbrows,
                       int mbcols) {
-    uint8_t *p = ptr, *p2 = ptr;
-    int width = mbcols << 4;
-    int right_space = pitch - width * 4;
-    uint8_t *Y, *U, *V;
-    int16_t yy, u, v;
-    uint8_t r, g, b;
-
     for (int y = 0; y < mbrows; y++) {
         for (int x = 0; x < mbcols; x++) {
-            Y = yout + (y_stride * y + x) * 16;
-            U = uout + 8 * (uv_stride * y + x);
-            V = vout + 8 * (uv_stride * y + x);
-            p = p2;
-            p2 = p + 16 * 4;
+            const uint8_t *Y = yout + (size_t)y_stride * 16 * y + x * 16;
+            const uint8_t *U = uout + (size_t)uv_stride * 8 * y + x * 8;
+            const uint8_t *V = vout + (size_t)uv_stride * 8 * y + x * 8;
+            uint8_t *p = ptr + (size_t)pitch * 16 * y + x * 16 * 4;
+
             for (int i = 0; i < 16; i++) {
                 for (int j = 0; j < 16; j++) {
-                    yy = Y[i * y_stride + j];
-                    u = U[(i / 2) * uv_stride + (j / 2)] - 128;
-                    v = V[(i / 2) * uv_stride + (j / 2)] - 128;
-                    // r = clamp(yy + 1.4075 * v, 255);
-                    // g = clamp(yy - 0.3455 * u - 0.7169 * v, 255);
-                    // b = clamp(yy + 1.779 * u, 255);
-                    r = clamp(yy + 1.28 * v, 255);
-                    g = clamp(yy - 0.215 * u - 0.381 * v, 255);
-                    b = clamp(yy + 2.128 * u, 255);
-                    p[4 * j] = b;
-                    p[4 * j + 1] = g;
-                    p[4 * j + 2] = r;
+                    const int yy = Y[i * y_stride + j];
+                    const int u = U[(i >> 1) * uv_stride + (j >> 1)];
+                    const int v = V[(i >> 1) * uv_stride + (j >> 1)];
+                    const int yv = yuv_mult_hi(yy, 19077);
+                    p[4 * j] = yuv_to_rgb_clip(yv + yuv_mult_hi(u, 33050) - 17685);
+                    p[4 * j + 1] = yuv_to_rgb_clip(yv - yuv_mult_hi(u, 6419) -
+                                                   yuv_mult_hi(v, 13320) + 8708);
+                    p[4 * j + 2] = yuv_to_rgb_clip(yv + yuv_mult_hi(v, 26149) - 14234);
                     p[4 * j + 3] = 0xFF;
                 }
                 p += pitch;
             }
         }
-        p2 = p - pitch + 16 * 4 + right_space;
     }
 }
 

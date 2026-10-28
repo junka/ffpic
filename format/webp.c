@@ -390,7 +390,7 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
             }
         }
     } else {
-        s->update_mb_segmentation_map = 1;
+        s->update_mb_segmentation_map = 0;
         s->update_segment_feature_data = 0;
     }
 }
@@ -1034,7 +1034,6 @@ static int vp8_get_coefficients(struct bool_dec *bt, int16_t *out,
         const uint8_t *p = bands[n]->probas[ctx];
 
         token = bool_dec_tree(bt, coeff_tree, p, prevCoeffWasZero ? 2 : 0);
-        // VDBG(webp, "token %d", token);
         if (token == dct_eob) {
             return n - first;
         } else if (token == DCT_0) {
@@ -1204,9 +1203,10 @@ static int vp8_decode_residual_data(WEBP *w, struct macro_block *block,
                                     struct context *left, struct context *top) {
 
     // see section 19.3
+    // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V, a skipped macro block
+    // has no residual at all, so the buffer has to be cleared in both cases
+    memset(coeffs, 0, 384 * sizeof(int16_t));
     if (!block->mb_skip_coeff) {
-            // 384 = 16 * 16 + 16 * 4 + 16 * 4) which is Y U V
-            memset(coeffs, 0, 384 * sizeof(int16_t));
             vp8_decode_residual_block(w, block, coeffs, left, top, bt);
     } else {
             // 1 DC
@@ -1687,15 +1687,17 @@ static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y
 {
 
     VP8Filter *filter = &w->filters[block->segment_id][block->intra_y_mode == B_PRED];
-    // bool skip_sub_filter =
-        // ((block->intra_y_mode != B_PRED) && (block->mb_skip_coeff));
-    bool skip_sub_filter = (block->intra_y_mode != B_PRED);
+    /* sub block edges are filtered for 4x4 (B_PRED) macro blocks and for every
+     * macro block that carries coefficients, see f_inner in the reference
+     * decoder */
+    bool filter_inner =
+        (block->intra_y_mode == B_PRED) || !block->mb_skip_coeff;
 
     const int sub_limit = filter->sub_limit;
     const int inter_limit = filter->inter_limit;
     const int mb_limit = sub_limit + 4;
     VDBG(webp, "y %d, x %d, filter_type %d: %d, sub_limit %d", y, block->x, filter_type,
-         !skip_sub_filter, sub_limit);
+         filter_inner, sub_limit);
     if (!sub_limit) {
         return 0;
     }
@@ -1708,7 +1710,7 @@ static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y
             SimpleHFilter16_C(y_dst, y_stride, mb_limit);
         }
         // step 2: Filter across the vertical subblock edges within M.
-        if (!skip_sub_filter) {
+        if (filter_inner) {
             SimpleHFilter16i_C(y_dst, y_stride, sub_limit);
         }
         // step 3: If M is not on the topmost row of macroblocks, filter
@@ -1718,7 +1720,7 @@ static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y
             SimpleVFilter16_C(y_dst, y_stride, mb_limit);
         }
         // step 4: Filter across the horizontal subblock edges within M.
-        if (!skip_sub_filter) {
+        if (filter_inner) {
             SimpleVFilter16i_C(y_dst, y_stride, sub_limit);
         }
     } else {
@@ -1729,7 +1731,7 @@ static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y
             HFilter8_C(u_dst, v_dst, uv_stride, mb_limit, inter_limit,
                         hev_thresh);
         }
-        if (skip_sub_filter) {
+        if (filter_inner) {
             HFilter16i_C(y_dst, y_stride, sub_limit, inter_limit,
                             hev_thresh);
             HFilter8i_C(u_dst, v_dst, uv_stride, sub_limit, inter_limit,
@@ -1740,7 +1742,7 @@ static int loopfilter(WEBP *w, struct macro_block *block, int filter_type, int y
             VFilter8_C(u_dst, v_dst, uv_stride, mb_limit, inter_limit,
                         hev_thresh);
         }
-        if (skip_sub_filter) {
+        if (filter_inner) {
             VFilter16i_C(y_dst, y_stride, sub_limit, inter_limit,
                             hev_thresh);
             VFilter8i_C(u_dst, v_dst, uv_stride, sub_limit, inter_limit,
@@ -1815,11 +1817,42 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int uv_stride = y_stride >> 1;  // 8 * 8   U
     int pitch = ((y_stride * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
 
-    //reserve YUV data
-    w->data = malloc(4 * height * (y_stride));
-    uint8_t *Y = malloc(mbrows * 16 * y_stride);
-    uint8_t *U = malloc(mbrows * 8 * uv_stride);
-    uint8_t *V = malloc(mbrows * 8 * uv_stride);
+    //reserve YUV data, the converter writes whole 16x16 macro blocks so the
+    //destination has to hold mbrows * 16 scanlines of pitch bytes, not just
+    //the cropped height
+    size_t data_size = (size_t)pitch * mbrows * 16;
+    w->data = malloc(data_size);
+    /* intra prediction reads the row above and the column to the left of a
+     * macro block, so every plane needs one extra row and column of border.
+     * They are filled with the neutral values VP8 uses for unavailable
+     * neighbours (127 above, 129 on the left) to avoid reading outside the
+     * allocation for the first block of the frame. */
+    size_t y_size = (size_t)(mbrows * 16 + 1) * (y_stride + 1);
+    size_t uv_size = (size_t)(mbrows * 8 + 1) * (uv_stride + 1);
+    uint8_t *Y_buf = malloc(y_size);
+    uint8_t *U_buf = malloc(uv_size);
+    uint8_t *V_buf = malloc(uv_size);
+    if (!w->data || !Y_buf || !U_buf || !V_buf) {
+        free(Y_buf);
+        free(U_buf);
+        free(V_buf);
+        free(w->data);
+        w->data = NULL;
+        return;
+    }
+    memset(Y_buf, 127, y_size);
+    memset(U_buf, 127, uv_size);
+    memset(V_buf, 127, uv_size);
+    uint8_t *Y = Y_buf + y_stride + 1;
+    uint8_t *U = U_buf + uv_stride + 1;
+    uint8_t *V = V_buf + uv_stride + 1;
+    for (int r = 0; r < mbrows * 16; r++) {
+        Y[r * y_stride - 1] = 129;
+    }
+    for (int r = 0; r < mbrows * 8; r++) {
+        U[r * uv_stride - 1] = 129;
+        V[r * uv_stride - 1] = 129;
+    }
 
     struct macro_block *blocks = malloc(sizeof(struct macro_block)* (mbcols * mbrows));
     // one more struct for left of zero col
@@ -1867,12 +1900,18 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
 
     YUV420_to_BGRA32(w->data, pitch, Y, U, V, y_stride, uv_stride, mbrows,
                      mbcols);
+
+    free(Y_buf);
+    free(U_buf);
+    free(V_buf);
+    free(blocks);
+    free(top);
 }
 
 int WEBP_read_frame(WEBP *w, FILE *f)
 {
     // unsigned char b[3]; // code for I frame 10byte， P frame 3byte.
-    FFREAD_IGNORE(&w->fh, sizeof(w->fh), 1, f);
+    FFREAD(&w->fh, sizeof(w->fh), 1, f);
 
     if (w->fh.frame_type != KEY_FRAME) {
         VERR(webp, "not a key frame for vp8\n");
@@ -1880,15 +1919,30 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     }
 
     /* key frame, more info */
-    FFREAD_IGNORE(&w->fi, 7, 1, f);
+    FFREAD(&w->fi, 7, 1, f);
     if (w->fi.start1 != 0x9d || w->fi.start2 != 0x01 || w->fi.start3 != 0x2a) {
         VERR(webp, "not a valid start code for vp8\n");
         return -1;
     }
+    /* frame tag: first partition size. It counts only the bool coded payload of
+     * the partition, the 3 byte frame tag and the 7 byte key frame header are
+     * not included, and they have already been consumed here. */
     int partition0_size = ((int)w->fh.size_h | w->fh.size << 3);
+    if (partition0_size <= 0 ||
+        (uint32_t)partition0_size + 10 > w->vp8.size) {
+        VERR(webp, "bad first partition size %d\n", partition0_size);
+        return -1;
+    }
 
     uint8_t *buf = malloc(partition0_size);
-    FFREAD_IGNORE(buf, partition0_size, 1, f);
+    if (!buf) {
+        return -1;
+    }
+    if (fread(buf, 1, partition0_size, f) != (size_t)partition0_size) {
+        VERR(webp, "truncated first partition\n");
+        free(buf);
+        return -1;
+    }
 
     struct bool_dec *first_bt = bool_dec_init(buf, partition0_size);
 
@@ -1902,6 +1956,12 @@ int WEBP_read_frame(WEBP *w, FILE *f)
         next frame.
     */
     bool_dec *bt[MAX_PARTI_NUM];
+    /* filter strengths depend on the segment and on the intra 4x4 mode, so they
+     * have to be derived for every segment, not for every token partition */
+    for (int i = 0; i < NUM_MB_SEGMENTS; i++) {
+        calculate_filter_control_parameter(w, i, 0);
+        calculate_filter_control_parameter(w, i, 1);
+    }
     for (int i = 0; i < w->k.nbr_partitions; i++) {
         uint8_t *parts = malloc(w->p[i].len);
         fseek(f, w->p[i].start, SEEK_SET);
@@ -1909,9 +1969,6 @@ int WEBP_read_frame(WEBP *w, FILE *f)
         VDBG(webp, "part %d: len %d, 0x%x", i, w->p[i].len, parts[0]);
         // hexdump(stdout, "partitions", parts, 120);
         bt[i] = bool_dec_init(parts, w->p[i].len);
-
-        calculate_filter_control_parameter(w, i, 0);
-        calculate_filter_control_parameter(w, i, 1);
     }
     // bits_vec_dump(first_bt->bits);
 
@@ -1923,57 +1980,6 @@ int WEBP_read_frame(WEBP *w, FILE *f)
         bool_dec_free(bt[i]);
     }
     return 0;
-}
-
-static void webpl_predicator_transform(WEBP *w, struct bits_vec *v) {
-    int size_bits = READ_BITS(v, 3) + 2;
-    int block_width = (1 << size_bits);
-    int block_height = (1 << size_bits);
-    int block_xsize = DIV_ROUND_UP(w->fi.width, 1 << size_bits);
-    printf("block width %d, height %d, xsize %d\n", block_width, block_height, block_xsize);
-
-    for (int y = 0; y < w->fi.height; y++) {
-        for (int x = 0; x < w->fi.width; x ++) {
-            // int block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
-
-        }
-    }
-}
-
-static void webpl_color_transform(WEBP *w UNUSED, struct bits_vec *v) {
-    // int size_bits = READ_BITS(v, 3) + 2;
-    // int block_width = 1 << size_bits;
-    // int block_height = 1 << size_bits;
-    bits_vec_dump(v);
-}
-static void webpl_sub_green_transform(WEBP *w UNUSED, struct bits_vec *v) {
-    bits_vec_dump(v);
-}
-
-static void webpl_color_index_transform(WEBP *w UNUSED, struct bits_vec *v) {
-    bits_vec_dump(v);
-}
-
-static void webpl_read_transform(WEBP *w, struct bits_vec *v) {
-    while(READ_BIT(v)) {
-        int ttype = READ_BITS(v, 2);
-        switch (ttype) {
-            case PREDICTOR_TRANSFORM:
-            webpl_predicator_transform(w, v);
-            break;
-            case COLOR_TRANSFORM:
-            webpl_color_transform(w, v);
-            break;
-            case SUBTRACT_GREEN_TRANSFORM:
-            webpl_sub_green_transform(w, v);
-            break;
-            case COLOR_INDEXING_TRANSFORM:
-            webpl_color_index_transform(w, v);
-            break;
-            default:
-            break;
-        }
-    }
 }
 
 int WEBP_read_lossless(WEBP *w, FILE *f)
@@ -1992,10 +1998,13 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
     w->fi.height = READ_BITS(v, 14) + 1;
     int is_alpha_used = READ_BIT(v);
     int version_num = READ_BITS(v, 3);
-    printf("alpha_use %d, version_num %d\n", is_alpha_used, version_num);
-    webpl_read_transform(w, v);
+    VINFO(webp, "VP8L %dx%d alpha %d version %d", w->fi.width, w->fi.height,
+          is_alpha_used, version_num);
     bits_vec_free(v);
-    return 0;
+    /* the huffman coded VP8L pixel data and its transforms are not decoded
+     * yet, reject instead of handing back uninitialised pixels */
+    VERR(webp, "lossless webp decoding is not implemented");
+    return -1;
 }
 
 static struct pic* 

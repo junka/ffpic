@@ -340,11 +340,14 @@ static void pred_VE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left UNUSED,
     }
 }
 
-static void pred_HE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left UNUSED,
+static void pred_HE_16(uint8_t *dst, uint8_t *top UNUSED, uint8_t *left,
                        int stride, int x UNUSED, int y UNUSED) {
     // horizontal
-    for (int j = 16; j > 0; --j) {
-        memset(dst, dst[-1], 16);
+    for (int j = 0; j < 16; ++j) {
+        /* the left column comes from the prediction buffer, dst[-1] can not be
+         * used here: the frame has no left border column, so it aliases the
+         * last pixel of the previous macroblock row */
+        memset(dst, left[j], 16);
         dst += stride;
     }
 }

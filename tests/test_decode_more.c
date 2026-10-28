@@ -2369,6 +2369,129 @@ emit_probe_not_webp(void)
     return write_file("notwebp.webp", file, w.n);
 }
 
+/* 8x8 quadrant image encoded by cwebp 1.5.0 with -q 80 -m 0. The expected
+ * colours below were produced by dwebp -nofancy -ppm, the reconstruction is
+ * allowed to differ by the rounding of the yuv to rgb conversion. */
+static const uint8_t webp_lossy_8x8[] = {
+    0x52, 0x49, 0x46, 0x46, 0x74, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    0x56, 0x50, 0x38, 0x20, 0x68, 0x00, 0x00, 0x00, 0xb0, 0x01, 0x00, 0x9d,
+    0x01, 0x2a, 0x08, 0x00, 0x08, 0x00, 0x01, 0x40, 0x26, 0x25, 0xb0, 0x00,
+    0x03, 0x61, 0x20, 0x93, 0xbc, 0x58, 0x00, 0xfe, 0xf6, 0x93, 0xe8, 0x6f,
+    0xf9, 0x91, 0x7f, 0xf0, 0x81, 0x35, 0xc6, 0xff, 0xfe, 0xde, 0xff, 0xca,
+    0x82, 0xfe, 0xf2, 0x8f, 0xfe, 0xeb, 0xbf, 0xf3, 0x3b, 0x88, 0x05, 0xf1,
+    0x7f, 0xee, 0x75, 0xfd, 0xda, 0x6b, 0xfd, 0x8d, 0xff, 0xff, 0xa1, 0xd7,
+    0xfe, 0x47, 0xc6, 0xff, 0x9a, 0x3e, 0x8d, 0xff, 0xfe, 0x25, 0x04, 0x7f,
+    0xc6, 0xea, 0xff, 0xf1, 0xae, 0x9f, 0xf1, 0xd9, 0xff, 0x1a, 0x4b, 0x7f,
+    0xff, 0x1b, 0x1b, 0xff, 0x8b, 0x1d, 0x53, 0xfc, 0x10, 0xf6, 0xcd, 0x58,
+    0xa0, 0x00, 0x00, 0x00,
+};
+
+static const uint8_t webp_lossless_8x8[] = {
+    0x52, 0x49, 0x46, 0x46, 0x36, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+    0x56, 0x50, 0x38, 0x4c, 0x2a, 0x00, 0x00, 0x00, 0x2f, 0x07, 0xc0, 0x01,
+    0x00, 0x1f, 0x20, 0x10, 0x48, 0xde, 0x1f, 0x3a, 0x8d, 0xf9, 0x17, 0x10,
+    0x14, 0xfc, 0x1f, 0xdd, 0xfc, 0x47, 0x64, 0x0f, 0x40, 0x41, 0xdb, 0x36,
+    0x4c, 0x49, 0x96, 0x64, 0x49, 0xbe, 0x0d, 0x44, 0x44, 0xff, 0x43, 0xfc,
+    0xf0, 0x33,
+};
+
+static int
+emit_webp_lossy(void)
+{
+    return write_file("webp_lossy.webp", webp_lossy_8x8,
+                      sizeof(webp_lossy_8x8));
+}
+
+static int
+emit_webp_lossless(void)
+{
+    return write_file("webp_lossless.webp", webp_lossless_8x8,
+                      sizeof(webp_lossless_8x8));
+}
+
+/* RIFF/WEBP container whose vp8 chunk size promises 104 bytes that are not
+ * there, the frame header read has to fail instead of decoding stale memory */
+static int
+emit_webp_truncated(void)
+{
+    uint8_t file[20];
+    struct wbuf w = {file, 0};
+
+    wb_bytes(&w, "RIFF", 4);
+    wb_le32(&w, 12);
+    wb_bytes(&w, "WEBP", 4);
+    wb_bytes(&w, "VP8 ", 4);
+    wb_le32(&w, 104);
+    return write_file("webp_short.webp", file, w.n);
+}
+
+static int
+check_webp_lossy(const char *name)
+{
+    /* the four quadrants are two by two identical, so one value per 2x2 cell */
+    static const uint8_t want_rgb[4][4][3] = {
+        {{254, 1, 4}, {251, 2, 4}, {0, 255, 3}, {0, 255, 3}},
+        {{252, 3, 0}, {249, 5, 0}, {7, 252, 5}, {3, 254, 3}},
+        {{5, 1, 248}, {10, 0, 255}, {249, 255, 253}, {253, 255, 255}},
+        {{3, 3, 242}, {8, 0, 250}, {253, 255, 255}, {255, 252, 255}},
+    };
+    enum { TOL = 2 };
+    struct file_ops *ops = file_probe(name);
+    struct pic *p;
+    int rc = 0;
+
+    if (!ops || strcmp(ops->name, "WEBP")) {
+        printf("%s: not detected as WEBP\n", name);
+        return -1;
+    }
+    p = file_load(ops, name, 0);
+    if (!p) {
+        printf("%s: WEBP could not decode it\n", name);
+        return -1;
+    }
+    if (p->width != 8 || p->height != 8 || !p->pixels) {
+        printf("%s: got %dx%d, expected 8x8 with pixels\n", name, p->width,
+               p->height);
+        rc = -1;
+    } else if (p->pitch < p->width * 4) {
+        printf("%s: pitch %d is too small for %d pixels\n", name, p->pitch,
+               p->width);
+        rc = -1;
+    } else {
+        /* the pixels are BGRA, a lossy webp without an ALPH chunk is opaque */
+        uint8_t *rgba = p->pixels;
+        for (int y = 0; y < p->height; y++) {
+            for (int x = 0; x < p->width; x++) {
+                const uint8_t *want = want_rgb[y / 2][x / 2];
+                const uint8_t *got = rgba + y * p->pitch + x * 4;
+                /* B, G, R against the R, G, B of the reference */
+                const uint8_t got_rgb[3] = {got[2], got[1], got[0]};
+                uint8_t a = got[3];
+
+                if (a != 255) {
+                    printf("%s: alpha at (%d, %d) is %d, expected 255\n", name,
+                           x, y, a);
+                    rc = -1;
+                }
+                for (int c = 0; c < 3; c++) {
+                    if (abs(got_rgb[c] - want[c]) > TOL) {
+                        printf("%s: (%d, %d) rgb is %d %d %d, expected %d %d %d\n",
+                               name, x, y, got_rgb[0], got_rgb[1], got_rgb[2],
+                               want[0], want[1], want[2]);
+                        rc = -1;
+                    }
+                }
+            }
+        }
+    }
+    file_free(ops, p);
+    remove(name);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 /* ------------------------------------------------------------- queues */
 
 static int
@@ -2853,6 +2976,16 @@ int main(void)
         failed++;
     }
     if (emit_probe_not_webp() || check_claim("notwebp.webp", NULL)) {
+        failed++;
+    }
+    if (emit_webp_lossy() || check_webp_lossy("webp_lossy.webp")) {
+        failed++;
+    }
+    if (emit_webp_lossless() ||
+        check_reject("webp_lossless.webp", "WEBP")) {
+        failed++;
+    }
+    if (emit_webp_truncated() || check_reject("webp_short.webp", "WEBP")) {
         failed++;
     }
 

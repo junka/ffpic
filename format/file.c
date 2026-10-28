@@ -32,6 +32,9 @@ file_probe(const char *filename)
 {
     struct file_ops* ops;
     FILE *f = fopen(filename, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
     TAILQ_FOREACH(ops, &ops_list, next) {
         fseek(f, 0, SEEK_SET);
         if(ops->probe(f) == 0) {

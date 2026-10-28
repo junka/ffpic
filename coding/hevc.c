@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <assert.h>
 #include <string.h>
 
@@ -13,7 +14,6 @@
 #include "cabac.h"
 #include "predict.h"
 #include "colorspace.h"
-#include "accl.h"
 
 VLOG_REGISTER(hevc, DEBUG)
 
@@ -45,15 +45,18 @@ struct picture {
     struct slice_segment_header *slices;
 };
 
-static void
+static int
 rbsp_trailing_bits(struct bits_vec *v)
 {
-    //should be 1
-    uint8_t rbsp_stop_one_bit UNUSED = READ_BIT(v);
-    assert(rbsp_stop_one_bit == 1);
+    uint8_t rbsp_stop_one_bit = READ_BIT(v);
+    if (rbsp_stop_one_bit != 1) {
+        VERR(hevc, "rbsp_stop_one_bit is %d", rbsp_stop_one_bit);
+        return -EINVAL;
+    }
     while (!BYTE_ALIGNED(v)) {
         SKIP_BITS(v, 1);
     }
+    return 0;
 }
 
 static void
@@ -533,6 +536,11 @@ parse_vui(struct bits_vec *v, struct vui_parameters *vui, int sps_max_sub_layer_
             vui->transfer_characteristics = READ_BITS(v, 8);
             vui->matrix_coeffs = READ_BITS(v, 8);
         }
+        VDBG(hevc, "vui: video_format %d, full_range %d, description %d, "
+             "primaries %d, transfer %d, matrix %d", vui->video_format,
+             vui->video_full_range_flag, vui->colour_description_present_flag,
+             vui->colour_primaries, vui->transfer_characteristics,
+             vui->matrix_coeffs);
     }
     vui->chroma_loc_info_present_flag = READ_BIT(v);
     if (vui->chroma_loc_info_present_flag) {
@@ -2656,6 +2664,8 @@ static scanpos *init_traverse_scan_order(int blkSize) {
     return travScan;
 }
 
+static void free_slice_segment_header(struct slice_segment_header *slice);
+
 //see I.7.3.6.1
 static struct slice_segment_header *
 parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
@@ -2692,8 +2702,23 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     slice->slice_pic_parameter_set_id = GOL_UE(v);
 
     struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
+    if (!pps) {
+        VERR(hevc, "no pps for slice %d", slice->slice_pic_parameter_set_id);
+        free_slice_segment_header(slice);
+        return NULL;
+    }
     struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
+    if (!sps) {
+        VERR(hevc, "no sps for pps %d", pps->pps_seq_parameter_set_id);
+        free_slice_segment_header(slice);
+        return NULL;
+    }
     struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
+    if (!vps) {
+        VERR(hevc, "no vps for sps %d", sps->sps_video_parameter_set_id);
+        free_slice_segment_header(slice);
+        return NULL;
+    }
 
     VDBG(hevc, "first_slice_segment_in_pic_flag %d", first_slice_segment_in_pic_flag);
     VDBG(hevc, "slice_pic_parameter_set_id %d", slice->slice_pic_parameter_set_id);
@@ -3909,15 +3934,10 @@ static int transform_scaled_coeffients(struct sps *sps, struct picture *p,
         trType = 1;
         VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
              coeffMin, coeffMax);
-        struct accl_ops *ops = accl_first_available();
-        // struct accl_ops *ops = accl_find(GPU_TYPE_OPENCL);
-        if (ops) {
-            ops->idct_4x4(d, sps->BitDepthY);
-            memcpy(r, d, sizeof(uint16_t) * 16);
-        } else {
-            idct_4x4_hevc(d, r, sps->BitDepthY,
-                          sre->extended_precision_processing_flag);
-        }
+        /* the accelerated 4x4 transform in the accl ops is the vp8 butterfly,
+         * not the hevc dst-vii, so stay on the scalar implementation */
+        idct_4x4_hevc(d, r, sps->BitDepthY,
+                      sre->extended_precision_processing_flag);
         return 0;
     }
     VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
@@ -6930,7 +6950,7 @@ static struct ctu *coding_tree_unit(cabac_dec *d, struct hevc_slice *hslice,
 }
 
 /* see 7.3.8.1 */
-static void
+static int
 parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         struct hevc_param_set *hps, int SliceAddrRs, struct picture *p)
 {
@@ -7014,8 +7034,9 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         } else {
             CtbAddrInRs = sps->PicSizeInCtbsY;
             if (!end_of_slice_segment_flag) {
-                printf("error !\n");
-                exit(-1);
+                VERR(hevc, "slice does not end on the last ctu");
+                cabac_dec_free(d);
+                return -EINVAL;
             }
         }
 
@@ -7023,9 +7044,10 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
                 (pps->entropy_coding_sync_enabled_flag && (CtbAddrInRs % sps->PicWidthInCtbsY == 0 ||
                 pps->TileId[CtbAddrInTs] != pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]])))) {
             uint8_t end_of_subset_one_bit = cabac_dec_terminate(d); // should be equal to 1
-            assert(end_of_subset_one_bit == 1);
-            if (end_of_subset_one_bit == 0) {
-                return ;
+            if (end_of_subset_one_bit != 1) {
+                VERR(hevc, "end_of_subset_one_bit is %d", end_of_subset_one_bit);
+                cabac_dec_free(d);
+                return -EINVAL;
             }
             bits_vec_dump(v);
             // VDBG(hevc,"firstByte %d, lastByte %d, len %zu", firstByte, lastByte, (v->ptr - v->start));
@@ -7037,6 +7059,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         }
     } while (!end_of_slice_segment_flag);
     cabac_dec_free(d);
+    return 0;
 }
 #define Sign(value) (((value) < 0) ? -1 : ((value) > 0) ? 1 : 0)
 // see 8.7.3.2
@@ -7211,16 +7234,21 @@ hevc_conformance_crop(const struct sps *sps, int *x, int *y,
     *height = (int)sps->pic_height_in_luma_samples - top - bottom;
 }
 
-static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
-                                      struct bits_vec *v,
-                                      struct hevc_param_set *hps,
-                                      uint8_t **pixels) {
+static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
+                                     struct bits_vec *v,
+                                     struct hevc_param_set *hps,
+                                     uint8_t **pixels) {
+    int ret;
     uint32_t SliceAddrRs;
     struct hevc_slice hslice = {
         .nalu = headr,
     };
 
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
+    if (!hslice.slice) {
+        VERR(hevc, "failed to parse the slice segment header");
+        return -EINVAL;
+    }
 
     struct pps *pps = hps->pps[hslice.slice->slice_pic_parameter_set_id];
     struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
@@ -7265,14 +7293,20 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     int PicHeightInTbsY = sps->PicHeightInCtbsY << (sps->CtbLog2SizeY - sps->MinTbLog2SizeY);
 
     p.split_transform_flag = calloc(PicWidthInTbsY * PicHeightInTbsY, sizeof(uint8_t));
-    p.ctus = malloc(sizeof(struct ctu *) * sps->PicHeightInCtbsY * sps->PicWidthInCtbsY);
+    p.ctus = calloc(sps->PicHeightInCtbsY * sps->PicWidthInCtbsY,
+                    sizeof(struct ctu *));
     p.slice_num ++;
     p.slices = realloc(p.slices, p.slice_num * sizeof(struct slice_segment_header *));
 
-    parse_slice_segment_data(v, &hslice, hps, SliceAddrRs, &p);
+    ret = parse_slice_segment_data(v, &hslice, hps, SliceAddrRs, &p);
+    if (ret < 0) {
+        VERR(hevc, "failed to decode slice segment data");
+        goto out;
+    }
     bits_vec_dump(v);
-    if (!bits_vec_aligned(v)) {
-        rbsp_trailing_bits(v);
+    if (!bits_vec_aligned(v) && rbsp_trailing_bits(v) < 0) {
+        ret = -EINVAL;
+        goto out;
     }
 
     inloop_filter(hslice.slice, pps, sps, &p);
@@ -7283,7 +7317,15 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         int crop_x, crop_y, crop_w, crop_h;
         int dst_pitch;
         int16_t *y_plane, *u_plane, *v_plane;
+        int full_range = 0;
+        int matrix_coeffs = 2;
 
+        if (sps->vui && sps->vui->video_signal_type_present_flag) {
+            full_range = sps->vui->video_full_range_flag;
+            if (sps->vui->colour_description_present_flag) {
+                matrix_coeffs = sps->vui->matrix_coeffs;
+            }
+        }
         hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
         dst_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
         y_plane = p.pixel + crop_y * y_stride + crop_x;
@@ -7292,7 +7334,8 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
         v_plane = p.pixel + p.size * 3 / 2 +
                   (crop_y / 2) * uv_stride + crop_x / 2;
         YUV420_to_BGRA32_16bit(*pixels, dst_pitch, y_plane, u_plane, v_plane,
-                y_stride, uv_stride, crop_w, crop_h, 1 << sps->CtbLog2SizeY);
+                y_stride, uv_stride, crop_w, crop_h, 1 << sps->CtbLog2SizeY,
+                full_range, matrix_coeffs);
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
 
@@ -7308,6 +7351,7 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
             divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
     }
 
+out:
     free(p.pixel);
     free(p.info);
     free(p.split_transform_flag);
@@ -7327,19 +7371,30 @@ static void parse_slice_segment_layer(struct hevc_nalu_header *headr,
     }
     free_slice_segment_header(hslice.slice);
     free(p.slices);
+    return ret;
 }
 
-uint16_t
-parse_nalu(uint8_t *data, int len, uint8_t **pixels, struct hevc_param_set *hps)
+int
+parse_nalu(uint8_t *data, int len, uint8_t **pixels, void **param_set,
+           struct hevc_param_set *hps)
 {
     struct hevc_nalu_header h;
+    int ret = -EINVAL;
+
+    if (len < 2) {
+        VERR(hevc, "nal unit is %d bytes long", len);
+        return -EINVAL;
+    }
     h.forbidden_zero_bit = (data[0] & 0x80) >> 7;
     h.nal_unit_type = (data[0] & 0x7E) >> 1;
     h.nuh_layer_id = (((data[0] & 1) << 5) | ((data[1] & 0xF8) >> 3));
     h.nuh_temporal_id = (data[1] & 0x7) - 1;
     VDBG(hevc, "len %d f %d type %d, layer id %d, temp id %d", len, h.forbidden_zero_bit,
         h.nal_unit_type, h.nuh_layer_id, h.nuh_temporal_id);
-    assert(h.forbidden_zero_bit == 0);
+    if (h.forbidden_zero_bit) {
+        VERR(hevc, "forbidden_zero_bit is set");
+        return -EINVAL;
+    }
     struct vps *new_vps = NULL;
     struct sps *new_sps = NULL;
     struct pps *new_pps = NULL;
@@ -7370,42 +7425,65 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels, struct hevc_param_set *hps)
         // hexdump(stdout, "data: ", "", data, 32);
         // printf("nrbsp %d\n", nrbsp);
         // hexdump(stdout, "rbsp: ", "", rbsp, 32);
-        parse_slice_segment_layer(&h, v, hps, pixels);
+        if (pixels == NULL || *pixels == NULL) {
+            VERR(hevc, "slice nal without a pixel buffer");
+            break;
+        }
+        if (parse_slice_segment_layer(&h, v, hps, pixels) == 0) {
+            ret = h.nal_unit_type;
+        } else {
+            VERR(hevc, "failed to decode slice nal");
+        }
         break;
     case VPS_NUT:
         new_vps = parse_vps(v);
+        if (!new_vps) {
+            VERR(hevc, "can no parse vps correctly");
+            break;
+        }
         hps->vps[new_vps->vps_video_parameter_set_id] = new_vps;
-        *pixels = (uint8_t *)new_vps;
+        if (param_set) {
+            *param_set = new_vps;
+        }
+        ret = h.nal_unit_type;
         break;
     case SPS_NUT:
         new_sps = parse_sps(&h, v, new_vps);
         if (!new_sps) {
             VERR(hevc, "can no parse sps correctly");
-            exit(-1);
+            break;
         }
-        *pixels = (uint8_t *)new_sps;
         hps->sps[new_sps->sps_seq_parameter_set_id] = new_sps;
+        if (param_set) {
+            *param_set = new_sps;
+        }
+        ret = h.nal_unit_type;
         break;
     case PPS_NUT:
         new_pps = parse_pps(v);
         if (!new_pps) {
             VERR(hevc, "can no parse pps correctly");
-            exit(-1);
+            break;
         }
-        *pixels = (uint8_t *)new_pps;
         hps->pps[new_pps->pps_pic_parameter_set_id] = new_pps;
+        if (param_set) {
+            *param_set = new_pps;
+        }
+        ret = h.nal_unit_type;
         break;
     case PREFIX_SEI_NUT:
     case SUFFIX_SEI_NUT:
         /* this is not necessary for decoding a picture */
         parse_sei(v);
+        ret = h.nal_unit_type;
         break;
     default:
         VDBG(hevc, "unhandle nal_unit_type %d", h.nal_unit_type);
+        ret = h.nal_unit_type;
         break;
     }
     bits_vec_free(v);
-    return h.nal_unit_type;
+    return ret;
 }
 
 void free_hevc_param_set(struct hevc_param_set *hps)

@@ -28,7 +28,7 @@ idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, i
         for (int j = 0; j <= last_nz; j++) {
             tmp += transMatrix[j][i] * in[j];
         }
-        out[i] = clip3(mincoeff, maxcoeff, (tmp + (bdShift - 1)) >> bdShift);
+        out[i] = clip3(mincoeff, maxcoeff, (tmp + (1 << (bdShift - 1))) >> bdShift);
     }
 }
 
@@ -75,7 +75,7 @@ void idct_1d_4_8bits(const uint8_t *in, uint8_t out[4], int mincoeff,
         for (int j = 0; j <= last_nz; j++) {
             tmp += transMatrix[j][i] * in[j];
         }
-        out[i] = clip3(mincoeff, maxcoeff, (tmp + (bdShift - 1)) >> bdShift);
+        out[i] = clip3(mincoeff, maxcoeff, (tmp + (1 << (bdShift - 1))) >> bdShift);
     }
 }
 void idct_4x4_8(const void *input, void *output, int bitdepth UNUSED) {

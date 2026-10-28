@@ -123,7 +123,15 @@ read_hvcc_box(FILE *f, struct box **bn)
             VDBG(heif, "hvcc: nal unit length %d", nals[j].unit_length);
             nals[j].nal_units = malloc(nals[j].unit_length);
             FFREAD(nals[j].nal_units, 1, nals[j].unit_length, f);
-            parse_nalu(nals[j].nal_units, nals[j].unit_length, (uint8_t **)(((void **)(b->nal_arrays[i].xps))+j), &b->hps);
+            void **slot = b->nal_arrays[i].xps
+                              ? (void **)b->nal_arrays[i].xps + j
+                              : NULL;
+            /* a bad parameter set leaves the slot empty; the slice header
+             * then fails its lookup instead of the loader aborting */
+            if (parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL, slot,
+                           &b->hps) < 0) {
+                VERR(heif, "failed to parse a parameter set");
+            }
             free(nals[j].nal_units);
         }
         free(nals);
@@ -164,6 +172,10 @@ get_ipma_item_from_item_id(HEIF *h, int id, uint32_t fourcc)
                 for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
                     // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                     int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
+                    if (property_index < 1 ||
+                        property_index > (int)h->meta.iprp.ipco.n_property) {
+                        continue;
+                    }
                     struct box *b = (struct box *)h->meta.iprp.ipco.property[property_index-1];
                     if (b->type == fourcc) {
                         return h->meta.iprp.ipco.property[property_index-1];
@@ -205,6 +217,10 @@ get_ispe_by_item_id(HEIF *h, int id)
             for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
                 // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                 int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
+                if (property_index < 1 ||
+                    property_index > (int)h->meta.iprp.ipco.n_property) {
+                    continue;
+                }
                 struct box *bb = h->meta.iprp.ipco.property[property_index - 1];
                 if (bb->type == FOURCC2UINT('i', 's', 'p', 'e')) {
                     return (struct ispe_box *)bb;
@@ -251,18 +267,29 @@ void decode_hvc1(uint8_t *data, uint64_t len, uint8_t **pixels,
                  struct hevc_param_set *hps) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
-    while (len > 0) {
-        int sample_len = p[0] << 24 | p[1] << 16| p[2] << 8| p[3];
-        len -= 4;
+    while (len >= 4) {
+        uint32_t sample_len = (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
         p += 4;
-        parse_nalu(p, sample_len, pixels, hps);
-        len -= sample_len;
+        len -= 4;
+        if (sample_len > len) {
+            VERR(heif, "sample length %u runs past the item", sample_len);
+            break;
+        }
+        if (parse_nalu(p, (int)sample_len, pixels, NULL, hps) < 0) {
+            VERR(heif, "failed to parse nal unit");
+            break;
+        }
         p += sample_len;
+        len -= sample_len;
     }
 }
 
 static struct pic *
 HEIF_load_one(int width, int height, uint8_t *data, int length, struct hevc_param_set *hps) {
+    if (width <= 0 || height <= 0) {
+        VERR(heif, "item has no usable size: %dx%d", width, height);
+        return NULL;
+    }
     struct pic *p = pic_alloc(sizeof(HEIF));
     // HEIF *h = p->pic;
     p->width = width;
@@ -361,6 +388,10 @@ decode_primary_item(HEIF *h, struct pic *p)
     } else if (pri_item->type == TYPE2UINT("hvc1")) {
         VINFO(heif, "primary loc at %" PRIu64, h->items[pri_index].item->base_offset);
         struct hvcC_box *conf = get_hvcc_from_item_id(h, primary_id);
+        if (!conf) {
+            VERR(heif, "no hvcC for the primary item");
+            return 0;
+        }
         decode_hvc1(pri_item->data, pri_item->length, (uint8_t **)&p->pixels, &conf->hps);
         num ++;
     }
@@ -379,10 +410,15 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
             int id = ref->to_item_ids[j];
             if (id == primary_id) {
                 struct heif_item *r = find_item_by_id(h, ref->from_item_id);
+                if (!r) {
+                    continue;
+                }
                 if (r->type == TYPE2UINT("hvc1") && ref->type == TYPE2UINT("auxl")) {
                     struct hvcC_box *conf = get_hvcc_from_item_id(h, r->item->item_id);
                     struct auxC_box *auxc = get_auxc_from_item_id(h, r->item->item_id);
-                    assert(auxc != NULL);
+                    if (!conf || !auxc) {
+                        continue;
+                    }
                     if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
                         (strcmp(auxc->aux_type, "urn:mpeg:avc:2015:auxid:1") == 0) ||
                         (strcmp(auxc->aux_type, "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"))) {
@@ -437,11 +473,11 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, (void*)h->items[i].data, h->items[i].length);
-            if (num == 1) {
-                file_enqueue_pic(p);
-            }
             VINFO(heif, "decoding sub items, width %d, height %d", p->width, p->height);
             struct hvcC_box *conf = get_hvcc_from_item_id(h, h->items[i].item->item_id);
+            if (!conf) {
+                continue;
+            }
             struct pic *p1 = HEIF_load_one(p->width, p->height, h->items[i].data, h->items[i].length, &conf->hps);
             file_enqueue_pic(p1);
             num++;
@@ -574,8 +610,18 @@ HEIF_load(const char *filename, int skip_flag)
     }
 
     fclose(f);
-    if (n  == 1) {
-        return p;
+    /* with a primary item the image is decoded into p; extra frames are
+     * already queued. without one every frame was queued and p only holds
+     * the container, so it must not be freed after being handed to the
+     * queue. */
+    if (get_primary_item_id(h) >= 0) {
+        if (n == 1) {
+            return p;
+        }
+        if (n > 1) {
+            file_enqueue_pic(p);
+            return NULL;
+        }
     }
     HEIF_free(p);
     return NULL;

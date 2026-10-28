@@ -625,12 +625,66 @@ void BGRA32_to_YUV420(uint8_t *ptr, int pitch, int16_t *Y, int16_t *U,
     }
 }
 
+/* ITU-T H.273 matrix coefficients, 2 (unspecified) is treated as bt.601,
+ * which is what heif stills conventionally use */
+static void
+yuv_coefficients(int matrix_coeffs, float *kr, float *kb)
+{
+    switch (matrix_coeffs) {
+    case 1:                     /* bt.709 */
+        *kr = 0.2126f;
+        *kb = 0.0722f;
+        break;
+    case 4:                     /* fcc */
+        *kr = 0.30f;
+        *kb = 0.11f;
+        break;
+    case 7:                     /* smpte 240m */
+        *kr = 0.212f;
+        *kb = 0.087f;
+        break;
+    case 9:                     /* bt.2020 non constant luminance */
+        *kr = 0.2627f;
+        *kb = 0.0593f;
+        break;
+    default:                    /* bt.601 / smpte 170m / bt.470bg */
+        *kr = 0.299f;
+        *kb = 0.114f;
+        break;
+    }
+}
+
+static uint8_t
+clip_sample(float v)
+{
+    if (v <= 0.0f) {
+        return 0;
+    }
+    if (v >= 255.0f) {
+        return 255;
+    }
+    return (uint8_t)(v + 0.5f);
+}
+
 void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
                       int16_t *vout, int y_stride, int uv_stride, int width,
-                      int height, int ctbsize) {
+                      int height, int ctbsize, int full_range,
+                      int matrix_coeffs) {
     int16_t *Y, *U, *V;
-    int16_t yy, u, v;
-    uint8_t r, g, b;
+    float y_scale, c_scale, y_offset;
+    float rv, gu, gv, bu;
+    float kr, kb;
+
+    yuv_coefficients(matrix_coeffs, &kr, &kb);
+    /* 8 bit video carries luma in 16..235 and chroma in 16..240 unless the
+     * stream is flagged as full range */
+    y_scale = full_range ? 1.0f : 255.0f / 219.0f;
+    c_scale = full_range ? 1.0f : 255.0f / 224.0f;
+    y_offset = full_range ? 0.0f : -16.0f * y_scale;
+    rv = 2.0f * (1.0f - kr) * c_scale;
+    bu = 2.0f * (1.0f - kb) * c_scale;
+    gu = 2.0f * kb * (1.0f - kb) / (1.0f - kr - kb) * c_scale;
+    gv = 2.0f * kr * (1.0f - kr) / (1.0f - kr - kb) * c_scale;
 
     /* The last CTB column and row are usually partial, so clip every block
      * to the real picture size; writing the full ctbsize would run past the
@@ -645,15 +699,12 @@ void YUV420_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uou
             uint8_t *p = ptr + y * pitch + x * 4;
             for (int i = 0; i < ch; i++) {
                 for (int j = 0; j < cw; j++) {
-                    yy = Y[i * y_stride + j];
-                    u = U[(i / 2) * uv_stride + (j / 2)] - 128;
-                    v = V[(i / 2) * uv_stride + (j / 2)] - 128;
-                    r = clamp(yy + 1.280 * v, 255);
-                    g = clamp(yy - 0.215 * u - 0.381 * v, 255);
-                    b = clamp(yy + 2.128 * u, 255);
-                    p[4 * j] = b;
-                    p[4 * j + 1] = g;
-                    p[4 * j + 2] = r;
+                    float yy = Y[i * y_stride + j] * y_scale + y_offset;
+                    float u = U[(i / 2) * uv_stride + (j / 2)] - 128;
+                    float v = V[(i / 2) * uv_stride + (j / 2)] - 128;
+                    p[4 * j] = clip_sample(yy + bu * u);
+                    p[4 * j + 1] = clip_sample(yy - gu * u - gv * v);
+                    p[4 * j + 2] = clip_sample(yy + rv * v);
                     p[4 * j + 3] = 0xFF;
                 }
                 p += pitch;

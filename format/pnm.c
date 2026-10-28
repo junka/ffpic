@@ -69,8 +69,13 @@ read_ppm_bin_data(PNM* m, FILE *f)
     int last = ftell(f);
     fseek(f, off, SEEK_SET);
 
+    int count = (last - off) / 3;
+    if (count > m->width * m->height) {
+        count = m->width * m->height;
+    }
+
     //RGB color need do reorder for display
-    for(int i = 0; i < last-off / 3; i++) {
+    for(int i = 0; i < count; i++) {
         FFREAD_IGNORE(m->data + 4*i + 2, 1, 1, f);
         FFREAD_IGNORE(m->data + 4*i + 1, 1, 1, f);
         FFREAD_IGNORE(m->data + 4*i, 1, 1, f);

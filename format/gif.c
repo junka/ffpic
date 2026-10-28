@@ -380,11 +380,11 @@ graphic_is_image(const Graphic* g)
 static struct pic *
 GIF_load(const char *filename, int skip_flag)
 {
-    struct pic *p = pic_alloc(sizeof(GIF));
-    GIF* g = (GIF *)p->pic;
+    struct pic *holder = pic_alloc(sizeof(GIF));
+    GIF* g = (GIF *)holder->pic;
     FILE* f = fopen(filename, "rb");
     if (f == NULL) {
-        pic_free(p);
+        pic_free(holder);
         return NULL;
     }
     read_gif(f, g);
@@ -400,22 +400,26 @@ GIF_load(const char *filename, int skip_flag)
             }
             if (last == NULL) {
                 VERR(gif, "no image in the file");
-                GIF_free(p);
+                GIF_free(holder);
                 return NULL;
             }
             //for GIF, the info will be stored in the last frame
             last->pic = g;
+            holder->pic = NULL;
+            pic_free(holder);
             return NULL;
         } else if (g->graphic_count == 1 && graphic_is_image(&g->graphics[0])) {
-            p = GIF_load_one(g->graphics);
+            struct pic *p = GIF_load_one(g->graphics);
             p->pic = g;
+            holder->pic = NULL;
+            pic_free(holder);
             return p;
         }
         VERR(gif, "no image in the file");
-        GIF_free(p);
+        GIF_free(holder);
         return NULL;
     }
-    return p;
+    return holder;
 }
 
 static int 

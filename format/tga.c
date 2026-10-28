@@ -75,9 +75,10 @@ read_uncompress_data(TGA *t, FILE *f)
                 for (int j = 0; j < t->head.width; j ++) {
                     uint16_t svalue;
                     FFREAD_IGNORE(&svalue, 2, 1, f);
-                    t->data[pitch * i + j * 4] = (svalue >> 10) & 0x1F;
+                    /* the pixels are XRGB8888, so the blue bits come first */
+                    t->data[pitch * i + j * 4] = (svalue) & 0x1F;
                     t->data[pitch * i + j * 4 + 1] = (svalue >> 5) & 0x1F;
-                    t->data[pitch * i + j * 4 + 2] = (svalue) & 0x1F;
+                    t->data[pitch * i + j * 4 + 2] = (svalue >> 10) & 0x1F;
                 }
             }
         }

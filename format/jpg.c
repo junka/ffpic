@@ -481,7 +481,7 @@ JPG_decode_scan(JPG* j, uint8_t *rawdata, int len)
     uint8_t *ptr;
     int width = ((j->sof.width + 7) >> 3) << 3; //algin to 8
     int height = j->sof.height; //((j->sof.height + 7) >> 3) << 3;
-    int pitch = width * 4;
+    int pitch = ((width + xstride - 1) / xstride) * xstride * 4;
 
     int restarts = j->dri.interval;
 
@@ -790,12 +790,25 @@ JPG_load_one(FILE *f, int skip_flag)
             p->width = ((j->sof.width + 7) >> 3) << 3;
             p->height = j->sof.height;
             p->depth = 32;
-            p->pitch = ((p->width * 32 + 32 - 1) >> 5) << 2;
-            j->data_len = p->pitch * p->height;
-            j->data = malloc(p->pitch * (p->height+7)/8*8);
-            j->yuv[0] = calloc(1, (p->height + 7)/8 * ((p->width+7)>>3) * 64 * sizeof(int16_t));
-            j->yuv[1] = calloc(1, (p->height +7)/8 * ((p->width+7)>>3) * 64 * sizeof(int16_t));
-            j->yuv[2] = calloc(1, (p->height+7)/8 * ((p->width+7)>>3) * 64 * sizeof(int16_t));
+            {
+                /* the scan decoder works in whole MCUs, so the buffer has to
+                 * cover the last, partially filled MCU as well
+                 */
+                int yh = j->sof.colors[0].horizontal ? j->sof.colors[0].horizontal : 1;
+                int yv = j->sof.colors[0].vertical ? j->sof.colors[0].vertical : 1;
+                int xstride = yh * 8;
+                int ystride = yv * 8;
+                int mcu_w = (p->width + xstride - 1) / xstride;
+                int mcu_h = (p->height + ystride - 1) / ystride;
+                size_t yuv_len = (size_t)mcu_w * mcu_h * 4 * 64;
+
+                p->pitch = mcu_w * xstride * 4;
+                j->data_len = p->pitch * mcu_h * ystride;
+                j->data = malloc(j->data_len);
+                j->yuv[0] = calloc(1, yuv_len * sizeof(int16_t));
+                j->yuv[1] = calloc(1, yuv_len * sizeof(int16_t));
+                j->yuv[2] = calloc(1, yuv_len * sizeof(int16_t));
+            }
             break;
         case APP0:
             VDBG(jpg, "APP0");

@@ -146,13 +146,12 @@ RLE4_decode(uint8_t *data, int len, uint8_t *out, int pitch, int height, int dep
 static void
 read_pixels(struct pic *p, FILE *f)
 {
-    int bottom = p->height > 0 ? 0 : 1 - p->height;
-    int top = p->height > 0 ? p->height - 1 : 0;
-    int delta = p->height > 0 ? -1 : 1;
+    int height = ABS(p->height);
     int width = (p->width + 3) >> 2 << 2;
     BMP *b = p->pic;
-    /* For read bmp pic data from bottom to up */
-    for (int i = top; i >= bottom; i += delta) {
+    /* A positive height stores the rows bottom up, a negative one top down */
+    for (int k = 0; k < height; k++) {
+        int i = p->height > 0 ? height - 1 - k : k;
         FFREAD_IGNORE(b->data + p->pitch * i, p->depth / 8, width, f);
         for (int j = 0; j < width; j++) {
             if (p->depth == 32) {
@@ -166,13 +165,12 @@ static void
 read_color_index(struct pic *p, int bit_count, FILE *f)
 {
     BMP *b = p->pic;
-    int top = p->height > 0 ? p->height - 1 : 0;
-    int bottom = p->height > 0 ? 0 : 1 - p->height;
-    int delta = p->height > 0 ? -1 : 1;
+    int height = ABS(p->height);
     // byte per line is aligned to 4 in bmp file
     int width = (p->width + 3) >> 2 << 2;
 
-    for (int i = top; i >= bottom; i += delta) {
+    for (int k = 0; k < height; k++) {
+        int i = p->height > 0 ? height - 1 - k : k;
         for (int j = 0; j < width; j++) {
             uint8_t px = 0, pxlo = 0;
             if (bit_count == 8) {

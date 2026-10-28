@@ -12,7 +12,7 @@ void *test_enqueue(void *arg) {
     struct ring_queue *rq = (struct ring_queue *)arg;
     for (int i = 0; i < 64; i++) {
         char *k = calloc(1, 4);
-        sprintf(k, "A%d", i);
+        snprintf(k, 4, "A%d", i);
         if (!ring_enqueue(rq, k)) {
             printf("enenque fail %d, total %d\n", i, ring_count(rq));
             free(k);
@@ -31,7 +31,7 @@ int main(void) {
     pthread_create(&tid, NULL, test_enqueue, (void *)rq);
     for (int i = 0; i < 4; i++) {
         char *k = calloc(1, 4);
-        sprintf(k, "a%d", i);
+        snprintf(k, 4, "a%d", i);
         if (!ring_enqueue(rq, k)) {
             printf("enenque fail %d\n", i);
             free(k);
@@ -40,7 +40,7 @@ int main(void) {
     void *blk[28];
     for (int i = 4; i < 32; i++) {
         blk[i - 4] = calloc(1, 4);
-        sprintf(blk[i - 4], "a%d", i);
+        snprintf(blk[i - 4], 4, "a%d", i);
     }
     if (!ring_enqueue_bulk(rq, blk, 28)) {
         printf("enqueu bulk fail\n");
@@ -51,7 +51,7 @@ int main(void) {
     usleep(1);
     for (int i = 32; i < 64; i++) {
         char *k = calloc(1, 4);
-        sprintf(k, "a%d", i);
+        snprintf(k, 4, "a%d", i);
         if (!ring_enqueue(rq, k)) {
         printf("enenque fail %d\n", i);
         free(k);

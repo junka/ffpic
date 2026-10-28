@@ -219,6 +219,14 @@ typedef struct {
     int16_t *yuv[3];
     int data_len; // compressed huffman data len
     uint8_t *data;
+    /* the coefficients of every component live in a grid of 8x8 blocks as
+     * large as the padded MCU grid, so scans can land on them in any order */
+    int mcu_cols;
+    int mcu_rows;
+    int bg_w;  // block columns, mcu_cols * horizontal max
+    int bg_h;  // block rows, mcu_rows * vertical max
+    int hmax;  // largest horizontal sampling factor
+    int vmax;  // largest vertical sampling factor
 }JPG;
 
 

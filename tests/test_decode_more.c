@@ -1,8 +1,9 @@
 /* Decode the sub-formats and edge paths that test_decode.c's minimal files do
  * not reach: the alternate bitmap layouts, the ascii and pam netpbm variants,
  * tga colour maps, 16 bit and rle pixels, every png filter, the tiff
- * compressors and byte orders, gif extensions and frames, jpeg sampling and
- * restart intervals, ico directory selection and the exr channel types and
+ * compressors and byte orders, gif extensions and frames, jpeg sampling,
+ * restart intervals and progressive scans, ico directory selection and the
+ * exr channel types and
  * line orders. Every pixel here is written by hand with known values, so the
  * checks compare channel placement, not just the image size.
  *
@@ -1358,9 +1359,10 @@ jpg_dht(struct wbuf *w, int class, int id, unsigned symbol)
 }
 
 static void
-jpg_sof(struct wbuf *w, int width, int height, int ncomp, const uint8_t *hv)
+jpg_sof(struct wbuf *w, int code, int width, int height, int ncomp,
+        const uint8_t *hv)
 {
-    jpg_marker(w, 0xC0);
+    jpg_marker(w, (unsigned)code);
     jpg_length(w, (uint16_t)(8 + 3 * ncomp));
     wb_u8(w, 8);
     wb_be16(w, (uint16_t)height);
@@ -1373,19 +1375,22 @@ jpg_sof(struct wbuf *w, int width, int height, int ncomp, const uint8_t *hv)
     }
 }
 
+/* cids selects the components of the scan; ss/se is the spectral band and
+ * ah/al the successive approximation bits. Both entropy tables are table 0. */
 static void
-jpg_sos(struct wbuf *w, int ncomp)
+jpg_sos(struct wbuf *w, int ncomp, const uint8_t *cids, int ss, int se,
+        int ah, int al)
 {
     jpg_marker(w, 0xDA);
     jpg_length(w, (uint16_t)(6 + 2 * ncomp));
     wb_u8(w, (unsigned)ncomp);
     for (int i = 0; i < ncomp; i++) {
-        wb_u8(w, (unsigned)(i + 1));
+        wb_u8(w, cids[i]);
         wb_u8(w, 0);
     }
-    wb_u8(w, 0);
-    wb_u8(w, 63);
-    wb_u8(w, 0);
+    wb_u8(w, (unsigned)ss);
+    wb_u8(w, (unsigned)se);
+    wb_u8(w, (unsigned)((ah << 4) | al));
 }
 
 static void
@@ -1414,7 +1419,7 @@ jpg_build(uint8_t *out, int width, int height, int ncomp, const uint8_t *hv,
         jpg_app0(&w);
     }
     jpg_dqt(&w);
-    jpg_sof(&w, width, height, ncomp, hv);
+    jpg_sof(&w, 0xC0, width, height, ncomp, hv);
     jpg_dht(&w, 0, 0, 0);
     jpg_dht(&w, 1, 0, 0x00);
     if (comment) {
@@ -1427,7 +1432,10 @@ jpg_build(uint8_t *out, int width, int height, int ncomp, const uint8_t *hv,
         jpg_length(&w, 4);
         wb_be16(&w, 1);
     }
-    jpg_sos(&w, ncomp);
+    {
+        static const uint8_t cids[4] = {1, 2, 3, 4};
+        jpg_sos(&w, ncomp, cids, 0, 63, 0, 0);
+    }
     wb_bytes(&w, tail, (size_t)taillen);
     jpg_marker(&w, 0xD9);
     return w.n;
@@ -1491,6 +1499,386 @@ emit_jpg_queue(void)
     return write_file("jpg_queue.jpg", file, n);
 }
 
+/* canonical huffman table built from code lengths. Symbols must be listed in
+ * order of increasing length, which is the order DHT stores them in. */
+struct jpg_huff {
+    uint8_t count[16];
+    int nsym;
+    uint8_t sym[16];
+    uint8_t len[16];
+    uint16_t code[16];
+};
+
+static void
+jpg_huff_init(struct jpg_huff *h, const uint8_t *lens, const uint8_t *syms,
+              int n)
+{
+    uint16_t code = 0;
+
+    memset(h, 0, sizeof(*h));
+    h->nsym = n;
+    for (int i = 0; i < n; i++) {
+        h->sym[i] = syms[i];
+        h->len[i] = lens[i];
+        h->count[lens[i] - 1]++;
+    }
+    for (int l = 1; l <= 16; l++) {
+        for (int i = 0; i < n; i++) {
+            if (h->len[i] == l) {
+                h->code[i] = code++;
+            }
+        }
+        code <<= 1;
+    }
+}
+
+static void
+jpg_dht_huff(struct wbuf *w, int class, int id, const struct jpg_huff *h)
+{
+    int total = 0;
+
+    jpg_marker(w, 0xC4);
+    for (int i = 0; i < 16; i++) {
+        total += h->count[i];
+    }
+    jpg_length(w, (uint16_t)(19 + total));
+    wb_u8(w, (unsigned)(class << 4 | id));
+    wb_bytes(w, h->count, 16);
+    for (int i = 0; i < h->nsym; i++) {
+        wb_u8(w, h->sym[i]);
+    }
+}
+
+struct jpg_bits {
+    struct wbuf *w;
+    unsigned acc;
+    int nbits;
+};
+
+static void
+jpg_put_bit(struct jpg_bits *b, unsigned bit)
+{
+    b->acc = (b->acc << 1) | (bit & 1);
+    if (++b->nbits == 8) {
+        wb_u8(b->w, b->acc & 0xFF);
+        if ((b->acc & 0xFF) == 0xFF) {
+            wb_u8(b->w, 0x00);
+        }
+        b->acc = 0;
+        b->nbits = 0;
+    }
+}
+
+static void
+jpg_put_bits(struct jpg_bits *b, unsigned v, int n)
+{
+    for (int i = n - 1; i >= 0; i--) {
+        jpg_put_bit(b, (v >> i) & 1);
+    }
+}
+
+static void
+jpg_bits_align(struct jpg_bits *b)
+{
+    while (b->nbits) {
+        jpg_put_bit(b, 1);
+    }
+}
+
+static void
+jpg_put_sym(struct jpg_bits *b, const struct jpg_huff *h, unsigned sym)
+{
+    for (int i = 0; i < h->nsym; i++) {
+        if (h->sym[i] == sym) {
+            jpg_put_bits(b, h->code[i], h->len[i]);
+            return;
+        }
+    }
+    printf("jpg test stream: symbol %x is not in the table\n", sym);
+}
+
+/* amplitude coding of a signed coefficient, ITU-T81 F.1.2.1 */
+static void
+jpg_put_value(struct jpg_bits *b, int v, int n)
+{
+    if (n == 0) {
+        return;
+    }
+    jpg_put_bits(b, (unsigned)(v < 0 ? v + (1 << n) - 1 : v), n);
+}
+
+static void
+jpg_put_dc(struct jpg_bits *b, const struct jpg_huff *h, int v)
+{
+    int n = 0;
+    int av = v < 0 ? -v : v;
+
+    while (av) {
+        n++;
+        av >>= 1;
+    }
+    jpg_put_sym(b, h, (unsigned)n);
+    jpg_put_value(b, v, n);
+}
+
+/* sym is an AC run/size byte, v the coefficient it introduces */
+static void
+jpg_put_ac(struct jpg_bits *b, const struct jpg_huff *h, unsigned sym, int v)
+{
+    jpg_put_sym(b, h, sym);
+    jpg_put_value(b, v, (int)(sym & 15));
+}
+
+static void
+jpg_bits_reset(struct jpg_bits *b, struct wbuf *w)
+{
+    memset(b, 0, sizeof(*b));
+    b->w = w;
+}
+
+static const uint8_t jpg_gray_hv[1] = {0x11};
+static const uint8_t jpg_gray_cid[1] = {1};
+static const uint8_t jpg_color_hv[3] = {0x22, 0x11, 0x11};
+static const uint8_t jpg_color_cids[3] = {1, 2, 3};
+
+/* Gray coefficients: dc 5, then 5, -3, 1 and 2 at zigzag positions 1, 2, 3
+ * and 5. The baseline walks them in one scan. */
+static int
+emit_jpg_gray_baseline(void)
+{
+    static const uint8_t dc_lens[1] = {1};
+    static const uint8_t dc_syms[1] = {3};
+    static const uint8_t ac_lens[5] = {2, 2, 3, 3, 3};
+    static const uint8_t ac_syms[5] = {0x03, 0x02, 0x01, 0x12, 0x00};
+    struct jpg_huff dc, ac;
+    uint8_t file[512];
+    struct wbuf w = {file, 0};
+    struct jpg_bits b;
+
+    jpg_huff_init(&dc, dc_lens, dc_syms, 1);
+    jpg_huff_init(&ac, ac_lens, ac_syms, 5);
+    jpg_marker(&w, 0xD8);
+    jpg_dqt(&w);
+    jpg_sof(&w, 0xC0, 8, 8, 1, jpg_gray_hv);
+    jpg_dht_huff(&w, 0, 0, &dc);
+    jpg_dht_huff(&w, 1, 0, &ac);
+    jpg_sos(&w, 1, jpg_gray_cid, 0, 63, 0, 0);
+
+    jpg_bits_reset(&b, &w);
+    jpg_put_dc(&b, &dc, 5);
+    jpg_put_ac(&b, &ac, 0x03, 5);
+    jpg_put_ac(&b, &ac, 0x02, -3);
+    jpg_put_ac(&b, &ac, 0x01, 1);
+    jpg_put_ac(&b, &ac, 0x12, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_marker(&w, 0xD9);
+    return write_file("jpg_base_gray.jpg", file, w.n);
+}
+
+/* The same coefficients as progressive scans: dc first, then the two large
+ * ac coefficients at Al=1, a refinement that introduces the small one, and
+ * two more bands. */
+static int
+emit_jpg_gray_progressive(void)
+{
+    static const uint8_t dc_lens[1] = {1};
+    static const uint8_t dc_syms[1] = {3};
+    static const uint8_t first_lens[3] = {1, 2, 2};
+    static const uint8_t first_syms[3] = {0x02, 0x01, 0x00};
+    static const uint8_t refine_lens[1] = {1};
+    static const uint8_t refine_syms[1] = {0x01};
+    static const uint8_t eob_lens[1] = {1};
+    static const uint8_t eob_syms[1] = {0x00};
+    static const uint8_t tail_lens[1] = {1};
+    static const uint8_t tail_syms[1] = {0x12};
+    struct jpg_huff dc, first, refine, eob, tail;
+    uint8_t file[512];
+    struct wbuf w = {file, 0};
+    struct jpg_bits b;
+
+    jpg_huff_init(&dc, dc_lens, dc_syms, 1);
+    jpg_huff_init(&first, first_lens, first_syms, 3);
+    jpg_huff_init(&refine, refine_lens, refine_syms, 1);
+    jpg_huff_init(&eob, eob_lens, eob_syms, 1);
+    jpg_huff_init(&tail, tail_lens, tail_syms, 1);
+
+    jpg_marker(&w, 0xD8);
+    jpg_dqt(&w);
+    jpg_sof(&w, 0xC2, 8, 8, 1, jpg_gray_hv);
+
+    jpg_dht_huff(&w, 0, 0, &dc);
+    jpg_sos(&w, 1, jpg_gray_cid, 0, 0, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_dc(&b, &dc, 5);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &first);
+    jpg_sos(&w, 1, jpg_gray_cid, 1, 3, 0, 1);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &first, 0x02, 2);
+    jpg_put_ac(&b, &first, 0x01, -1);
+    jpg_put_sym(&b, &first, 0x00);
+    jpg_bits_align(&b);
+
+    /* refinement: correction bits for 1 and 2, then the new coefficient at
+     * position 3 */
+    jpg_dht_huff(&w, 1, 0, &refine);
+    jpg_sos(&w, 1, jpg_gray_cid, 1, 3, 1, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &refine, 0x01, 1);
+    jpg_put_bit(&b, 1);
+    jpg_put_bit(&b, 1);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &tail);
+    jpg_sos(&w, 1, jpg_gray_cid, 4, 5, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &tail, 0x12, 2);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &eob);
+    jpg_sos(&w, 1, jpg_gray_cid, 6, 63, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_sym(&b, &eob, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_marker(&w, 0xD9);
+    return write_file("jpg_prog_gray.jpg", file, w.n);
+}
+
+/* 4:2:0 colour coefficients shared by the baseline and progressive files:
+ * Y (0,0) dc 4 ac@1 2, Y (1,0) ac@2 2, Y (0,1) ac@3 -2, Cb dc 4 ac@2 -2,
+ * Cr dc -4 ac@1 2. */
+static int
+emit_jpg_420_baseline(void)
+{
+    static const uint8_t dc_lens[2] = {1, 1};
+    static const uint8_t dc_syms[2] = {0, 3};
+    static const uint8_t ac_lens[4] = {1, 2, 3, 3};
+    static const uint8_t ac_syms[4] = {0x02, 0x12, 0x22, 0x00};
+    struct jpg_huff dc, ac;
+    uint8_t file[1024];
+    struct wbuf w = {file, 0};
+    struct jpg_bits b;
+
+    jpg_huff_init(&dc, dc_lens, dc_syms, 2);
+    jpg_huff_init(&ac, ac_lens, ac_syms, 4);
+    jpg_marker(&w, 0xD8);
+    jpg_dqt(&w);
+    jpg_sof(&w, 0xC0, 16, 16, 3, jpg_color_hv);
+    jpg_dht_huff(&w, 0, 0, &dc);
+    jpg_dht_huff(&w, 1, 0, &ac);
+    jpg_sos(&w, 3, jpg_color_cids, 0, 63, 0, 0);
+
+    jpg_bits_reset(&b, &w);
+    jpg_put_dc(&b, &dc, 4);
+    jpg_put_ac(&b, &ac, 0x02, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_dc(&b, &dc, -4);
+    jpg_put_ac(&b, &ac, 0x12, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_dc(&b, &dc, 0);
+    jpg_put_ac(&b, &ac, 0x22, -2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_dc(&b, &dc, 0);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_dc(&b, &dc, 4);
+    jpg_put_ac(&b, &ac, 0x12, -2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_dc(&b, &dc, -4);
+    jpg_put_ac(&b, &ac, 0x02, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_marker(&w, 0xD9);
+    return write_file("jpg_base_420.jpg", file, w.n);
+}
+
+/* The same 4:2:0 coefficients as a progressive image: an interleaved dc scan
+ * followed by one non interleaved ac scan per component, the last Y band
+ * using an end-of-band run across the remaining blocks. */
+static int
+emit_jpg_420_progressive(void)
+{
+    static const uint8_t dc_lens[2] = {1, 1};
+    static const uint8_t dc_syms[2] = {0, 3};
+    static const uint8_t ac_lens[4] = {1, 2, 3, 3};
+    static const uint8_t ac_syms[4] = {0x02, 0x12, 0x22, 0x00};
+    static const uint8_t run_lens[2] = {1, 1};
+    static const uint8_t run_syms[2] = {0x00, 0x20};
+    static const uint8_t cb_lens[2] = {1, 1};
+    static const uint8_t cb_syms[2] = {0x12, 0x00};
+    static const uint8_t cr_lens[2] = {1, 1};
+    static const uint8_t cr_syms[2] = {0x02, 0x00};
+    static const uint8_t y_cid[1] = {1};
+    static const uint8_t cb_cid[1] = {2};
+    static const uint8_t cr_cid[1] = {3};
+    struct jpg_huff dc, ac, run, cb, cr;
+    uint8_t file[1024];
+    struct wbuf w = {file, 0};
+    struct jpg_bits b;
+
+    jpg_huff_init(&dc, dc_lens, dc_syms, 2);
+    jpg_huff_init(&ac, ac_lens, ac_syms, 4);
+    jpg_huff_init(&run, run_lens, run_syms, 2);
+    jpg_huff_init(&cb, cb_lens, cb_syms, 2);
+    jpg_huff_init(&cr, cr_lens, cr_syms, 2);
+
+    jpg_marker(&w, 0xD8);
+    jpg_dqt(&w);
+    jpg_sof(&w, 0xC2, 16, 16, 3, jpg_color_hv);
+
+    jpg_dht_huff(&w, 0, 0, &dc);
+    jpg_sos(&w, 3, jpg_color_cids, 0, 0, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_dc(&b, &dc, 4);
+    jpg_put_dc(&b, &dc, -4);
+    jpg_put_dc(&b, &dc, 0);
+    jpg_put_dc(&b, &dc, 0);
+    jpg_put_dc(&b, &dc, 4);
+    jpg_put_dc(&b, &dc, -4);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &ac);
+    jpg_sos(&w, 1, y_cid, 1, 5, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &ac, 0x02, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_ac(&b, &ac, 0x12, 2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_ac(&b, &ac, 0x22, -2);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_put_sym(&b, &ac, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &run);
+    jpg_sos(&w, 1, y_cid, 6, 63, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_sym(&b, &run, 0x00);
+    jpg_put_sym(&b, &run, 0x20);
+    jpg_put_bits(&b, 0, 2);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &cb);
+    jpg_sos(&w, 1, cb_cid, 1, 5, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &cb, 0x12, -2);
+    jpg_put_sym(&b, &cb, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_dht_huff(&w, 1, 0, &cr);
+    jpg_sos(&w, 1, cr_cid, 1, 5, 0, 0);
+    jpg_bits_reset(&b, &w);
+    jpg_put_ac(&b, &cr, 0x02, 2);
+    jpg_put_sym(&b, &cr, 0x00);
+    jpg_bits_align(&b);
+
+    jpg_marker(&w, 0xD9);
+    return write_file("jpg_prog_420.jpg", file, w.n);
+}
+
 /* every zero block idct's to 128, and the neutral chroma keeps it there */
 static int
 check_jpg_neutral(const char *name, int width, int height)
@@ -1530,6 +1918,68 @@ check_jpg_neutral(const char *name, int width, int height)
     remove(name);
     if (!rc) {
         printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
+/* a baseline and a progressive file carrying the same coefficients have to
+ * decode to the same pixels. The neutral check makes sure the comparison is
+ * not between two empty images. */
+static int
+check_jpg_same(const char *a, const char *b)
+{
+    struct file_ops *ops_a = file_probe(a);
+    struct file_ops *ops_b = file_probe(b);
+    struct pic *pa = NULL, *pb = NULL;
+    int rc = 0;
+
+    if (!ops_a || !ops_b || strcmp(ops_a->name, "JPG") ||
+        strcmp(ops_b->name, "JPG")) {
+        printf("%s/%s: not detected as JPG\n", a, b);
+        return -1;
+    }
+    pa = file_load(ops_a, a, 0);
+    pb = file_load(ops_b, b, 0);
+    if (!pa || !pb) {
+        printf("%s/%s: did not decode\n", a, b);
+        rc = -1;
+    } else if (pa->width != pb->width || pa->height != pb->height ||
+               pa->pitch != pb->pitch) {
+        printf("%s/%s: %dx%d pitch %d vs %dx%d pitch %d\n", a, b, pa->width,
+               pa->height, pa->pitch, pb->width, pb->height, pb->pitch);
+        rc = -1;
+    } else {
+        const uint8_t *qa = pa->pixels;
+        const uint8_t *qb = pb->pixels;
+        size_t len = (size_t)pa->pitch * pa->height;
+        int colored = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (qa[i] != qb[i]) {
+                printf("%s/%s: byte %zu is %d in the baseline, %d in the "
+                       "progressive file\n", a, b, i, qa[i], qb[i]);
+                rc = -1;
+                break;
+            }
+            if ((i & 3) != 3 && qa[i] != 128) {
+                colored = 1;
+            }
+        }
+        if (!rc && !colored) {
+            printf("%s/%s: every pixel is neutral, the coefficients were "
+                   "lost\n", a, b);
+            rc = -1;
+        }
+    }
+    if (pa) {
+        file_free(ops_a, pa);
+    }
+    if (pb) {
+        file_free(ops_b, pb);
+    }
+    remove(a);
+    remove(b);
+    if (!rc) {
+        printf("%s == %s: ok\n", a, b);
     }
     return rc;
 }
@@ -2311,8 +2761,18 @@ int main(void)
     }
 
     /* jpeg */
-    if (emit_jpg_gray() || check_pixels("jpg_gray.jpg", "JPG", 8, 8, NULL, 0,
-                                        0)) {
+    if (emit_jpg_gray() || check_pixels("jpg_gray.jpg", "JPG", 8, 8,
+            (const struct want_px[]){{0, 0, 128}, {0, 1, 128}, {0, 2, 128},
+                                     {0, 3, 255}},
+            4, 0)) {
+        failed++;
+    }
+    if (emit_jpg_gray_baseline() || emit_jpg_gray_progressive() ||
+        check_jpg_same("jpg_base_gray.jpg", "jpg_prog_gray.jpg")) {
+        failed++;
+    }
+    if (emit_jpg_420_baseline() || emit_jpg_420_progressive() ||
+        check_jpg_same("jpg_base_420.jpg", "jpg_prog_420.jpg")) {
         failed++;
     }
     if (emit_jpg_444() || check_jpg_neutral("jpg_444.jpg", 8, 8)) {

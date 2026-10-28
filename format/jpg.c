@@ -144,6 +144,8 @@ read_dht(JPG* j, FILE *f)
         for (int i =0; i < 16; i ++) {
             len += j->dht[ac][id].num_codecs[i];
         }
+        // a progressive image may redefine a table between scans
+        free(j->dht[ac][id].data);
         j->dht[ac][id].data = malloc(len);
         FFREAD_IGNORE(j->dht[ac][id].data, len, 1, f);
         j->dht[ac][id].len = len;
@@ -245,196 +247,206 @@ encode_vlc(int code)
 }
 
 static void
-dequant_data_unit(struct jpg_decoder *d, int16_t dstbuf[64], int16_t srcbuf[64], int end)
+dequant_data_unit(const uint16_t *quant, int16_t dstbuf[64], const int16_t srcbuf[64])
 {
-    for (int i = 0; i <= end; i++) {
-        dstbuf[i] = srcbuf[i] * d->quant[i];
+    for (int i = 0; i < 64; i++) {
+        dstbuf[i] = srcbuf[i] * quant[i];
     }
 }
 
-static bool
-decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[64], int start, int end, int high, int low, int *skip)
+static void
+refine_coefficient(struct huffman_codec *hdec, int16_t *coef, int positive,
+                   int negative)
 {
-    int dc, ac;
-    huffman_tree *dc_tree = d->dc;
-    huffman_tree *ac_tree = d->ac;
-    if (start == 0 && high != 0) {
-        dc = READ_BIT(hdec->v);
-        buf[0] |= dc << low;
-    } else if (start == 0 && high == 0) {
-        dc = huffman_decode_symbol(hdec, dc_tree);
-        if (dc == -1) {
-            VERR(jpg, "invalid dc value");
-            return false;
+    if (READ_BIT(hdec->v) == 1) {
+        if (!(*coef & positive)) {
+            *coef += *coef > 0 ? positive : negative;
         }
-        if (dc > 11) {
-            VERR(jpg, "dc length greater than 11");
-            return false;
-        }
-        // VDBG(jpg, "DC read %d bits", dc);
-        dc = get_vlc(READ_BITS(hdec->v, dc), dc);
-        dc += d->prev_dc;
-        d->prev_dc = dc;
-        buf[0] = dc * (1 << low);
-        // VDBG(jpg, "DC read value is %d", dc);
-        // fprintf(vlog_get_stream(), "DC Now:\n ");
-        // for (int i = 0; i < 8; i++) {
-        //     for (int j = 0; j < 8; j++) {
-        //         fprintf(vlog_get_stream(), "%d ", buf[i * 8 + j]);
-        //     }
-        //     fprintf(vlog_get_stream(), "\n");
-        // }
     }
-    if (end > 0) {
-        int positive = 1 << low;
-        int negative = (uint32_t)(-1) << high;
-#if 0
-        fprintf(vlog_get_stream(), "AC before:\n ");
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                fprintf(vlog_get_stream(), "%d ", buf[i * 8 + j]);
+}
+
+/* Decode one data unit. A baseline scan runs start = 0, end = 63, high = 0.
+ * A progressive scan hands over its spectral band and successive
+ * approximation bits, and eobrun carries the end-of-band run across blocks
+ * and MCUs until a restart marker or the end of the scan. */
+static bool
+decode_data_unit(struct huffman_codec *hdec, struct jpg_decoder *d, int16_t buf[64],
+                 int start, int end, int high, int low, int *eobrun)
+{
+    const int positive = 1 << low;
+    const int negative = -positive;
+
+    if (start == 0) {
+        if (high == 0) {
+            int dc = huffman_decode_symbol(hdec, d->dc);
+            if (dc < 0) {
+                VERR(jpg, "invalid dc value");
+                return false;
             }
-            fprintf(vlog_get_stream(), "\n");
-        }
-#endif
-        int i = start;
-        // read AC coff
-        if (start == 0) {
-            // baseline, just increment
-            i = 1;
+            if (dc > 11) {
+                VERR(jpg, "dc length greater than 11");
+                return false;
+            }
+            if (dc) {
+                d->prev_dc += get_vlc(READ_BITS(hdec->v, dc), dc);
+            }
+            buf[0] = d->prev_dc * positive;
         } else {
-            if (high == 0) {
-                // ac first visit
-                if (*skip > 0) {
-                    (*skip) -= 1;
-                    return true;
-                }
-            } else {
-                // ac refine
-                if ((*skip) > 0) {
-                    for (; i <= end; i++) {
-                        if (buf[zigzag[i]]!= 0) {
-                            if (READ_BIT(hdec->v) == 1) {
-                                if ((buf[zigzag[i]] & positive) == 0) {
-                                    if (buf[zigzag[i]] >= 0) {
-                                        buf[zigzag[i]] += positive;
-                                    } else {
-                                        buf[zigzag[i]] += negative;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    (*skip) -= 1;
-                    return true;
-                }
+            if (READ_BIT(hdec->v)) {
+                buf[0] |= positive;
             }
         }
-        for (; i <= end;) {
-            ac = huffman_decode_symbol(hdec, ac_tree);
-            if (ac == -1) {
+        if (end == 0) {
+            return true;
+        }
+    }
+
+    int i = start ? start : 1;
+    if (high == 0) {
+        /* first visit of the band: only coefficients not seen before */
+        if (*eobrun > 0) {
+            (*eobrun)--;
+            return true;
+        }
+        while (i <= end) {
+            int ac = huffman_decode_symbol(hdec, d->ac);
+            if (ac < 0) {
                 VERR(jpg, "invalid ac value for %d", i);
                 return false;
             }
             int lead_zero = (ac >> 4) & 0xF;
-            ac = (ac & 0xF);
+            int bits = ac & 0xF;
 
-            if (ac == EOB) {
-                //skip 16 zero
-                if (lead_zero == 15)
-                    lead_zero ++;
-                //fill all left ac as zero
-                else {
-                    if (lead_zero == 0 && start == 0) { 
-                        lead_zero = 64 - i;
-                    }
-                    if (start > 0) {
-                        if (high == 0) {
-                            //for ac first 0-14
-                            *skip = (1<< lead_zero)-1;
-                            *skip += READ_BITS(hdec->v, lead_zero);
-                        } else {
-                            //for ac refine
-                            *skip = (1 << lead_zero);
-                            *skip += READ_BITS(hdec->v, lead_zero);
-                        }
-                    }
+            if (bits == 0) {
+                if (lead_zero == 15) {
+                    // ZRL, sixteen zeros
+                    i += 16;
+                    continue;
                 }
-            } else if (ac != 0 && high > 0) {
-                if (READ_BIT(hdec->v) == 1) {
-                    ac = positive;
-                } else {
-                    ac = negative;
+                // the run covers this block and the eobrun blocks after it
+                *eobrun = (1 << lead_zero) - 1;
+                if (lead_zero) {
+                    *eobrun += READ_BITS(hdec->v, lead_zero);
                 }
+                return true;
             }
-
-            while (lead_zero > 0 && i <= end) {
-                if(high && buf[zigzag[i]]!=0) {
-                    if (READ_BIT(hdec->v) == 1) {
-                        if ((buf[zigzag[i]] & positive) == 0) {
-                            buf[zigzag[i]] += positive;
-                        } else {
-                            buf[zigzag[i]] += negative;
-                        }
-                    }
-                } else if (high) {
-                    lead_zero --;
-                } else {
-                    buf[zigzag[i]] = 0;
-                    lead_zero --;
-                }
-                i++;
+            i += lead_zero;
+            if (i > end) {
+                VERR(jpg, "ac run %d past the band end %d", lead_zero, end);
+                return false;
             }
-
-            if (ac) {
-                if (high) {
-                    buf[zigzag[i++]] = ac;
-                } else {
-                    // VDBG(jpg, "AC read %d bits", ac);
-                    ac = get_vlc(READ_BITS(hdec->v, ac), ac);
-                    // VDBG(jpg, "AC read value is %d", ac);
-                    buf[zigzag[i++]] = ac * (1 << low);
-                }
-            }
-
+            buf[zigzag[i]] = get_vlc(READ_BITS(hdec->v, bits), bits) * positive;
+            i++;
         }
-#if 0
-        fprintf(vlog_get_stream(), "after \n ");
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                fprintf(vlog_get_stream(), "%d ", buf[i * 8 + j]);
+        return true;
+    }
+
+    /* refinement visit: coefficients already set only get a correction bit */
+    if (*eobrun > 0) {
+        for (; i <= end; i++) {
+            if (buf[zigzag[i]]) {
+                refine_coefficient(hdec, &buf[zigzag[i]], positive, negative);
             }
-            fprintf(vlog_get_stream(), "\n");
         }
-#endif
+        (*eobrun)--;
+        return true;
+    }
+
+    while (i <= end) {
+        int ac = huffman_decode_symbol(hdec, d->ac);
+        if (ac < 0) {
+            VERR(jpg, "invalid ac value for %d", i);
+            return false;
+        }
+        int lead_zero = (ac >> 4) & 0xF;
+        int bits = ac & 0xF;
+        int fresh = 0;
+
+        if (bits == 0) {
+            if (lead_zero != 15) {
+                *eobrun = 1 << lead_zero;
+                if (lead_zero) {
+                    *eobrun += READ_BITS(hdec->v, lead_zero);
+                }
+                for (; i <= end; i++) {
+                    if (buf[zigzag[i]]) {
+                        refine_coefficient(hdec, &buf[zigzag[i]], positive, negative);
+                    }
+                }
+                (*eobrun)--;
+                return true;
+            }
+            // ZRL, sixteen zeros
+        } else {
+            if (bits != 1) {
+                VERR(jpg, "invalid refinement size %d", bits);
+                return false;
+            }
+            fresh = READ_BIT(hdec->v) ? positive : negative;
+        }
+
+        while (i <= end) {
+            int16_t *coef = &buf[zigzag[i]];
+            if (*coef) {
+                refine_coefficient(hdec, coef, positive, negative);
+            } else {
+                if (lead_zero == 0) {
+                    break;
+                }
+                lead_zero--;
+            }
+            i++;
+        }
+        if (fresh) {
+            if (i > end) {
+                VERR(jpg, "refined coefficient past the band end %d", end);
+                return false;
+            }
+            buf[zigzag[i]] = fresh;
+        }
+        i++;
     }
 
     return true;
 }
 
-static int 
-init_decoder(JPG* j, struct jpg_decoder *d, uint8_t comp_id)
+static huffman_tree *
+build_huffman_tree(struct dht *table, int id)
 {
-    if (comp_id >= j->sof.components_num) {
-        return -1;
+    if (!table->data || table->len <= 0) {
+        return NULL;
     }
-    huffman_tree * dc_tree = huffman_tree_init();
-    huffman_tree * ac_tree = huffman_tree_init();
-    int dc_ht_id = j->sos.comps[comp_id].DC_entropy;
-    int ac_ht_id = j->sos.comps[comp_id].AC_entropy;
-    struct huffman_symbol *dcsym = huffman_symbol_alloc(j->dht[0][dc_ht_id].num_codecs, j->dht[0][dc_ht_id].data);
-    struct huffman_symbol *acsym = huffman_symbol_alloc(j->dht[1][ac_ht_id].num_codecs, j->dht[1][ac_ht_id].data);
-    huffman_build_lookup_table(dc_tree, dc_ht_id, dcsym);
-    huffman_build_lookup_table(ac_tree, ac_ht_id, acsym);
-    // huffman_dump_table(vlog_get_stream(), dc_tree);
-    // huffman_dump_table(vlog_get_stream(), ac_tree);
+    huffman_tree *tree = huffman_tree_init();
+    struct huffman_symbol *sym =
+        huffman_symbol_alloc(table->num_codecs, table->data);
+    huffman_build_lookup_table(tree, id, sym);
+    free(sym->syms);
+    free(sym);
+    return tree;
+}
 
+/* The scan carries its own huffman table selectors, and a component that only
+ * appears in another scan may not have the table at all: only build what this
+ * scan is going to use. */
+static int
+init_decoder(JPG *j, struct jpg_decoder *d, int comp_id, int dc_id, int ac_id,
+             bool need_dc, bool need_ac)
+{
+    memset(d, 0, sizeof(*d));
+    if (need_dc) {
+        d->dc = build_huffman_tree(&j->dht[DHT_CLASS_DC][dc_id], dc_id);
+        if (!d->dc) {
+            return -1;
+        }
+    }
+    if (need_ac) {
+        d->ac = build_huffman_tree(&j->dht[DHT_CLASS_AC][ac_id], ac_id);
+        if (!d->ac) {
+            return -1;
+        }
+    }
+    d->quant = j->dqt[j->sof.colors[comp_id].qt_id & 3].tdata;
     d->prev_dc = 0;
-    d->dc = dc_tree;
-    d->ac = ac_tree;
-    d->quant = j->dqt[j->sof.colors[comp_id].qt_id].tdata;
-    d->last_rst_marker_seen = 0;
-
     return 0;
 }
 
@@ -454,182 +466,290 @@ destroy_decoder(struct jpg_decoder *d)
 }
 
 static void
-JPG_decode_scan(JPG* j, uint8_t *rawdata, int len)
+free_scan_decoder(struct jpg_decoder *d)
 {
-    uint8_t *data = rawdata;
-    if (!rawdata || !len) {
-        return ;
+    if (d->dc) {
+        huffman_cleanup(d->dc);
+        d->dc = NULL;
     }
-    memset(j->data, 0, j->data_len);
-    // each component owns a decoder, could be CMYK
-    const struct dct_ops *dct = get_dct_ops(16);
-    const struct cs_ops *cs_bgr = get_cs_ops(16);
-
-    struct jpg_decoder *d[4];
-    //components_num is 1 or 3
-    for (int i = 0; i < j->sof.components_num; i ++) {
-        d[i] = malloc(sizeof(struct jpg_decoder));
-        init_decoder(j, d[i], i);
+    if (d->ac) {
+        huffman_cleanup(d->ac);
+        d->ac = NULL;
     }
+}
 
-    // stride value from dc
-    int yvertical = j->sof.colors[0].vertical;
-    int yhorizontal = j->sof.colors[0].horizontal;
-    int ystride =  yvertical* 8;  //means lines per mcu
-    int xstride =  yhorizontal * 8;  //means rows per mcu
+static void
+component_sampling(const JPG *j, int cid, int *h, int *v)
+{
+    *h = j->sof.colors[cid].horizontal;
+    *v = j->sof.colors[cid].vertical;
+    if (*h <= 0) {
+        *h = 1;
+    }
+    if (*v <= 0) {
+        *v = 1;
+    }
+}
 
-    uint8_t *ptr;
-    int width = ((j->sof.width + 7) >> 3) << 3; //algin to 8
-    int height = j->sof.height; //((j->sof.height + 7) >> 3) << 3;
-    int pitch = ((width + xstride - 1) / xstride) * xstride * 4;
+static void
+scan_restart(JPG *j, struct jpg_decoder dec[4], bool used[4],
+             struct huffman_codec *hdec, int *eobrun, int *restarts)
+{
+    *restarts = j->dri.interval;
+    for (int i = 0; i < 4; i++) {
+        if (used[i]) {
+            reset_decoder(&dec[i]);
+        }
+    }
+    huffman_reset_stream(hdec);
+    *eobrun = 0;
+}
 
-    int restarts = j->dri.interval;
-
+/* Decode one scan into the coefficient buffers. Everything is turned into
+ * pixels once, after the last scan, so scans may visit the blocks in any
+ * order and cover any band. */
+static void
+JPG_decode_scan(JPG *j, uint8_t *rawdata, int len)
+{
+    /* the scan data is handed over to the huffman codec below, which frees it */
+    if (!rawdata) {
+        return;
+    }
+    if (!len || !j->yuv[0] || j->sof.components_num < 1) {
+        free(rawdata);
+        return;
+    }
+    int nscan = j->sos.nums;
+    if (nscan < 1 || nscan > 4) {
+        VERR(jpg, "invalid scan component count %d", nscan);
+        free(rawdata);
+        return;
+    }
     int start = j->sos.predictor_start;
     int end = j->sos.predictor_end;
     int high = j->sos.approx_bits_h;
     int low = j->sos.approx_bits_l;
-
-#if 0
-    hexdump(stdout, "jpg raw data", "", data, 166);
-#endif
-    struct huffman_codec * hdec = huffman_codec_init(data, len);
-
-    int16_t Y[3][64*4], *U, *V;
-    int16_t dummy[64] = {0};
-    uint8_t table_cid[4] = {0};
-    int16_t *yuv[3];
-    int skip = 0;
-    for (uint8_t i = 0; i < j->sof.components_num; ++i) {
-        // int v = j->sof.colors[i].vertical;
-        // int h = j->sof.colors[i].horizontal;
-        table_cid[j->sof.colors[i].cid] = i;
-        // assert(h * v <= 4);
+    if (start > end || end > 63) {
+        VERR(jpg, "invalid spectral band %d-%d", start, end);
+        free(rawdata);
+        return;
     }
 
-    for (int y = 0; y < height; y += ystride) {
-        ptr = j->data + y * pitch;
-        for (int x = 0; x < width; x += xstride) {
-            VDBG(jpg, "(%d, %d) width %d MCU index %d", x, y, width, y / 8 * (width) / 8 + x / 8);
-            // for YUV420, get 4 DCU for Y and 1 DCU for U and 1 DCU for V
-            yuv[0] = j->yuv[0] + 64 * (y / 8 * (width) / 8 + x/8);
-            yuv[1] = j->yuv[1] + 64 * (y / 8 * (width) / 8 + x/8);
-            yuv[2] = j->yuv[2] + 64 * (y / 8 * (width) / 8 + x/8);
+    int ncomp = j->sof.components_num > 3 ? 3 : j->sof.components_num;
+    int table_cid[256];
+    for (int i = 0; i < 256; i++) {
+        table_cid[i] = -1;
+    }
+    for (int i = 0; i < ncomp; i++) {
+        table_cid[j->sof.colors[i].cid] = i;
+    }
 
-            for (uint8_t i = 0; i < j->sos.nums; ++i) {
-                int cid = table_cid[j->sos.comps[i].component_selector];
-                int v = j->sof.colors[cid].vertical;
-                int h = j->sof.colors[cid].horizontal;
+    struct jpg_decoder dec[4];
+    bool used[4] = {false, false, false, false};
+    int cid_of_scan[4] = {0, 0, 0, 0};
+    memset(dec, 0, sizeof(dec));
 
-                for (int vi = 0; vi < v && y + vi * 8 < height; vi ++) {
-                    for (int hi = 0; hi < h && x + hi * 8 < width; hi ++) {
-                        VDBG(jpg, "decode at (%d, %d) [%d, %d] for %d", x, y, hi, vi, cid);
-                        if (!decode_data_unit(hdec, d[cid], &yuv[cid][64 * (vi * h + hi)], start, end, high, low, &skip)) {
-                            // those MCU at the edge could be incomplete
-                            VDBG(jpg, "fail at (%d, %d) [%d, %d] for %d", x, y, hi, vi, cid);
-                            continue;
-                        }
-                        // memcpy(&Y[cid][64 * (vi * h + hi)], , 64 * 2);
-                        // dequant_data_unit(d[cid], &Y[cid][64 * (vi * h + hi)], &yuv[cid][64 * (vi * h + hi)], start, end);
-                        // dct->idct_8x8(&Y[cid][64 * (vi * h + hi)], 8);
-                    }
-                }
+    for (int i = 0; i < nscan; i++) {
+        int cid = table_cid[j->sos.comps[i].component_selector];
+        if (cid < 0 || cid >= ncomp) {
+            VERR(jpg, "invalid scan component id %d",
+                 j->sos.comps[i].component_selector);
+            goto cleanup;
+        }
+        cid_of_scan[i] = cid;
+        if (!used[cid]) {
+            used[cid] = true;
+            if (init_decoder(j, &dec[cid], cid, j->sos.comps[i].DC_entropy,
+                             j->sos.comps[i].AC_entropy,
+                             start == 0 && high == 0, end > 0) != 0) {
+                VERR(jpg, "missing huffman table for component %d", cid);
+                goto cleanup;
             }
-            for (uint8_t k = 0; k < j->sof.components_num; k++) {
-                int v = j->sof.colors[k].vertical;
-                int h = j->sof.colors[k].horizontal;
-                for (int vi = 0; vi < v && y + vi * 8 < height; vi ++) {
-                    for (int hi = 0; hi < h && x + hi * 8 < width; hi ++) {
-                        dequant_data_unit(d[k], &Y[k][64 * (vi * h + hi)],
-                                          &yuv[k][64 * (vi * h + hi)], end);
-                        dct->idct_8x8(&Y[k][64 * (vi * h + hi)], 8);
-                    }
-                }
-            }
-
-            if (j->sof.components_num == 1) {
-                U = dummy;
-                V = dummy;
-            } else {
-                U = Y[1];
-                V = Y[2];
-            }
-
-            cs_bgr->YUV_to_BGRA32(ptr, pitch, Y[0], U, V, yvertical, yhorizontal);
-
-            if (restarts > 0) {
-                restarts --;
-                if (restarts == 0) {
-                    restarts = j->dri.interval;
-                    for (int i = 0; i < j->sof.components_num; i ++) {
-                        reset_decoder(d[i]);
-                    }
-                    huffman_reset_stream(hdec);
-                    skip = 0;
-                    // read_next_rst_marker(d[0]);
-                }
-            }
-            ptr += xstride * 4; // skip to next
         }
     }
 
-    // hexdump(stdout, "jpg decode data", j->data, 160);
+    struct huffman_codec *hdec = huffman_codec_init(rawdata, len);
+    int eobrun = 0;
+    int restarts = j->dri.interval;
 
-    for (int i = 0; i < j->sof.components_num; i ++) {
-        destroy_decoder(d[i]);
+    if (nscan > 1) {
+        /* interleaved: every MCU carries h*v blocks of each scan component */
+        for (int my = 0; my < j->mcu_rows; my++) {
+            for (int mx = 0; mx < j->mcu_cols; mx++) {
+                for (int i = 0; i < nscan; i++) {
+                    int cid = cid_of_scan[i];
+                    int h, v;
+                    component_sampling(j, cid, &h, &v);
+                    for (int hy = 0; hy < v; hy++) {
+                        for (int hx = 0; hx < h; hx++) {
+                            int idx = (my * j->vmax + hy) * j->bg_w +
+                                      mx * j->hmax + hx;
+                            if (!decode_data_unit(hdec, &dec[cid],
+                                                  j->yuv[cid] + 64 * idx,
+                                                  start, end, high, low,
+                                                  &eobrun)) {
+                                goto scan_done;
+                            }
+                        }
+                    }
+                }
+                if (restarts > 0 && --restarts == 0) {
+                    scan_restart(j, dec, used, hdec, &eobrun, &restarts);
+                }
+            }
+        }
+    } else {
+        /* non interleaved: one block per MCU, walked on the component's own
+         * block grid */
+        int cid = cid_of_scan[0];
+        int h, v;
+        component_sampling(j, cid, &h, &v);
+        int comp_w = (j->sof.width * h + j->hmax - 1) / j->hmax;
+        int comp_h = (j->sof.height * v + j->vmax - 1) / j->vmax;
+        int bx_n = (comp_w + 7) >> 3;
+        int by_n = (comp_h + 7) >> 3;
+        for (int by = 0; by < by_n; by++) {
+            for (int bx = 0; bx < bx_n; bx++) {
+                int idx = (by / v * j->vmax + by % v) * j->bg_w +
+                          bx / h * j->hmax + bx % h;
+                if (!decode_data_unit(hdec, &dec[cid], j->yuv[cid] + 64 * idx,
+                                      start, end, high, low, &eobrun)) {
+                    goto scan_done;
+                }
+                if (restarts > 0 && --restarts == 0) {
+                    scan_restart(j, dec, used, hdec, &eobrun, &restarts);
+                }
+            }
+        }
     }
 
+scan_done:
     huffman_codec_free(hdec);
+    goto dec_cleanup;
+cleanup:
+    free(rawdata);
+dec_cleanup:
+    for (int i = 0; i < 4; i++) {
+        if (used[i]) {
+            free_scan_decoder(&dec[i]);
+        }
+    }
 }
 
+/* The final pixels are built after every scan landed its coefficients. */
+static void
+JPG_flush_image(JPG *j, int pitch)
+{
+    if (!j->data || !j->yuv[0] || !j->sof.width || !j->sof.height) {
+        return;
+    }
+    memset(j->data, 0, j->data_len);
+
+    const struct dct_ops *dct = get_dct_ops(16);
+    const struct cs_ops *cs_bgr = get_cs_ops(16);
+    int ncomp = j->sof.components_num > 3 ? 3 : j->sof.components_num;
+    int yh, yv;
+    component_sampling(j, 0, &yh, &yv);
+
+    int16_t blk[3][64 * 4];
+    /* neutral chroma for the single component case */
+    int16_t neutral[64];
+    for (int i = 0; i < 64; i++) {
+        neutral[i] = 128;
+    }
+
+    for (int my = 0; my < j->mcu_rows; my++) {
+        for (int mx = 0; mx < j->mcu_cols; mx++) {
+            for (int k = 0; k < ncomp; k++) {
+                int h, v;
+                component_sampling(j, k, &h, &v);
+                const uint16_t *quant =
+                    j->dqt[j->sof.colors[k].qt_id & 3].tdata;
+                for (int vi = 0; vi < v; vi++) {
+                    for (int hi = 0; hi < h; hi++) {
+                        int idx = (my * j->vmax + vi) * j->bg_w +
+                                  mx * j->hmax + hi;
+                        dequant_data_unit(quant, &blk[k][64 * (vi * h + hi)],
+                                          j->yuv[k] + 64 * idx);
+                        dct->idct_8x8(&blk[k][64 * (vi * h + hi)], 8);
+                    }
+                }
+            }
+
+            uint8_t *ptr = j->data + (size_t)(my * 8 * yv) * pitch +
+                           (size_t)(mx * 8 * yh) * 4;
+            void *U = ncomp == 1 ? (void *)neutral : (void *)blk[1];
+            void *V = ncomp == 1 ? (void *)neutral : (void *)blk[2];
+            cs_bgr->YUV_to_BGRA32(ptr, pitch, blk[0], U, V, yv, yh);
+        }
+    }
+}
+
+/* Entropy coded segments run until the next marker. Byte stuffing and the
+ * restart markers are removed here, and the stream is left at the marker so
+ * the main loop can parse it. A scan of a progressive image may be followed
+ * by any marker (usually DHT or SOS), not only EOI. */
 static uint8_t *
 read_compressed_scan(FILE *f, int *len)
 {
-    size_t pos = ftell(f);
+    long pos = ftell(f);
+    long last = pos;
     while (1) {
-        uint8_t c = fgetc(f);
-        if (c == 0xFF) {
-            c = fgetc(f);
-            if (c == 0xD9 || c == 0xC4 || c == 0xDA) {
-                break;
-            }
+        int c = fgetc(f);
+        if (c == EOF) {
+            last = ftell(f);
+            break;
         }
+        if (c != 0xFF) {
+            continue;
+        }
+        int n = fgetc(f);
+        while (n == 0xFF) {
+            n = fgetc(f);
+        }
+        if (n == EOF) {
+            last = ftell(f);
+            break;
+        }
+        if (n == 0x00 || (n >= 0xD0 && n <= 0xD7)) {
+            // stuffed 0xFF or a restart marker inside the entropy data
+            continue;
+        }
+        last = ftell(f) - 2;
+        break;
     }
 
-    size_t last = ftell(f) - 2; //remove EOI length, still enough long
+    long avail = last > pos ? last - pos : 0;
+    uint8_t *compressed = malloc(avail ? (size_t)avail : 1);
+    if (!compressed) {
+        return NULL;
+    }
+    VDBG(jpg, "read image from 0x%lx to 0x%lx", pos, last);
     fseek(f, pos, SEEK_SET);
-    uint8_t* compressed = malloc(last - pos);
-    uint8_t prev , c = fgetc(f);
-    int l = 0, cosum = 1;
-    VDBG(jpg, "read image from 0x%zx to 0x%zx", pos, last);
-    while (cosum < (int)(last - pos)) {
-        /* take 0xFF00 as 0xFF */
-        /* and skip rst marker */
-        prev = c;
-        c = fgetc(f);
-        cosum ++;
-        if (prev != 0xFF) {
-            compressed[l++] = prev;
+    int l = 0;
+    for (long i = 0; i < avail; i++) {
+        int c = fgetc(f);
+        if (c == EOF) {
+            break;
         }
-        // else if (prev == 0xFF && c == 0xD9) {
-        //     break;
-        // }
-        else if (prev == 0xFF && c == 0) {
+        if (c != 0xFF) {
+            compressed[l++] = (uint8_t)c;
+            continue;
+        }
+        int n = fgetc(f);
+        i++;
+        if (n == 0x00) {
+            // stuffed 0xff
             compressed[l++] = 0xFF;
-            prev = 0;
-            c = fgetc(f);
-            cosum++;
-        } else if (prev == 0xFF && (c >= 0xD0 && c <= 0xD7)) {
-            prev = 0;
-            c = fgetc(f);
-            cosum++;
-        } else if (prev == 0xFF && c == 0xFF) {
-
-        } else {
-            VERR(jpg, "invalid %x %x", prev, c);
+        } else if (n != EOF && !(n >= 0xD0 && n <= 0xD7)) {
+            VERR(jpg, "invalid marker %x in scan data", n);
+            compressed[l++] = 0xFF;
+            compressed[l++] = (uint8_t)n;
         }
+        // restart markers are dropped, they only align the stream
     }
-    VDBG(jpg, "real vs alloc: %d vs %ld", l, last-pos);
+    fseek(f, last, SEEK_SET);
+    VDBG(jpg, "real vs alloc: %d vs %ld", l, avail);
     *len = l;
     return compressed;
 }
@@ -638,16 +758,27 @@ static void
 read_sos(JPG* j, FILE *f, bool skip_flag)
 {
     FFREAD_IGNORE(&j->sos, 3, 1, f);
-    FFREAD_IGNORE(j->sos.comps, sizeof(struct comp_sel), j->sos.nums, f);
+    int nscan = j->sos.nums > 4 ? 4 : j->sos.nums;
+    FFREAD_IGNORE(j->sos.comps, sizeof(struct comp_sel), nscan, f);
+    if (j->sos.nums > nscan) {
+        // malformed scan header, keep the file position in sync
+        VERR(jpg, "scan component count %d", j->sos.nums);
+        fseek(f, (j->sos.nums - nscan) * sizeof(struct comp_sel), SEEK_CUR);
+    }
     VDBG(jpg, "component %d", j->sos.nums);
     FFREAD_IGNORE(&j->sos.predictor_start, 3, 1, f);
     VINFO(jpg, "sos spectual selection start %d, end %d", j->sos.predictor_start,
          j->sos.predictor_end);
     VINFO(jpg, "sos successive approximation bits high %d, low %d", j->sos.approx_bits_h,
          j->sos.approx_bits_l);
-    int len;
+    int len = 0;
     uint8_t* rawdata = read_compressed_scan(f, &len);
-    if (!skip_flag) {
+    if (!rawdata) {
+        return;
+    }
+    if (skip_flag) {
+        free(rawdata);
+    } else {
         JPG_decode_scan(j, rawdata, len);
     }
 }
@@ -791,23 +922,32 @@ JPG_load_one(FILE *f, int skip_flag)
             p->height = j->sof.height;
             p->depth = 32;
             {
-                /* the scan decoder works in whole MCUs, so the buffer has to
-                 * cover the last, partially filled MCU as well
-                 */
-                int yh = j->sof.colors[0].horizontal ? j->sof.colors[0].horizontal : 1;
-                int yv = j->sof.colors[0].vertical ? j->sof.colors[0].vertical : 1;
-                int xstride = yh * 8;
-                int ystride = yv * 8;
-                int mcu_w = (p->width + xstride - 1) / xstride;
-                int mcu_h = (p->height + ystride - 1) / ystride;
-                size_t yuv_len = (size_t)mcu_w * mcu_h * 4 * 64;
+                /* the scan decoder works in whole MCUs, so the buffers have
+                 * to cover the last, partially filled MCU as well */
+                j->hmax = 1;
+                j->vmax = 1;
+                for (int i = 0; i < j->sof.components_num; i++) {
+                    int h = j->sof.colors[i].horizontal;
+                    int v = j->sof.colors[i].vertical;
+                    if (h > j->hmax) {
+                        j->hmax = h;
+                    }
+                    if (v > j->vmax) {
+                        j->vmax = v;
+                    }
+                }
+                j->mcu_cols = (j->sof.width + 8 * j->hmax - 1) / (8 * j->hmax);
+                j->mcu_rows = (j->sof.height + 8 * j->vmax - 1) / (8 * j->vmax);
+                j->bg_w = j->mcu_cols * j->hmax;
+                j->bg_h = j->mcu_rows * j->vmax;
 
-                p->pitch = mcu_w * xstride * 4;
-                j->data_len = p->pitch * mcu_h * ystride;
+                p->pitch = j->bg_w * 8 * 4;
+                j->data_len = p->pitch * j->bg_h * 8;
                 j->data = malloc(j->data_len);
-                j->yuv[0] = calloc(1, yuv_len * sizeof(int16_t));
-                j->yuv[1] = calloc(1, yuv_len * sizeof(int16_t));
-                j->yuv[2] = calloc(1, yuv_len * sizeof(int16_t));
+                size_t yuv_len = (size_t)j->bg_w * j->bg_h * 64;
+                j->yuv[0] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
+                j->yuv[1] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
+                j->yuv[2] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
             }
             break;
         case APP0:
@@ -858,6 +998,10 @@ JPG_load_one(FILE *f, int skip_flag)
         m = read_marker_skip_null(f);
     }
     VDBG(jpg, "done one image %lu", ftell(f));
+
+    if (!skip_flag) {
+        JPG_flush_image(j, p->pitch);
+    }
 
     p->format = CS_PIXELFORMAT_RGB888;
     p->pixels = j->data;

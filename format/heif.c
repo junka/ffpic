@@ -425,6 +425,9 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
                         // alpha channel
                         VDBG(heif, "decoding auxl image: alpha plane");
                         struct pic *p1 = HEIF_load_one(p->width, p->height, r->data, r->length, &conf->hps);
+                        if (!p1) {
+                            continue;
+                        }
                         blend_BGRA32_8bit_alpha((uint8_t*)(p->pixels), (uint8_t*)p1->pixels, p->pitch, p->height);
                         pic_free(p1);
                     } else if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
@@ -473,12 +476,17 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, (void*)h->items[i].data, h->items[i].length);
-            VINFO(heif, "decoding sub items, width %d, height %d", p->width, p->height);
             struct hvcC_box *conf = get_hvcc_from_item_id(h, h->items[i].item->item_id);
-            if (!conf) {
+            struct ispe_box *ispe = get_ispe_by_item_id(h, h->items[i].item->item_id);
+            if (!conf || !ispe) {
                 continue;
             }
-            struct pic *p1 = HEIF_load_one(p->width, p->height, h->items[i].data, h->items[i].length, &conf->hps);
+            VINFO(heif, "decoding sub items, width %u, height %u", ispe->image_width, ispe->image_height);
+            struct pic *p1 = HEIF_load_one((int)ispe->image_width, (int)ispe->image_height,
+                                           h->items[i].data, h->items[i].length, &conf->hps);
+            if (!p1) {
+                continue;
+            }
             file_enqueue_pic(p1);
             num++;
         } else if (h->items[i].type == TYPE2UINT("grid")) {
@@ -512,9 +520,11 @@ decode_moov(FILE *f, struct moov_box *b)
                 uint8_t *data = malloc(size);
                 FFREAD_IGNORE(data, size, 1, f);
                 // printf("load one for %d, length %d\n", k, size);
-                struct pic *p1 = HEIF_load_one(width, height, data,size, NULL);
-                file_enqueue_pic(p1);
-                // free(data);
+                struct pic *p1 = HEIF_load_one(width, height, data, size, NULL);
+                if (p1) {
+                    file_enqueue_pic(p1);
+                }
+                free(data);
             }
         }
     }
@@ -595,6 +605,13 @@ HEIF_load(const char *filename, int skip_flag)
         }
     }
 
+    if (!skip_flag && get_primary_item_id(h) >= 0 &&
+        (p->width <= 0 || p->height <= 0)) {
+        VERR(heif, "no image size for the primary item");
+        HEIF_free(p);
+        return NULL;
+    }
+
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
@@ -663,8 +680,15 @@ HEIF_info(FILE *f, struct pic* p)
     fprintf(f, "-----------------------\n");
     char *s1 = UINT2TYPE(h->ftyp.minor_version);
     fprintf(f, "\tbrand: %s,", s1);
-    s1 = UINT2TYPE(h->ftyp.compatible_brands[1]);
-    fprintf(f, " compatible %s\n", s1);
+    /* frames decoded from a file without a primary item carry an empty
+     * container, so the compatible brand list may be absent */
+    int nbrands = ((int)h->ftyp.size - 12) / 4;
+    if (h->ftyp.compatible_brands && nbrands >= 2) {
+        s1 = UINT2TYPE(h->ftyp.compatible_brands[1]);
+        fprintf(f, " compatible %s\n", s1);
+    } else {
+        fprintf(f, "\n");
+    }
     fprintf(f, "\theight: %d, width: %d\n", p->height, p->width);
 
     fprintf(f, "\tmeta box --------------\n");

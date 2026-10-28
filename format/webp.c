@@ -384,9 +384,11 @@ read_vp8_segmentation_adjust(struct vp8_update_segmentation *s, struct bool_dec 
         }
         if (s->update_mb_segmentation_map) {
             for (int i = 0; i < 3; i ++) {
-                if (BOOL_BIT(br)) {
-                    s->segment_prob[i] = BOOL_BITS(br, 8);
-                }
+                /* an absent update keeps the default probability, which is 255
+                 * (a zeroed one would force the first branch and misread the
+                 * segment id) */
+                s->segment_prob[i] =
+                    BOOL_BIT(br) ? BOOL_BITS(br, 8) : 255;
             }
         }
     } else {
@@ -513,12 +515,15 @@ static void read_dequantization(WEBP *w, struct vp8_key_frame_header *kh,
     // section 20.4 scaling and clamping processes
     // see dequant_init and ac_q and dc_q
     for (int i = 0; i < (w->k.segmentation.segmentation_enabled ? 4 : 1); i++) {
-        uint16_t quant = kh->quant_indice.y_ac_qi;
+        int quant = kh->quant_indice.y_ac_qi;
         if (w->k.segmentation.segmentation_enabled) {
-            if(!w->k.segmentation.update_mb_segmentation_map) {
-                quant += w->k.segmentation.quant[i].quantizer_update_value;
-            } else {
+            /* segment_feature_mode tells whether the per segment values are
+             * absolute or relative to the frame level quantizer, it is not
+             * related to whether a segmentation map is transmitted */
+            if (w->k.segmentation.segment_feature_mode) {
                 quant = w->k.segmentation.quant[i].quantizer_update_value;
+            } else {
+                quant += w->k.segmentation.quant[i].quantizer_update_value;
             }
         }
         w->d[i].y1_dc = dc_qlookup[clamp(quant + kh->quant_indice.y_dc_delta, 127)];
@@ -1813,9 +1818,14 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     int height = ((w->fi.height + 3) >> 2) << 2;
     int mbrows = (height + 15) >> 4;
     int mbcols = (width + 15) >> 4;
-    int y_stride = mbcols * 16;       // 16 * 16 Y
-    int uv_stride = y_stride >> 1;  // 8 * 8   U
-    int pitch = ((y_stride * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
+    int mb_width = mbcols * 16;
+    int mb_height = mbrows * 16;
+    /* every plane row carries one extra byte in front of it for the left
+     * border, so the border of a row never aliases the last pixel of the row
+     * above, and the whole plane gets one extra row on top */
+    int y_stride = mb_width + 1;
+    int uv_stride = (mb_width >> 1) + 1;
+    int pitch = ((mb_width * 32 + 32 - 1) >> 5) << 2; // for display rgb pixels
 
     //reserve YUV data, the converter writes whole 16x16 macro blocks so the
     //destination has to hold mbrows * 16 scanlines of pitch bytes, not just
@@ -1827,8 +1837,8 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
      * They are filled with the neutral values VP8 uses for unavailable
      * neighbours (127 above, 129 on the left) to avoid reading outside the
      * allocation for the first block of the frame. */
-    size_t y_size = (size_t)(mbrows * 16 + 1) * (y_stride + 1);
-    size_t uv_size = (size_t)(mbrows * 8 + 1) * (uv_stride + 1);
+    size_t y_size = (size_t)(mb_height + 1) * y_stride;
+    size_t uv_size = (size_t)(mbrows * 8 + 1) * uv_stride;
     uint8_t *Y_buf = malloc(y_size);
     uint8_t *U_buf = malloc(uv_size);
     uint8_t *V_buf = malloc(uv_size);

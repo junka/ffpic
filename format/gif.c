@@ -359,6 +359,8 @@ static struct pic *
 GIF_load_one(Graphic *g)
 {
     struct pic *p = pic_alloc(sizeof(GIF *));
+    /* the frame keeps the gif container, it does not own a payload of its own */
+    free(p->pic);
     p->pic = NULL;
     p->left = g->image->image_dsc.left;
     p->top = g->image->image_dsc.top;

@@ -128,8 +128,8 @@ read_hvcc_box(FILE *f, struct box **bn)
                               : NULL;
             /* a bad parameter set leaves the slot empty; the slice header
              * then fails its lookup instead of the loader aborting */
-            if (parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL, slot,
-                           &b->hps) < 0) {
+            if (parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL, 0, 0,
+                           slot, &b->hps) < 0) {
                 VERR(heif, "failed to parse a parameter set");
             }
             free(nals[j].nal_units);
@@ -263,8 +263,8 @@ pre_read_item(HEIF * h, FILE *f, uint32_t idx)
     }
 }
 
-void decode_hvc1(uint8_t *data, uint64_t len, uint8_t **pixels,
-                 struct hevc_param_set *hps) {
+int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
+                int height, struct hevc_param_set *hps) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     while (len >= 4) {
@@ -273,54 +273,77 @@ void decode_hvc1(uint8_t *data, uint64_t len, uint8_t **pixels,
         len -= 4;
         if (sample_len > len) {
             VERR(heif, "sample length %u runs past the item", sample_len);
-            break;
+            return -EINVAL;
         }
-        if (parse_nalu(p, (int)sample_len, pixels, NULL, hps) < 0) {
+        if (parse_nalu(p, (int)sample_len, pixels, pitch, height, NULL, hps) < 0) {
             VERR(heif, "failed to parse nal unit");
-            break;
+            return -EINVAL;
         }
         p += sample_len;
         len -= sample_len;
     }
+    if (len != 0) {
+        VERR(heif, "%" PRIu64 " trailing bytes in the item", len);
+        return -EINVAL;
+    }
+    return 0;
+}
+
+static void
+heif_pic_free(struct pic *p)
+{
+    free(p->pixels);
+    pic_free(p);
 }
 
 static struct pic *
-HEIF_load_one(int width, int height, uint8_t *data, int length, struct hevc_param_set *hps) {
+heif_pic_alloc(int width, int height)
+{
     if (width <= 0 || height <= 0) {
         VERR(heif, "item has no usable size: %dx%d", width, height);
         return NULL;
     }
     struct pic *p = pic_alloc(sizeof(HEIF));
-    // HEIF *h = p->pic;
-    p->width = width;
+    p->width = ((width + 3) >> 2) << 2;
     p->height = height;
-    p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = malloc(p->pitch * p->height);
+    p->pixels = malloc((size_t)p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGBA8888;
-    decode_hvc1(data, length, (uint8_t **)&p->pixels, hps);
+    if (!p->pixels) {
+        pic_free(p);
+        return NULL;
+    }
+    return p;
+}
+
+static struct pic *
+HEIF_load_one(int width, int height, uint8_t *data, int length, struct hevc_param_set *hps) {
+    struct pic *p = heif_pic_alloc(width, height);
+    if (!p) {
+        return NULL;
+    }
+    if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps) < 0) {
+        VERR(heif, "failed to decode a %dx%d item", p->width, p->height);
+        heif_pic_free(p);
+        return NULL;
+    }
     return p;
 }
 
 static int
-decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
+read_grid_header(struct heif_item *it, struct grid *ig)
 {
-    int num = 0;
-    struct grid *ig = malloc(sizeof(struct grid));
     if (it->length < 4) {
-        free(ig);
-        return 0;
+        return -EINVAL;
     }
     ig->version = it->data[0];
     ig->flags = it->data[1];
     ig->row_minus_one = it->data[2];
     ig->columns_minus_one = it->data[3];
-    // 8 bytes, top, left, width, height in 2 bytes
     if ((ig->flags & 1) == 0) {
         if (it->length < 8) {
-            free(ig);
-            return 0;
+            return -EINVAL;
         }
         uint16_t width = *(uint16_t *)(it->data + 4);
         uint16_t height = *(uint16_t *)(it->data + 6);
@@ -328,37 +351,102 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
         ig->output_height = SWAP(height);
     } else {
         if (it->length < 12) {
-            free(ig);
-            return 0;
+            return -EINVAL;
         }
         uint32_t width = *(uint32_t *)(it->data + 4);
         uint32_t height = *(uint32_t *)(it->data + 8);
         ig->output_width = SWAP(width);
         ig->output_height = SWAP(height);
     }
-    VDBG(heif, "grid width %d, height %d", ig->output_width, ig->output_height);
+    return 0;
+}
+
+/* the dimg reference lists the tiles in raster order, so tile j belongs at
+ * (j % columns, j / columns) on the grid canvas */
+static int
+decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
+{
+    struct grid ig;
+    if (read_grid_header(it, &ig) < 0) {
+        VERR(heif, "malformed grid item");
+        return 0;
+    }
+    int rows = ig.row_minus_one + 1;
+    int cols = ig.columns_minus_one + 1;
+    VDBG(heif, "grid %dx%d, %dx%d tiles", ig.output_width, ig.output_height,
+         rows, cols);
+    if (ig.output_width == 0 || ig.output_height == 0 ||
+        ig.output_width > (uint32_t)p->width ||
+        ig.output_height > (uint32_t)p->height) {
+        VERR(heif, "grid %ux%u does not fit a %dx%d canvas", ig.output_width,
+             ig.output_height, p->width, p->height);
+        return 0;
+    }
+    int tile_w = ((int)ig.output_width + cols - 1) / cols;
+    int tile_h = ((int)ig.output_height + rows - 1) / rows;
+
     for (int i = 0; i < h->meta.iref.refs_count; i++) {
         struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
-        if (ref->ref_count != (ig->row_minus_one + 1) * (ig->columns_minus_one + 1)) {
+        if (ref->ref_count != rows * cols) {
             continue;
         }
-        if (ref->from_item_id == it->item->item_id && ref->type == TYPE2UINT("dimg")) {
-            for (int j = 0; j < ref->ref_count; j++) {
-                struct heif_item *item = find_item_by_id(h, ref->to_item_ids[j]);
-                if (!item || item->type != TYPE2UINT("hvc1")) {
-                    continue;
-                }
-                struct hvcC_box *conf = get_hvcc_from_item_id(h, ref->to_item_ids[j]);
-                if (!conf) {
-                    continue;
-                }
-                decode_hvc1(item->data, item->length, (uint8_t **)&p->pixels, &conf->hps);
-                num ++;
-            }
+        if (ref->from_item_id != it->item->item_id ||
+            ref->type != TYPE2UINT("dimg")) {
+            continue;
         }
+        int decoded = 0;
+        for (int j = 0; j < ref->ref_count; j++) {
+            struct heif_item *item = find_item_by_id(h, ref->to_item_ids[j]);
+            struct hvcC_box *conf =
+                get_hvcc_from_item_id(h, ref->to_item_ids[j]);
+            struct ispe_box *ispe =
+                get_ispe_by_item_id(h, ref->to_item_ids[j]);
+            if (!item || item->type != TYPE2UINT("hvc1") || !conf || !ispe) {
+                VERR(heif, "grid tile %d is not a decodable hvc1 item", j);
+                continue;
+            }
+            struct pic *tile = HEIF_load_one((int)ispe->image_width,
+                                             (int)ispe->image_height,
+                                             item->data, item->length,
+                                             &conf->hps);
+            if (!tile) {
+                VERR(heif, "failed to decode grid tile %d", j);
+                continue;
+            }
+            int x = (j % cols) * tile_w;
+            int y = (j / cols) * tile_h;
+            int copy_w = tile_w;
+            int copy_h = tile_h;
+            if (copy_w > (int)ig.output_width - x) {
+                copy_w = (int)ig.output_width - x;
+            }
+            if (copy_h > (int)ig.output_height - y) {
+                copy_h = (int)ig.output_height - y;
+            }
+            if (copy_w > (int)ispe->image_width) {
+                copy_w = (int)ispe->image_width;
+            }
+            if (copy_h > (int)ispe->image_height) {
+                copy_h = (int)ispe->image_height;
+            }
+            for (int r = 0; r < copy_h; r++) {
+                memcpy((uint8_t *)p->pixels + (size_t)(y + r) * p->pitch +
+                           (size_t)x * 4,
+                       (uint8_t *)tile->pixels + (size_t)r * tile->pitch,
+                       (size_t)copy_w * 4);
+            }
+            heif_pic_free(tile);
+            decoded++;
+        }
+        if (decoded != rows * cols) {
+            VERR(heif, "only %d of %d grid tiles decoded", decoded,
+                 rows * cols);
+            return 0;
+        }
+        return 1;
     }
-    free(ig);
-    return num;
+    VERR(heif, "grid item %d has no matching dimg reference", it->item->item_id);
+    return 0;
 }
 
 static int
@@ -392,7 +480,11 @@ decode_primary_item(HEIF *h, struct pic *p)
             VERR(heif, "no hvcC for the primary item");
             return 0;
         }
-        decode_hvc1(pri_item->data, pri_item->length, (uint8_t **)&p->pixels, &conf->hps);
+        if (decode_hvc1(pri_item->data, pri_item->length, p->pixels, p->pitch,
+                        p->height, &conf->hps) < 0) {
+            VERR(heif, "failed to decode the primary item");
+            return 0;
+        }
         num ++;
     }
     return num;
@@ -450,6 +542,24 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
     return 0;
 }
 
+/* tiles of a dimg grid are not pictures of their own; the grid composes them */
+static bool
+is_grid_tile(HEIF *h, int id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+        if (ref->type != TYPE2UINT("dimg")) {
+            continue;
+        }
+        for (int j = 0; j < ref->ref_count; j++) {
+            if (ref->to_item_ids[j] == (uint32_t)id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static int
 decode_items(HEIF *h, FILE *f, struct pic *p)
 {
@@ -474,6 +584,9 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             // hexdump(stdout, "exif:", "", h->items[i].data, h->items[i].length);
             VDBG(heif, "mime %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
+            if (is_grid_tile(h, h->items[i].item->item_id)) {
+                continue;
+            }
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, (void*)h->items[i].data, h->items[i].length);
             struct hvcC_box *conf = get_hvcc_from_item_id(h, h->items[i].item->item_id);
@@ -490,7 +603,21 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             file_enqueue_pic(p1);
             num++;
         } else if (h->items[i].type == TYPE2UINT("grid")) {
-            decode_grid_items(h, h->items + i, p);
+            struct grid ig;
+            if (read_grid_header(h->items + i, &ig) < 0) {
+                continue;
+            }
+            struct pic *p1 = heif_pic_alloc((int)ig.output_width,
+                                            (int)ig.output_height);
+            if (!p1) {
+                continue;
+            }
+            if (decode_grid_items(h, h->items + i, p1)) {
+                file_enqueue_pic(p1);
+                num++;
+            } else {
+                heif_pic_free(p1);
+            }
         }
     }
     return num;
@@ -504,11 +631,23 @@ decode_moov(FILE *f, struct moov_box *b)
     for (int i = 0; i <b->trak_num; i++) {
         // chunk coun
         uint32_t chunk_count = b->trak[i].mdia.minf.stbl.stco.entry_count;
+        uint32_t sc_count = b->trak[i].mdia.minf.stbl.stsc.entry_count;
         int width = (int)fix16_16(b->trak[i].tkhd.width);
         int height = (int)fix16_16(b->trak[i].tkhd.height);
-        assert(chunk_count == b->trak[i].mdia.minf.stbl.stsc.entry_count);
-        // printf("width %d, height %d, chunk count %d\n", width, height, chunk_count);
+        uint32_t total_samples = 0;
         for (uint32_t j = 0; j < chunk_count; j++) {
+            total_samples += (j < sc_count) ?
+                b->trak[i].mdia.minf.stbl.stsc.sample_per_chunk[j] : 0;
+        }
+        if (total_samples > b->trak[i].mdia.minf.stbl.stsz.sample_count) {
+            VERR(heif, "track %d wants %u samples but stsz lists %u", i,
+                 total_samples, b->trak[i].mdia.minf.stbl.stsz.sample_count);
+            continue;
+        }
+        for (uint32_t j = 0; j < chunk_count; j++) {
+            if (j >= sc_count) {
+                break;
+            }
             offset = b->trak[i].mdia.minf.stbl.stco.chunk_offset[j];
             int sample_num = b->trak[i].mdia.minf.stbl.stsc.sample_per_chunk[j];
             // printf("sample num %d\n", sample_num);
@@ -615,7 +754,7 @@ HEIF_load(const char *filename, int skip_flag)
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = malloc(p->pitch * p->height);
+    p->pixels = malloc((size_t)p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGB888;
     int n = 0;
     if (!skip_flag) {

@@ -641,12 +641,150 @@ check_heif_sample(void) {
     return rc;
 }
 
+/* data/quad_grid.heic is data/quad.heic wrapped in a 2x2 grid: the four dimg
+ * tiles all point at the same 32x32 stream, so every 32x32 cell of the 64x64
+ * canvas has to show the red, green, blue and white quadrants again. */
+static int
+check_heif_grid(void) {
+    const char *name = TEST_DATA_DIR "/quad_grid.heic";
+    static const int quad[4][2] = {{8, 8}, {24, 8}, {8, 24}, {24, 24}};
+    static const int want[4][3] = {
+        {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255},
+    };
+    enum { TOL = 56, CELL = 32 };
+    int rc = 0;
+
+    struct file_ops *ops = file_probe(name);
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", name);
+        return -1;
+    }
+
+    /* a grid is one derived image, not one frame per tile */
+    struct pic *p = file_load(ops, name, 0);
+    if (!p) {
+        printf("%s: did not decode\n", name);
+        return -1;
+    }
+    if (p->width != 2 * CELL || p->height != 2 * CELL) {
+        printf("%s: decoded as %dx%d, expected %dx%d\n", name, p->width,
+               p->height, 2 * CELL, 2 * CELL);
+        rc = -1;
+    } else {
+        for (int cy = 0; cy < 2 && !rc; cy++) {
+            for (int cx = 0; cx < 2 && !rc; cx++) {
+                for (int q = 0; q < 4; q++) {
+                    int x = cx * CELL + quad[q][0];
+                    int y = cy * CELL + quad[q][1];
+                    uint8_t *px = (uint8_t *)p->pixels +
+                                  (size_t)y * p->pitch + (size_t)x * 4;
+                    int b = px[0], g = px[1], r = px[2], a = px[3];
+                    if (abs(r - want[q][0]) > TOL ||
+                        abs(g - want[q][1]) > TOL ||
+                        abs(b - want[q][2]) > TOL || a != 0xFF) {
+                        printf("%s: cell (%d,%d) pixel (%d,%d) is bgra "
+                               "%d %d %d %d, expected %d %d %d 255\n",
+                               name, cx, cy, x, y, b, g, r, a,
+                               want[q][2], want[q][1], want[q][0]);
+                        rc = -1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    file_free(ops, p);
+    if (file_dequeue_pic() != NULL) {
+        printf("%s: a grid was queued as extra frames\n", name);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
+/* the ispe box is what the container allocates for; a stream whose sps crops
+ * to a larger picture has to be refused instead of overrunning it */
+static int
+check_heif_small_ispe(void)
+{
+    const char *src = TEST_DATA_DIR "/quad.heic";
+    const char *name = "small_ispe.heic";
+    FILE *f = fopen(src, "rb");
+    uint8_t *buf;
+    long size;
+    int found = 0;
+    int rc = 0;
+
+    if (!f) {
+        printf("%s: cannot open\n", src);
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(f);
+        return -1;
+    }
+    buf = malloc((size_t)size);
+    if (!buf || fread(buf, 1, (size_t)size, f) != (size_t)size) {
+        free(buf);
+        fclose(f);
+        return -1;
+    }
+    fclose(f);
+
+    for (long i = 4; i + 16 <= size; i++) {
+        if (memcmp(buf + i, "ispe", 4) == 0) {
+            /* version and flags sit between the type and the two sizes */
+            put_be32(buf + i + 8, 16);
+            put_be32(buf + i + 12, 16);
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        printf("%s: no ispe box\n", src);
+        free(buf);
+        return -1;
+    }
+    if (write_file(name, buf, (size_t)size)) {
+        free(buf);
+        return -1;
+    }
+    free(buf);
+
+    struct file_ops *ops = file_probe(name);
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", name);
+        rc = -1;
+    } else {
+        struct pic *p = file_load(ops, name, 0);
+        if (p) {
+            printf("%s: decoded a picture larger than its ispe\n", name);
+            file_free(ops, p);
+            rc = -1;
+        }
+        if (file_dequeue_pic() != NULL) {
+            printf("%s: a frame was queued\n", name);
+            rc = -1;
+        }
+    }
+    remove(name);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 int main(void)
 {
     int failed = 0;
 
     file_ops_init();
-
     struct {
         int (*emit)(void);
         const char *name;
@@ -704,6 +842,14 @@ int main(void)
     }
 
     if (check_heif_sample()) {
+        failed++;
+    }
+
+    if (check_heif_grid()) {
+        failed++;
+    }
+
+    if (check_heif_small_ispe()) {
         failed++;
     }
 

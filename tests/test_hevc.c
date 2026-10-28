@@ -84,7 +84,7 @@ test_sei_nal(void)
     nal[0] = (uint8_t)(PREFIX_SEI_NUT << 1);
     nal[1] = 1;
 
-    type = parse_nalu(nal, LEN, &pixels, NULL, NULL);
+    type = parse_nalu(nal, LEN, pixels, 0, 0, NULL, NULL);
     free(nal);
     if (type != PREFIX_SEI_NUT || pixels != NULL) {
         printf("sei nal parsed as type %u\n", (unsigned)type);
@@ -103,9 +103,9 @@ test_bad_nal(void)
     uint8_t slice[2] = {(uint8_t)(IDR_W_RADL << 1), 1};
     uint8_t *pixels = NULL;
 
-    if (parse_nalu(short_nal, sizeof(short_nal), &pixels, NULL, NULL) != -EINVAL ||
-        parse_nalu(forbidden_bit, sizeof(forbidden_bit), &pixels, NULL, NULL) != -EINVAL ||
-        parse_nalu(slice, sizeof(slice), &pixels, NULL, NULL) != -EINVAL) {
+    if (parse_nalu(short_nal, sizeof(short_nal), pixels, 0, 0, NULL, NULL) != -EINVAL ||
+        parse_nalu(forbidden_bit, sizeof(forbidden_bit), pixels, 0, 0, NULL, NULL) != -EINVAL ||
+        parse_nalu(slice, sizeof(slice), pixels, 0, 0, NULL, NULL) != -EINVAL) {
         printf("a malformed nal unit was not rejected\n");
         return -1;
     }

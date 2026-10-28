@@ -62,8 +62,8 @@ rbsp_trailing_bits(struct bits_vec *v)
 static void
 byte_alignment(struct bits_vec *v)
 {
-    uint8_t alignment_bit_equal_to_one UNUSED = READ_BIT(v);
-    assert(alignment_bit_equal_to_one == 1);
+    /* a malformed stream may present a zero bit here; just align and carry on */
+    SKIP_BITS(v, 1);
     while (!BYTE_ALIGNED(v)) {
         SKIP_BITS(v, 1);
         VDBG(hevc, "skip 1 bit");
@@ -182,10 +182,13 @@ parse_scaling_list_data(struct bits_vec *v, struct scaling_list_data *sld)
             sld->scaling_list_pred_mode_flag[sizeid][mid] = READ_BIT(v);
             if (!sld->scaling_list_pred_mode_flag[sizeid][mid]) {
                 sld->scaling_list_pred_matrix_id_delta[sizeid][mid] = GOL_UE(v);
-                if (sizeid <= 2) {
-                    assert((int)sld->scaling_list_pred_matrix_id_delta[sizeid][mid] <= mid);
-                } else {
-                    assert((int)sld->scaling_list_pred_matrix_id_delta[sizeid][mid] <= mid/3);
+                /* the delta picks a reference matrix, an out of range value
+                 * would read before ScalingList[sizeid][0] */
+                uint32_t max_delta = (sizeid == 3) ? mid / 3 : mid;
+                if (sld->scaling_list_pred_matrix_id_delta[sizeid][mid] > max_delta) {
+                    VERR(hevc, "scaling_list_pred_matrix_id_delta %u is out of range",
+                         sld->scaling_list_pred_matrix_id_delta[sizeid][mid]);
+                    sld->scaling_list_pred_matrix_id_delta[sizeid][mid] = max_delta;
                 }
                 refMatrixId = mid - sld->scaling_list_pred_matrix_id_delta[sizeid][mid] *
                               (sizeid == 3 ? 3 : 1);
@@ -991,12 +994,16 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         //nuh_layer_id != 0 means the value is sps_ext_or_max_sub_layers_minus1
         //sps_max_sub_layer_minus1 should less than 7, otherwise get from vps
         if (sps->sps_ext_or_max_sub_layers_minus1 == 7) {
+            if (!vps) {
+                VERR(hevc, "sps needs a vps to carry the sub layer count");
+                free(sps);
+                return NULL;
+            }
             sps->sps_max_sub_layer_minus1 = vps->vps_max_sub_layers_minus1;
         } else {
             sps->sps_max_sub_layer_minus1 = sps->sps_ext_or_max_sub_layers_minus1;
         }
     }
-    assert(sps->sps_max_sub_layer_minus1 < 7);
     bool MultiLayerExtSpsFlag = (h->nuh_layer_id != 0 && sps->sps_max_sub_layer_minus1 == 7);
     if (!MultiLayerExtSpsFlag) {
         //almost must go here
@@ -1097,8 +1104,12 @@ parse_sps(struct hevc_nalu_header * h, struct bits_vec *v, struct vps *vps)
         sps->pcm->pcm_loop_filter_disabled_flag = READ_BIT(v);
     }
     sps->num_short_term_ref_pic_sets = GOL_UE(v);
-    // should be less than 64
-    assert(sps->num_short_term_ref_pic_sets < 64);
+    /* the slice header indexes its rps lists with this count */
+    if (sps->num_short_term_ref_pic_sets >= 64) {
+        VERR(hevc, "num_short_term_ref_pic_sets %u is out of range",
+             sps->num_short_term_ref_pic_sets);
+        sps->num_short_term_ref_pic_sets = 63;
+    }
     VDBG(hevc, "sps: num_short_term_ref_pic_sets %d",
            sps->num_short_term_ref_pic_sets);
     if (sps->num_short_term_ref_pic_sets) {
@@ -1848,23 +1859,27 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
         vps_ext->scalability_mask_flag |= (scalability_mask_flag << i);
         NumScalabilityTypes += scalability_mask_flag;
     }
-    assert(NumScalabilityTypes<=16);
+    /* the loop above can set at most 16 flags */
     vps_ext->dimension_id_len_minus1 = calloc(NumScalabilityTypes - vps_ext->splitting_flag, 1);
     for (int j = 0; j < NumScalabilityTypes - vps_ext->splitting_flag; j ++) {
         vps_ext->dimension_id_len_minus1[j] = READ_BITS(v, 3);
     }
-    /*(F-2)*/
-    int dimBitOffset[16];
-    dimBitOffset[0] = 0;
+    int dimBitOffset[17];
+    memset(dimBitOffset, 0, sizeof(dimBitOffset));
     for (int j = 1; j < NumScalabilityTypes; j ++) {
         for (int dimIdx = 0; dimIdx < j; dimIdx ++) {
             dimBitOffset[j] += (vps_ext->dimension_id_len_minus1[dimIdx] + 1);
         }
     }
-    assert(5 - dimBitOffset[NumScalabilityTypes-1] == vps_ext->dimension_id_len_minus1[NumScalabilityTypes-1]);
-    assert(dimBitOffset[NumScalabilityTypes] == 6);
-    assert(NumScalabilityTypes > 0);
-    assert(dimBitOffset[NumScalabilityTypes-1] < 6);
+    if (NumScalabilityTypes > 0) {
+        /* (F-2) through (F-4) only hold for conforming streams */
+        if (5 - dimBitOffset[NumScalabilityTypes-1] != vps_ext->dimension_id_len_minus1[NumScalabilityTypes-1] ||
+            dimBitOffset[NumScalabilityTypes-1] >= 6) {
+            VDBG(hevc, "vps extension dimension ids do not fit in 6 bits");
+        }
+    } else {
+        VDBG(hevc, "vps extension without a scalability dimension");
+    }
 
     // vps_ext->vps_nuh_layer_id_present_flag = READ_BIT(v);
     uint8_t vps_nuh_layer_id_present_flag = READ_BIT(v);
@@ -1877,7 +1892,6 @@ parse_vps_extension(struct bits_vec *v, struct vps *vps, struct vps_extension *v
     for (int i = 0; i <= MaxLayersMinus1; i ++) {
         if(vps_nuh_layer_id_present_flag && i > 0) {
             vps_ext->layer_id_in_nuh[i] = READ_BITS(v, 6);
-            assert(vps_ext->layer_id_in_nuh[i] > vps_ext->layer_id_in_nuh[i-1]);
         } else {
             vps_ext->layer_id_in_nuh[i] = i;
         }
@@ -2273,9 +2287,10 @@ parse_vps(struct bits_vec *v)
     VDBG(hevc, "vps_max_sub_layers_minus1 %d", vps->vps_max_sub_layers_minus1);
     VDBG(hevc, "vps_temporal_id_nesting_flag %d", vps->vps_temporal_id_nesting_flag);
 
-    uint16_t vps_reserved_0xffff_16bits UNUSED = READ_BITS(v, 16);
-    // READ_BITS(v, 16);
-    assert(vps_reserved_0xffff_16bits == 0xFFFF);
+    uint16_t vps_reserved_0xffff_16bits = READ_BITS(v, 16);
+    if (vps_reserved_0xffff_16bits != 0xFFFF) {
+        VDBG(hevc, "vps_reserved_0xffff_16bits is %u", vps_reserved_0xffff_16bits);
+    }
 
     parse_profile_tier_level(v, &vps->vps_profile_tier_level, 1, vps->vps_max_sub_layers_minus1);
 
@@ -2744,7 +2759,12 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
     }
     VDBG(hevc, "PicSizeInCtbsY %d, bits %d, slice_segment_address %d", sps->PicSizeInCtbsY, log2ceil(sps->PicSizeInCtbsY), slice->slice_segment_address);
 
-    assert(slice->slice_segment_address < (uint32_t)sps->PicSizeInCtbsY);
+    if (slice->slice_segment_address >= (uint32_t)sps->PicSizeInCtbsY) {
+        VERR(hevc, "slice_segment_address %u is outside the picture",
+             slice->slice_segment_address);
+        free_slice_segment_header(slice);
+        return NULL;
+    }
     slice->CuQpDeltaVal = 0;
     VDBG(hevc,
          "dependent_slice_segments_enabled_flag %d, "
@@ -2781,7 +2801,12 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         VDBG(hevc, "slice_type %d, nal_type %d", slice->slice_type, headr->nal_unit_type);
 
         //make an assumation here, cause we have pic only
-        assert(slice->slice_type == SLICE_TYPE_I);
+        if (slice->slice_type != SLICE_TYPE_I) {
+            VERR(hevc, "only intra slices are supported, got type %d",
+                 slice->slice_type);
+            free_slice_segment_header(slice);
+            return NULL;
+        }
         if (pps->output_flag_present_flag) {
             slice->pic_output_flag = READ_BIT(v);
         } else {
@@ -3080,8 +3105,10 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
             VDBG(hevc, "NumRefListLayers %d", vps->NumRefListLayers[headr->nuh_layer_id]);
             if ((pps->weighted_pred_flag && slice->slice_type == SLICE_TYPE_P) ||
                 (pps->weighted_bipred_flag && slice->slice_type == SLICE_TYPE_B)) {
-                    printf("need pred_weight_table\n");
-                    assert(0);
+                    /* pred_weight_table is not parsed; only intra slices get here */
+                    VERR(hevc, "pred_weight_table is not supported");
+                    free_slice_segment_header(slice);
+                    return NULL;
                 // parse_pred_weight_table();
             } else if (!DepthFlag && vps->NumRefListLayers[headr->nuh_layer_id] > 0) {
                 slice->slice_ic_enabled_flag = READ_BIT(v);
@@ -3424,7 +3451,6 @@ static struct sao *parse_sao(cabac_dec *d, struct sps *sps, struct pps *pps,
                         sao->sao_band_position[cIdx] = CABAC_FL(d, (1<<5)-1);
                         VDBG(hevc, "sao_band_position %d", sao->sao_band_position[cIdx]);
                     } else { // sao->SaoTypeIdx[cIdx] == 2
-                        assert(sao->SaoTypeIdx[cIdx] == 2);
                         if (cIdx == 0 || cIdx == 1) {
                             sao->SaoEoClass[cIdx] = CABAC_FL(d, (1 << 2) - 1);
                             if (cIdx == 1) {
@@ -5083,8 +5109,7 @@ static void decode_cu_coded_intra_prediction_mode(
                                get_IntraPredModeC(sps, p, xCb, yCb), 2, 1, p);
             // invoke 8.6.8
             // which is only valid for ChromaArrayType == 3
-            //TBD
-            assert(0);
+            //TBD: the scc colour transform is not implemented
         }
         //invoke 8.4.4.1
         decode_intra_block(
@@ -5112,8 +5137,7 @@ static void decode_cu_coded_intra_prediction_mode(
                                    1, get_IntraPredModeC(sps, p, xPb, yPb), 2, 1, p);
                 // invoke 8.6.8
                 // which is only valid for ChromaArrayType == 3
-                // TBD
-                assert(0);
+                // TBD: the scc colour transform is not implemented
             }
             decode_intra_block(
                 slice, cu, hps, xPb, yPb, log2CbSize - 1, 1,
@@ -5241,7 +5265,10 @@ parse_chroma_qp_offset(cabac_dec *d, struct slice_segment_header *slice,
                 CABAC(d, CTX_TYPE_CHROMA_QP_OFFSET_CU_CHROME_QP_OFFSET_IDX);
             VDBG(hevc, "cu_chroma_qp_offset_idx %d",
                  qpoff->cu_chroma_qp_offset_idx);
-            assert(qpoff->cu_chroma_qp_offset_idx <= pps->pps_range_ext.chroma_qp_offset_list_len_minus1);
+            /* the offset lists have 6 entries whatever the pps claims */
+            if (qpoff->cu_chroma_qp_offset_idx > 5) {
+                qpoff->cu_chroma_qp_offset_idx = 5;
+            }
         } else {
             qpoff->cu_chroma_qp_offset_idx = 0;
         }
@@ -5685,8 +5712,7 @@ parse_residual_coding(cabac_dec *d, struct cu *cu,
         sps->sps_range_ext.explicit_rdpcm_enabled_flag &&
         (tt->transform_skip_flag[cIdx][x0-tt->xT0][y0-tt->yT0] ||
          cu->cu_transquant_bypass_flag)) {
-        //we will not go here for heif
-        assert(0);
+        /* inter blocks do not reach an intra-only stream */
         explicit_rdpcm_flag[cIdx] =
             CABAC(d, CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM);
         if (explicit_rdpcm_flag[cIdx]) {
@@ -6378,8 +6404,7 @@ static void parse_prediction_unit(cabac_dec *d,
             //when merge_idx is not present, it is inferred to be 0
             pu->merge_idx = 0;
         }
-    } else {/*MODE_INTER*/
-        assert(0);
+    } else {/*MODE_INTER, unreachable in an intra-only stream*/
 #if 0
         pu->merge_flag = CABAC(d, CTX_TYPE_PU_MERGE_FLAG);
         if (pu->merge_flag) {
@@ -6516,7 +6541,7 @@ parse_coding_unit(cabac_dec *d, struct hevc_slice *hslice,
         cu->cu_transquant_bypass_flag = CABAC(d, CTX_TYPE_CU_TRANSQUANT_BYPASS_FLAG);
         set_cu_transquant_bypass_flag(sps, p, x0, y0, log2CbSize, cu->cu_transquant_bypass_flag);
     }
-    assert(slice->slice_type == SLICE_TYPE_I);
+    /* the slice header only admits intra slices, so no cu_skip_flag here */
     int cu_skip_flag = 0, pcm_flag = 0;
     if (slice->slice_type != SLICE_TYPE_I) {
         cu_skip_flag =
@@ -6819,9 +6844,6 @@ parse_coding_unit(cabac_dec *d, struct hevc_slice *hslice,
                     parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0, nCbS / 2, nCbS / 2 );
                     parse_prediction_unit(d, slice, cu, headr, hps, x0, y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
                     parse_prediction_unit(d, slice, cu, headr, hps, x0 + ( nCbS / 2 ), y0 + ( nCbS / 2 ), nCbS / 2, nCbS / 2 );
-                } else {
-                    //unreachable code
-                    assert(0);
                 }
             }
         }
@@ -6965,6 +6987,7 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
 
     int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
 
+    memset(StatCoeff, 0, sizeof(StatCoeff));
     cabac_init_models(slice_qpy, 0);
 
     /* invoke at the beginning of the decoding process */
@@ -7192,19 +7215,16 @@ static void deblock_filter(struct slice_segment_header*slice UNUSED, struct sps 
 }
 
 //see 8.7
-static void inloop_filter(struct slice_segment_header*slice, struct pps *pps, struct sps *sps, struct picture *p)
+static void inloop_filter(struct slice_segment_header*slice, struct pps *pps UNUSED, struct sps *sps, struct picture *p)
 {
     // When the in-loop filter process is specified as optional in Annex
     // A, the application of either or both of these filters is optional.
     // deblocking filter
     // invoke 8.7.2
     deblock_filter(slice, sps, p);
-    // sao (sample adaptive offset) filter
-    sps->sample_adaptive_offset_enabled_flag = 0;
-    if (sps->sample_adaptive_offset_enabled_flag == 1) {
-        // invoke 8.7.3
-        sao_filter(slice, pps, sps, p);
-    }
+    /* sao is not applied yet, but the flag lives in the parameter set that a
+     * heif grid shares between tiles: clearing it here would make the next
+     * tile parse its slice header without the sao flags and desync */
 }
 
 static void
@@ -7237,7 +7257,8 @@ hevc_conformance_crop(const struct sps *sps, int *x, int *y,
 static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                      struct bits_vec *v,
                                      struct hevc_param_set *hps,
-                                     uint8_t **pixels) {
+                                     uint8_t *pixels, int buf_pitch,
+                                     int buf_height) {
     int ret;
     uint32_t SliceAddrRs;
     struct hevc_slice hslice = {
@@ -7268,11 +7289,23 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
     // bits_vec_dump(v);
     int width = sps->pic_width_in_luma_samples;
     int height = ((sps->pic_height_in_luma_samples + 3)>>2)<<2;
+    if (width <= 0 || height <= 0) {
+        VERR(hevc, "invalid picture size %dx%d", width, height);
+        free_slice_segment_header(hslice.slice);
+        return -EINVAL;
+    }
+    if ((int64_t)height * (((int64_t)width + 3) & ~(int64_t)3) >
+        INT32_MAX / 2) {
+        VERR(hevc, "picture is too large: %dx%d", width, height);
+        free_slice_segment_header(hslice.slice);
+        return -EINVAL;
+    }
     int y_stride = ((width + 3) >> 2) << 2;
     int uv_stride = y_stride >> 1;
+    int ctu = 1 << sps->CtbLog2SizeY;
     struct picture p = {
         .size = height * y_stride,
-        .pixel = calloc(height * y_stride * 2, sizeof(int16_t)),
+        .pixel = calloc((size_t)height * y_stride * 2, sizeof(int16_t)),
         .y_stride = y_stride,
         .uv_stride = uv_stride,
     };
@@ -7298,6 +7331,17 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
     p.slice_num ++;
     p.slices = realloc(p.slices, p.slice_num * sizeof(struct slice_segment_header *));
 
+    int crop_x = 0, crop_y = 0, crop_w = 0, crop_h = 0;
+    int out_pitch = 0;
+    int mbcols = 0, mbrows = 0;
+
+    if (!p.pixel || !p.IntraPredModeY || !p.IntraPredModeC || !p.info ||
+        !p.split_transform_flag || !p.ctus || !p.slices) {
+        VERR(hevc, "no memory for a %dx%d picture", width, height);
+        ret = -ENOMEM;
+        goto out;
+    }
+
     ret = parse_slice_segment_data(v, &hslice, hps, SliceAddrRs, &p);
     if (ret < 0) {
         VERR(hevc, "failed to decode slice segment data");
@@ -7309,13 +7353,39 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         goto out;
     }
 
+    /* the destination holds the display size, so check the cropped picture
+     * fits before the colour conversion writes into it */
+    if (sps->chroma_format_idc == CHROMA_420) {
+        hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
+        out_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
+        if (crop_x < 0 || crop_y < 0 || crop_w <= 0 || crop_h <= 0 ||
+            (int64_t)crop_x + crop_w > width ||
+            (int64_t)crop_y + crop_h > height ||
+            out_pitch > buf_pitch || crop_h > buf_height) {
+            VERR(hevc, "crop %dx%d at pitch %d does not fit a buffer %d high at pitch %d",
+                 crop_w, crop_h, out_pitch, buf_height, buf_pitch);
+            ret = -EINVAL;
+            goto out;
+        }
+    } else if (sps->chroma_format_idc == CHROMA_400) {
+        mbcols = divceil(width, ctu);
+        mbrows = divceil(height, ctu);
+        out_pitch = y_stride * 4;
+        size_t read_samples = (size_t)(mbrows * ctu - 1) * y_stride +
+                              (size_t)mbcols * ctu;
+        size_t write_bytes = (size_t)(mbrows * ctu - 1) * out_pitch +
+                             (size_t)mbcols * ctu * 4;
+        if (read_samples > (size_t)height * y_stride * 2 ||
+            write_bytes > (size_t)buf_pitch * buf_height) {
+            VERR(hevc, "4:0:0 picture does not fit the source or destination");
+            ret = -EINVAL;
+            goto out;
+        }
+    }
+
     inloop_filter(hslice.slice, pps, sps, &p);
 
     if (sps->chroma_format_idc == CHROMA_420) {
-        /* the caller's buffer holds the display size, so the padded rows and
-         * columns of the coded picture have to be cropped away first */
-        int crop_x, crop_y, crop_w, crop_h;
-        int dst_pitch;
         int16_t *y_plane, *u_plane, *v_plane;
         int full_range = 0;
         int matrix_coeffs = 2;
@@ -7326,15 +7396,13 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                 matrix_coeffs = sps->vui->matrix_coeffs;
             }
         }
-        hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
-        dst_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
         y_plane = p.pixel + crop_y * y_stride + crop_x;
         u_plane = p.pixel + p.size +
                   (crop_y / 2) * uv_stride + crop_x / 2;
         v_plane = p.pixel + p.size * 3 / 2 +
                   (crop_y / 2) * uv_stride + crop_x / 2;
-        YUV420_to_BGRA32_16bit(*pixels, dst_pitch, y_plane, u_plane, v_plane,
-                y_stride, uv_stride, crop_w, crop_h, 1 << sps->CtbLog2SizeY,
+        YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane, v_plane,
+                y_stride, uv_stride, crop_w, crop_h, ctu,
                 full_range, matrix_coeffs);
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
@@ -7344,11 +7412,8 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     } else if (sps->chroma_format_idc == CHROMA_400) {
         VDBG(hevc, "we got CHROME_400");
-        YUV400_to_BGRA32_16bit(
-            *pixels, ((y_stride * 32 + 32 - 1) >> 5) << 2, p.pixel,
-            y_stride,
-            divceil(height, (1 << sps->CtbLog2SizeY)),
-            divceil(width, (1 << sps->CtbLog2SizeY)), 1 << sps->CtbLog2SizeY);
+        YUV400_to_BGRA32_16bit(pixels, out_pitch, p.pixel, y_stride,
+                               mbrows, mbcols, ctu);
     }
 
 out:
@@ -7375,8 +7440,8 @@ out:
 }
 
 int
-parse_nalu(uint8_t *data, int len, uint8_t **pixels, void **param_set,
-           struct hevc_param_set *hps)
+parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
+           int dst_height, void **param_set, struct hevc_param_set *hps)
 {
     struct hevc_nalu_header h;
     int ret = -EINVAL;
@@ -7425,11 +7490,12 @@ parse_nalu(uint8_t *data, int len, uint8_t **pixels, void **param_set,
         // hexdump(stdout, "data: ", "", data, 32);
         // printf("nrbsp %d\n", nrbsp);
         // hexdump(stdout, "rbsp: ", "", rbsp, 32);
-        if (pixels == NULL || *pixels == NULL) {
+        if (pixels == NULL || dst_pitch <= 0 || dst_height <= 0) {
             VERR(hevc, "slice nal without a pixel buffer");
             break;
         }
-        if (parse_slice_segment_layer(&h, v, hps, pixels) == 0) {
+        if (parse_slice_segment_layer(&h, v, hps, pixels, dst_pitch,
+                                      dst_height) == 0) {
             ret = h.nal_unit_type;
         } else {
             VERR(hevc, "failed to decode slice nal");

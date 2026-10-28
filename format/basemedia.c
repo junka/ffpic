@@ -503,6 +503,14 @@ read_ipco_box(FILE *f, struct ipco_box *b)
         struct box *cc = NULL;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "IPCO: type %s, size %" PRIu64 "", UINT2TYPE(type), p.size);
+        if (p.size < 8) {
+            break;
+        }
+        if (n >= (int)(sizeof(b->property) / sizeof(b->property[0]))) {
+            s -= (p.size);
+            fseek(f, p.size, SEEK_CUR);
+            continue;
+        }
         switch (type) {
             case FOURCC2UINT('h', 'v', 'c', 'C'):
                 s -= read_hvcc_box(f, &cc);
@@ -543,6 +551,14 @@ read_ipco_box(FILE *f, struct ipco_box *b)
                 b->property[n++] = (struct box *)cc;
                 break;
             default:
+                /* ipma associations index every box in this container, so a
+                 * property we do not decode still has to take its slot */
+                cc = calloc(1, sizeof(struct box));
+                if (cc) {
+                    cc->size = p.size;
+                    cc->type = type;
+                    b->property[n++] = cc;
+                }
                 s -= (p.size);
                 fseek(f, p.size, SEEK_CUR);
                 break;

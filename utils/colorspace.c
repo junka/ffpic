@@ -159,9 +159,9 @@ YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
             // g = (y + add_g) >> SCALEBITS;
             // r = (y + add_r) >> SCALEBITS;
 
-            r = clamp(yy + 1.280 * vv, 255);
-            g = clamp(yy - 0.215 * uu - 0.381 * vv, 255);
-            b = clamp(yy + 2.128 * uu, 255);
+            r = clamp(yy + 1.402 * vv, 255);
+            g = clamp(yy - 0.34414 * uu - 0.71414 * vv, 255);
+            b = clamp(yy + 1.772 * uu, 255);
             p[4 * k] = b;
             p[4 * k + 1] = g;
             p[4 * k + 2] = r;
@@ -201,9 +201,9 @@ single_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y,
             // g = (y + add_g) >> SCALEBITS;
             // r = (y + add_r) >> SCALEBITS;
 
-            r = clamp(yy + 1.280 * vv, 255);
-            g = clamp(yy - 0.215 * uu - 0.381 * vv, 255);
-            b = clamp(yy + 2.128 * uu, 255);
+            r = clamp(yy + 1.402 * vv, 255);
+            g = clamp(yy - 0.34414 * uu - 0.71414 * vv, 255);
+            b = clamp(yy + 1.772 * uu, 255);
             p[4 * k] = b;
             p[4 * k + 1] = g;
             p[4 * k + 2] = r;

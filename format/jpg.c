@@ -918,7 +918,7 @@ JPG_load_one(FILE *f, int skip_flag)
         case SOF2:
             VDBG(jpg, "SOFn");
             read_sof(j, f);
-            p->width = ((j->sof.width + 7) >> 3) << 3;
+            p->width = j->sof.width;
             p->height = j->sof.height;
             p->depth = 32;
             {

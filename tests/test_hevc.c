@@ -10,8 +10,10 @@
 #include <errno.h>
 
 #include "colorspace.h"
+#include "file.h"
 #include "hevc.h"
 #include "idct.h"
+#include "vlog.h"
 
 static int
 check_crop(const struct sps *sps, int x, int y, int width, int height)
@@ -237,8 +239,133 @@ test_dst_scalar(void)
     return 0;
 }
 
+/* Real x265 still images wrapped in a minimal heif container, each paired
+ * with the bgra frame ffmpeg's own hevc decoder produces.  Both files come
+ * from tests/gen_hevc_samples.py.  The samples cover sao on and off, tiles,
+ * wavefront processing, ctb 16, an odd size that goes through the
+ * conformance window crop, coarse quantization, lossless coding and 4:0:0.
+ * Lossy coding moves pixels, so every sample carries its own tolerance and
+ * the whole frame is compared, not just a few points. */
+static int
+test_real_samples(void)
+{
+    static const struct {
+        const char *name;
+        int w, h, tol;
+        int mono;
+    } cases[] = {
+        {"hevc_gradient", 96, 96, 16, 0},
+        {"hevc_noise", 96, 96, 16, 0},
+        {"hevc_odd", 100, 62, 16, 0},
+        {"hevc_ctb16", 96, 96, 16, 0},
+        {"hevc_tiles", 128, 96, 16, 0},
+        {"hevc_wpp", 128, 96, 16, 0},
+        {"hevc_nosao", 96, 96, 16, 0},
+        {"hevc_highqp", 96, 96, 16, 0},
+        {"hevc_lossless", 64, 64, 4, 0},
+        {"hevc_mono", 96, 96, 8, 1},
+    };
+    int rc = 0;
+
+    file_ops_init();
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char path[512], refpath[512];
+        snprintf(path, sizeof(path), "%s/%s.heic", TEST_DATA_DIR,
+                 cases[i].name);
+        snprintf(refpath, sizeof(refpath), "%s/%s.ref", TEST_DATA_DIR,
+                 cases[i].name);
+
+        struct file_ops *ops = file_probe(path);
+        if (!ops || strcmp(ops->name, "HEIF")) {
+            printf("%s: not detected as HEIF\n", path);
+            rc = -1;
+            continue;
+        }
+        struct pic *p = file_load(ops, path, 0);
+        if (!p) {
+            printf("%s: did not decode\n", path);
+            rc = -1;
+            continue;
+        }
+        if (p->width != cases[i].w || p->height != cases[i].h) {
+            printf("%s: decoded as %dx%d, expected %dx%d\n", path, p->width,
+                   p->height, cases[i].w, cases[i].h);
+            rc = -1;
+            goto next;
+        }
+
+        FILE *f = fopen(refpath, "rb");
+        if (!f) {
+            printf("%s: cannot open the reference\n", refpath);
+            rc = -1;
+            goto next;
+        }
+        size_t ref_size = (size_t)cases[i].w * cases[i].h * 4;
+        uint8_t *ref = malloc(ref_size);
+        if (!ref || fread(ref, 1, ref_size, f) != ref_size) {
+            printf("%s: could not read the reference\n", refpath);
+            free(ref);
+            fclose(f);
+            rc = -1;
+            goto next;
+        }
+        fclose(f);
+
+        int maxdiff = 0;
+        int bad = 0;
+        for (int y = 0; y < cases[i].h && !bad; y++) {
+            uint8_t *row = (uint8_t *)p->pixels + (size_t)y * p->pitch;
+            const uint8_t *rrow = ref + (size_t)y * cases[i].w * 4;
+            for (int x = 0; x < cases[i].w && !bad; x++) {
+                for (int c = 0; c < 3; c++) {
+                    int d = abs(row[x * 4 + c] - rrow[x * 4 + c]);
+                    if (d > maxdiff) {
+                        maxdiff = d;
+                    }
+                    if (d > cases[i].tol) {
+                        printf("%s: (%d,%d) channel %d is %d, reference %d, "
+                               "max diff %d exceeds %d\n", path, x, y, c,
+                               row[x * 4 + c], rrow[x * 4 + c], d,
+                               cases[i].tol);
+                        bad = 1;
+                        rc = -1;
+                        break;
+                    }
+                }
+                if (cases[i].mono) {
+                    if (row[x * 4] != row[x * 4 + 1] ||
+                        row[x * 4 + 1] != row[x * 4 + 2]) {
+                        printf("%s: (%d,%d) grey came out %d %d %d\n", path, x,
+                               y, row[x * 4], row[x * 4 + 1],
+                               row[x * 4 + 2]);
+                        bad = 1;
+                        rc = -1;
+                        break;
+                    }
+                } else if (row[x * 4 + 3] != 0xFF) {
+                    printf("%s: (%d,%d) alpha %d, expected 255\n", path, x, y,
+                           row[x * 4 + 3]);
+                    bad = 1;
+                    rc = -1;
+                    break;
+                }
+            }
+        }
+        free(ref);
+        if (!bad) {
+            printf("%s: ok, max channel diff %d\n", cases[i].name, maxdiff);
+        }
+next:
+        file_free(ops, p);
+    }
+    return rc;
+}
+
 int main(void)
 {
+    vlog_init();
+    vlog_set_global_level(VLOG_DEBUG);
     if (test_crop()) {
         return -1;
     }
@@ -255,6 +382,9 @@ int main(void)
         return -1;
     }
     if (test_dst_scalar()) {
+        return -1;
+    }
+    if (test_real_samples()) {
         return -1;
     }
     return 0;

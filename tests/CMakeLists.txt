@@ -35,6 +35,22 @@ target_link_libraries(test_cabac ffpic m)
 add_test(NAME test_cabac COMMAND test_cabac)
 
 
+set(BOOLDEC_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_booldec.c)
+add_executable(test_booldec ${BOOLDEC_TEST})
+target_include_directories(test_booldec PRIVATE ${FFPIC_DIRS})
+target_link_libraries(test_booldec ffpic m)
+add_test(NAME test_booldec COMMAND test_booldec)
+
+
+set(JPG_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_jpg.c)
+add_executable(test_jpg ${JPG_TEST})
+target_include_directories(test_jpg PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_jpg PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_jpg ffpic m)
+add_test(NAME test_jpg COMMAND test_jpg)
+
+
 set(DECODE_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_decode.c)
 add_executable(test_decode ${DECODE_TEST})
 target_include_directories(test_decode PRIVATE ${FFPIC_DIRS})

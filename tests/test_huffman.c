@@ -116,6 +116,89 @@ int test_encoder(void)
     return 0;
 }
 
+/* Codes longer than the 8-bit fast table go through the bit-by-bit slow
+ * path.  A..C pin the fast table, D and E are 9-bit and F is a 10-bit code
+ * decoded through it.  Canonical assignment: A=0, B=010, C=011, then the
+ * 9-bit codes start at (011+1)<<6 = 0b110000000, F at 0b1100000100.  Two
+ * extra symbols pad the stream to a whole byte, which the writer only
+ * counts in full bytes.  The stream bytes are pinned so the code
+ * assignment is anchored, not just round-tripped. */
+static int test_slow_path(void)
+{
+    static const uint8_t stream[] = {0x4B, 0x80, 0xC0, 0xE0, 0x30, 0x44};
+    static const char expect[] = {'A', 'B', 'C', 'D', 'E', 'D', 'F', 'A', 'B'};
+    huffman_tree *tree = NULL;
+    struct huffman_symbol *s = NULL;
+    struct huffman_codec *codec = NULL;
+    uint8_t num_codecs[16] = {0};
+    uint8_t syms[] = {'A', 'B', 'C', 'D', 'E', 'F'};
+    uint8_t *data = NULL;
+    int ret = -1;
+
+    num_codecs[0] = 1;  /* A   0        (1 bit)  */
+    num_codecs[2] = 2;  /* B   010, C   011      (3 bits) */
+    num_codecs[8] = 2;  /* D,E 100000000/1       (9 bits) */
+    num_codecs[9] = 1;  /* F   1000000100        (10 bits) */
+
+    tree = huffman_tree_init();
+    if (!tree) {
+        return -1;
+    }
+    s = huffman_symbol_alloc(num_codecs, syms);
+    if (!s) {
+        goto out;
+    }
+    huffman_build_lookup_table(tree, 0, s);
+
+    codec = huffman_codec_init(NULL, 0);
+    if (!codec) {
+        goto out;
+    }
+    for (size_t i = 0; i < sizeof(expect); i++) {
+        if (huffman_encode_symbol(codec, tree, expect[i])) {
+            printf("slow path encode failed for %c\n", expect[i]);
+            goto out;
+        }
+    }
+    uint8_t *got;
+    int len = huffman_encode_done(codec, &got);
+    if (len != (int)sizeof(stream) || memcmp(got, stream, sizeof(stream))) {
+        printf("slow path encoded bytes differ\n");
+        goto out;
+    }
+    huffman_codec_free(codec);
+    codec = NULL;
+
+    data = malloc(sizeof(stream));
+    if (!data) {
+        goto out;
+    }
+    memcpy(data, stream, sizeof(stream));
+    codec = huffman_codec_init(data, sizeof(stream));
+    if (!codec) {
+        goto out;
+    }
+    for (size_t i = 0; i < sizeof(expect); i++) {
+        int sym = huffman_decode_symbol(codec, tree);
+        if (sym != expect[i]) {
+            printf("slow path symbol %zu is %d, expected %d\n", i, sym,
+                   expect[i]);
+            goto out;
+        }
+    }
+    ret = 0;
+out:
+    if (codec) {
+        huffman_codec_free(codec);
+    } else {
+        free(data);
+    }
+    free(s->syms);
+    free(s);
+    huffman_cleanup(tree);
+    return ret;
+}
+
 int main(void) {
     if (test_decoder()) {
         printf("test decoder fail\n");
@@ -127,5 +210,10 @@ int main(void) {
         return -1;
     }
     printf("test encoder done\n");
+    if (test_slow_path()) {
+        printf("test slow path fail\n");
+        return -1;
+    }
+    printf("test slow path done\n");
     return 0;
 }

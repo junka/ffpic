@@ -4,6 +4,9 @@
 int
 log2floor(uint32_t n)
 {
+    if (n == 0) {
+        return 0;
+    }
 #if defined(__GNUC__) && ((__GNUC__ == 3 && __GNUC_MINOR__ >= 4) || __GNUC__ >= 4)
     return 31 ^ __builtin_clz(n);
 #else

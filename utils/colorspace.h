@@ -25,7 +25,7 @@ void YUV400_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
                             int y_stride, int mbrows, int mbcols, int ctbsize);
 
 void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
-                            int y_stride, int mbrows, int mbcols, int ctbsize);
+                            int y_stride, int width, int height, int ctbsize);
 
 struct cs_ops {
     void (*YUV_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V, int vertical, int horizontal);

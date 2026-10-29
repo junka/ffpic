@@ -760,22 +760,23 @@ void YUV420_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
 }
 
 void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
-                            int y_stride, int mbrows, int mbcols,
-                            int ctbsize) {
-    uint8_t *p = ptr, *p2 = ptr;
-    int width = mbcols * ctbsize;
-    int right_space = pitch - width * 4;
-    int16_t *Y;
-    int16_t yy;
+                            int y_stride, int width, int height, int ctbsize) {
+    /* the destination is the display size, so a partial last ctb only
+     * writes its visible samples */
+    int mbcols = (width + ctbsize - 1) / ctbsize;
+    int mbrows = (height + ctbsize - 1) / ctbsize;
 
     for (int y = 0; y < mbrows; y++) {
+        int rows = height - y * ctbsize < ctbsize ?
+                   height - y * ctbsize : ctbsize;
         for (int x = 0; x < mbcols; x++) {
-            Y = yout + y_stride * y * ctbsize + x * ctbsize;
-            p = p2;
-            p2 = p + ctbsize * 4;
-            for (int i = 0; i < ctbsize; i++) {
-                for (int j = 0; j < ctbsize; j++) {
-                    yy = clamp(Y[i * y_stride + j], 255);
+            int cols = width - x * ctbsize < ctbsize ?
+                       width - x * ctbsize : ctbsize;
+            int16_t *Y = yout + y_stride * y * ctbsize + x * ctbsize;
+            uint8_t *p = ptr + (size_t)y * ctbsize * pitch + (size_t)x * ctbsize * 4;
+            for (int i = 0; i < rows; i++) {
+                for (int j = 0; j < cols; j++) {
+                    uint8_t yy = (uint8_t)clamp(Y[i * y_stride + j], 255);
                     p[4 * j] = yy;
                     p[4 * j + 1] = yy;
                     p[4 * j + 2] = yy;
@@ -784,7 +785,6 @@ void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                 p += pitch;
             }
         }
-        p2 = p - pitch + ctbsize * 4 + right_space;
     }
 }
 

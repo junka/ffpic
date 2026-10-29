@@ -160,11 +160,8 @@ struct jp2_pclr_box {
     BOX_ST;
     uint16_t num_entry;
     uint8_t num_channel;
-    uint16_t palette_input; //
-    uint16_t *component;
-    uint8_t *depth;
-    uint32_t *entries;
-    // struct jp2_cmap_component * cmap;
+    uint8_t *bit_depth;   /* number of bits per palette column */
+    uint32_t *entries;    /* num_entry * num_channel, one per column */
 };
 
 // capture resolution box
@@ -375,15 +372,16 @@ struct rgn {
     uint8_t* roi_shift;
 };
 
-//Quantization default
+//Quantization default, Sqcd in table A.28: bits 4-0 quantization style,
+//bits 7-5 number of guard bits
 struct qcd {
     uint16_t length;
 #if BYTE_ORDER == LITTLE_ENDIAN
-    uint8_t guard_num:3;
     uint8_t quant_type:5;
+    uint8_t guard_num:3;
 #else
-    uint8_t quant_type:5;
     uint8_t guard_num:3;
+    uint8_t quant_type:5;
 #endif
     uint8_t *table;
 };

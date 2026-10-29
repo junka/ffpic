@@ -16,7 +16,13 @@
 #include <string.h>
 
 #include "file.h"
+#include "jp2.h"
 #include "utils.h"
+
+#ifndef TEST_DATA_DIR
+#define TEST_DATA_DIR "data"
+#endif
+#define JP2_DATA(name) TEST_DATA_DIR "/" name
 
 struct want_px {
     int row;
@@ -264,6 +270,134 @@ check_reject(const char *name, const char *expect)
         printf("%s: ok\n", name);
     }
     return rc;
+}
+
+/* the jp2 samples under tests/data are real opj_compress output; this build
+ * parses the container and codestream headers but does not decode pixels, so
+ * the checks cover the image size, the component count, the tile layout, the
+ * cod marker and the Sqcd quantization style */
+static int
+check_jp2(const char *path, int width, int height, int comps, int tiles,
+          int transform, int quant_type)
+{
+    struct file_ops *ops = file_probe(path);
+    struct pic *p;
+    JP2 *j;
+    int rc = 0;
+
+    if (!ops) {
+        printf("%s: no format claimed it, expected JP2\n", path);
+        return -1;
+    }
+    if (strcmp(ops->name, "JP2")) {
+        printf("%s: probed as %s, expected JP2\n", path, ops->name);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (!p) {
+        printf("%s: load failed\n", path);
+        return -1;
+    }
+    j = p->pic;
+    if ((int)j->jp2h.ihdr.width != width ||
+        (int)j->jp2h.ihdr.height != height ||
+        (int)j->jp2h.ihdr.num_comp != comps) {
+        printf("%s: ihdr %ux%u with %u components, expected %dx%d with %d\n",
+               path, j->jp2h.ihdr.width, j->jp2h.ihdr.height,
+               j->jp2h.ihdr.num_comp, width, height, comps);
+        rc = -1;
+    }
+    if ((int)j->main_h.siz.width != width ||
+        (int)j->main_h.siz.height != height ||
+        (int)j->main_h.siz.component_num != comps) {
+        printf("%s: siz %ux%u with %u components, expected %dx%d with %d\n",
+               path, j->main_h.siz.width, j->main_h.siz.height,
+               j->main_h.siz.component_num, width, height, comps);
+        rc = -1;
+    }
+    if (j->tile_nums != tiles) {
+        printf("%s: %d tile(s), expected %d\n", path, j->tile_nums, tiles);
+        rc = -1;
+    }
+    if ((int)j->main_h.cod.p.transform != transform) {
+        printf("%s: wavelet transform %d, expected %d\n", path,
+               j->main_h.cod.p.transform, transform);
+        rc = -1;
+    }
+    if (j->main_h.qcd.table == NULL) {
+        printf("%s: quantization table missing\n", path);
+        rc = -1;
+    }
+    /* Sqcd packs the style in bits 7-5 and the guard bit count in bits 4-0 */
+    if ((int)j->main_h.qcd.quant_type != quant_type) {
+        printf("%s: quantization style %d, expected %d\n", path,
+               j->main_h.qcd.quant_type, quant_type);
+        rc = -1;
+    }
+    if (j->main_h.qcd.guard_num != 2) {
+        printf("%s: %d guard bits, expected 2\n", path,
+               j->main_h.qcd.guard_num);
+        rc = -1;
+    }
+
+    file_info(ops, p);
+    file_free(ops, p);
+    if (!rc) {
+        printf("%s: ok\n", path);
+    }
+    return rc;
+}
+
+static int
+truncate_copy(const char *src, const char *dst, long keep)
+{
+    FILE *in = fopen(src, "rb");
+    FILE *out;
+    uint8_t *buf;
+    long n;
+
+    if (!in) {
+        return -1;
+    }
+    buf = malloc((size_t)keep);
+    if (!buf) {
+        fclose(in);
+        return -1;
+    }
+    n = (long)fread(buf, 1, (size_t)keep, in);
+    fclose(in);
+    out = fopen(dst, "wb");
+    if (!out) {
+        free(buf);
+        return -1;
+    }
+    fwrite(buf, 1, (size_t)n, out);
+    fclose(out);
+    free(buf);
+    return 0;
+}
+
+/* a truncated sample has to come back without a crash, a hang or a leak:
+ * the loader may parse whatever boxes are still intact */
+static int
+check_jp2_truncated(const char *src, const char *dst, long keep)
+{
+    struct file_ops *ops;
+
+    if (truncate_copy(src, dst, keep)) {
+        printf("%s: could not truncate to %ld bytes\n", src, keep);
+        return -1;
+    }
+    ops = file_probe(dst);
+    if (ops && strcmp(ops->name, "JP2") == 0) {
+        struct pic *p = file_load(ops, dst, 0);
+        if (p) {
+            file_free(ops, p);
+        }
+    }
+    remove(dst);
+    printf("%s @%ld: ok\n", src, keep);
+    return 0;
 }
 
 /* ---------------------------------------------------------------- bitmap */
@@ -3267,6 +3401,21 @@ int main(void)
     /* probes without a decoder on this build */
     if (emit_probe_jp2() || check_claim("probe.jp2", "JP2")) {
         failed++;
+    }
+
+    /* jp2 container and codestream headers, reversible and irreversible
+     * transform, single tile and four tiles */
+    if (check_jp2(JP2_DATA("jp2_lossless.jp2"), 64, 48, 3, 1, 1, 0) ||
+        check_jp2(JP2_DATA("jp2_lossy.jp2"), 64, 48, 3, 1, 0, 2) ||
+        check_jp2(JP2_DATA("jp2_gray.jp2"), 64, 48, 1, 1, 1, 0) ||
+        check_jp2(JP2_DATA("jp2_tiles.jp2"), 64, 48, 3, 4, 1, 0)) {
+        failed++;
+    }
+    for (long keep = 12; keep < 1100; keep += 73) {
+        if (check_jp2_truncated(JP2_DATA("jp2_lossless.jp2"), "jp2_short.jp2",
+                                keep)) {
+            failed++;
+        }
     }
     if (emit_probe_bpg() || check_claim("probe.bpg", "BPG")) {
         failed++;

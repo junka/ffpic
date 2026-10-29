@@ -63,6 +63,8 @@ add_test(NAME test_decode COMMAND test_decode)
 set(DECODE_MORE_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_decode_more.c)
 add_executable(test_decode_more ${DECODE_MORE_TEST})
 target_include_directories(test_decode_more PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_decode_more PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_decode_more ffpic m)
 add_test(NAME test_decode_more COMMAND test_decode_more)
 

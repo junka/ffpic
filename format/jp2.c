@@ -8,13 +8,30 @@
 #include <inttypes.h>
 
 #include "basemedia.h"
-#include "bitstream.h"
 #include "file.h"
 #include "jp2.h"
 #include "vlog.h"
 #include "utils.h"
 
 VLOG_REGISTER(jp2, DEBUG)
+
+/* unlike FFREAD_BOX_ST in basemedia.h, a mismatched box type is reported to
+ * the caller instead of aborting on a truncated or corrupt file */
+#define JP2_READ_BOX_ST(b, f, fourcc) \
+    do { \
+        read_box(f, (b)); \
+        if ((b)->type != (fourcc)) { \
+            return -EINVAL; \
+        } \
+    } while (0)
+
+#define JP2_READ_BOX_FULL(b, f, fourcc) \
+    do { \
+        read_full_box(f, (b)); \
+        if ((b)->type != (fourcc)) { \
+            return -EINVAL; \
+        } \
+    } while (0)
 
 
 static int
@@ -37,7 +54,7 @@ JP2_probe(FILE *f)
 int
 read_jp2_ihdr_box(FILE *f, struct jp2_ihdr_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'h', 'd', 'r'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('i', 'h', 'd', 'r'));
     // b->vers = read_u16(f);
     // b->num_comp = read_u16(f);
     b->height = read_u32(f);
@@ -53,7 +70,7 @@ read_jp2_ihdr_box(FILE *f, struct jp2_ihdr_box *b)
 int
 read_jp2_colr_box(FILE *f, struct jp2_colr_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
     FFREAD_IGNORE(&b->method, 3, 1, f);
     if (b->method == ENUMERATED_COLORSPACE) {
         FFREAD_IGNORE(&b->enum_cs, 4, 1, f);
@@ -76,20 +93,32 @@ read_jp2_colr_box(FILE *f, struct jp2_colr_box *b)
 static int
 read_jp2_bpcc_box(FILE *f, struct jp2_bpcc_box *b, int num)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('b', 'p', 'c', 'c'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('b', 'p', 'c', 'c'));
+    /* one byte per component, and never past the end of the box */
+    if (b->size < 8 || num <= 0 || (uint64_t)num > b->size - 8) {
+        return b->size;
+    }
     b->bits_per_comp = malloc(num);
-    FFREAD_IGNORE(b->bits_per_comp, 1, num, f);
+    if (b->bits_per_comp) {
+        FFREAD_IGNORE(b->bits_per_comp, 1, num, f);
+    }
     return b->size;
 }
 
 int
 read_jp2_cmap_box(FILE *f, struct jp2_cmap_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'm', 'a', 'p'));
-    int n = (b->size - 8) / 4;
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('c', 'm', 'a', 'p'));
+    if (b->size < 12) {
+        return b->size;
+    }
+    int n = (int)((b->size - 8) / 4);
     b->cmp = calloc(n, 2);
     b->mtyp = calloc(n, 1);
     b->pcol = calloc(n, 1);
+    if (b->cmp == NULL || b->mtyp == NULL || b->pcol == NULL) {
+        return b->size;
+    }
     for (int i = 0; i < n; i++) {
         b->cmp[i] = read_u16(f);
         b->mtyp[i] = read_u8(f);
@@ -101,11 +130,26 @@ read_jp2_cmap_box(FILE *f, struct jp2_cmap_box *b)
 int
 read_jp2_cdef_box(FILE *f, struct jp2_cdef_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'd', 'e', 'f'));
-    b->num_comp = read_u16(f);
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('c', 'd', 'e', 'f'));
+    if (b->size < 10) {
+        return b->size;
+    }
+    /* each entry is 6 bytes, so never trust the count past the box end */
+    int room = (int)((b->size - 10) / 6);
+    uint16_t n_comp = read_u16(f);
+    if (n_comp > room) {
+        n_comp = (uint16_t)room;
+    }
+    b->num_comp = n_comp;
+    if (b->num_comp == 0) {
+        return b->size;
+    }
     b->comp_id = calloc(b->num_comp, 2);
     b->comp_type = calloc(b->num_comp, 2);
     b->comp_assoc = calloc(b->num_comp, 2);
+    if (b->comp_id == NULL || b->comp_type == NULL || b->comp_assoc == NULL) {
+        return b->size;
+    }
     for (int i = 0; i < b->num_comp; i++) {
         b->comp_id[i] = read_u16(f);
         b->comp_type[i] = read_u16(f);
@@ -117,19 +161,44 @@ read_jp2_cdef_box(FILE *f, struct jp2_cdef_box *b)
 int
 read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'c', 'l', 'r'));
-    FFREAD_IGNORE(&b->num_entry, 5, 1, f);
-    b->num_entry = SWAP(b->num_entry);
-    b->num_channel = fgetc(f);
-    b->palette_input = SWAP(b->palette_input);
-    b->component = calloc(b->num_channel, 2);
-    b->depth = malloc(b->num_channel);
-    FFREAD_IGNORE(b->component, 2, b->num_channel, f);
-    FFREAD_IGNORE(b->depth, 1, b->num_channel, f);
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('p', 'c', 'l', 'r'));
+    /* NE(2) NPC(1) then one bit-depth byte per palette column */
+    if (b->size < 11) {
+        return b->size;
+    }
+    b->num_entry = read_u16(f);
+    b->num_channel = read_u8(f);
+    if (b->num_entry == 0 || b->num_channel == 0) {
+        return b->size;
+    }
+    b->bit_depth = calloc(b->num_channel, 1);
+    if (b->bit_depth == NULL) {
+        return b->size;
+    }
+    FFREAD_IGNORE(b->bit_depth, 1, b->num_channel, f);
+
+    /* every entry stores one value per column, ceil(depth / 8) bytes wide */
+    int bytes_per_entry = 0;
+    for (int j = 0; j < b->num_channel; j++) {
+        bytes_per_entry += (b->bit_depth[j] + 7) >> 3;
+    }
+    uint64_t need = 11 + (uint64_t)b->num_channel +
+                    (uint64_t)b->num_entry * bytes_per_entry;
+    if (bytes_per_entry == 0 || need > b->size) {
+        return b->size;
+    }
+    b->entries = calloc((size_t)b->num_entry * b->num_channel, sizeof(uint32_t));
+    if (b->entries == NULL) {
+        return b->size;
+    }
     for (int i = 0; i < b->num_entry; i ++) {
         for (int j = 0; j < b->num_channel; j ++) {
-            int n = (b->entries[j] + 8) >> 3;
-            FFREAD_IGNORE(b->entries + i * b->num_entry + j, n, 1, f);
+            int n = (b->bit_depth[j] + 7) >> 3;
+            uint32_t v = 0;
+            for (int k = 0; k < n; k++) {
+                v = (v << 8) | read_u8(f);
+            }
+            b->entries[(size_t)i * b->num_channel + j] = v;
         }
     }
     return b->size;
@@ -138,7 +207,7 @@ read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
 static int
 read_jp2_resc_box(FILE *f, struct jp2_resc_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'c'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'c'));
     b->vrcn = read_u16(f);
     b->vrcd = read_u16(f);
     b->hrcn = read_u16(f);
@@ -151,7 +220,7 @@ read_jp2_resc_box(FILE *f, struct jp2_resc_box *b)
 static int
 read_jp2_resd_box(FILE *f, struct jp2_resd_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'd'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', 'd'));
     b->vrdn = read_u16(f);
     b->vrdd = read_u16(f);
     b->hrdn = read_u16(f);
@@ -164,9 +233,10 @@ read_jp2_resd_box(FILE *f, struct jp2_resd_box *b)
 int
 read_jp2_res_box(FILE *f, struct jp2_res_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', ' '));
-    int64_t s = b->size - 8;
-    while (s) {
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('r', 'e', 's', ' '));
+    int64_t s = (int64_t)b->size - 8;
+    while (s > 0) {
+        long before = ftell(f);
         struct box p;
         probe_box(f, &p);
         switch (p.type) {
@@ -177,9 +247,17 @@ read_jp2_res_box(FILE *f, struct jp2_res_box *b)
                 read_jp2_resd_box(f, &b->resd);
                 break;
             default:
+                if (p.size < 8) {
+                    return b->size;
+                }
+                fseek(f, (long)(p.size - 8), SEEK_CUR);
                 break;
         }
-        s -= p.size;
+        /* a corrupt or zero sized box must not keep the loop spinning */
+        if (ftell(f) <= before) {
+            break;
+        }
+        s -= (int64_t)p.size;
     }
     return b->size;
 }
@@ -187,7 +265,7 @@ read_jp2_res_box(FILE *f, struct jp2_res_box *b)
 int 
 read_jp2_url_box(FILE * f, struct jp2_url_box *b)
 {
-    FFREAD_BOX_FULL(b, f, FOURCC2UINT('u', 'r', 'l', ' '));
+    JP2_READ_BOX_FULL(b, f, FOURCC2UINT('u', 'r', 'l', ' '));
     read_till_null(f, &b->location);
     return b->size;
 }
@@ -195,9 +273,22 @@ read_jp2_url_box(FILE * f, struct jp2_url_box *b)
 int
 read_jp2_ulst_box(FILE * f, struct jp2_ulst_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'l', 's', 't'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('u', 'l', 's', 't'));
+    if (b->size < 10) {
+        return b->size;
+    }
     b->num_uuid = read_u16(f);
+    if ((uint64_t)b->num_uuid * sizeof(uint128_t) > b->size - 10) {
+        b->num_uuid = (uint16_t)((b->size - 10) / sizeof(uint128_t));
+    }
+    if (b->num_uuid == 0) {
+        return b->size;
+    }
     b->id = malloc(b->num_uuid * sizeof(uint128_t));
+    if (b->id == NULL) {
+        b->num_uuid = 0;
+        return b->size;
+    }
     for (int i = 0; i < b->num_uuid; i ++) {
         FFREAD_IGNORE(b->id + i, sizeof(uint128_t), 1, f);
     }
@@ -207,7 +298,7 @@ read_jp2_ulst_box(FILE * f, struct jp2_ulst_box *b)
 int
 read_jp2_uinf_box(FILE * f, struct jp2_uinf_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'i', 'n', 'f'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('u', 'i', 'n', 'f'));
     // read ulst
     read_jp2_ulst_box(f, &b->ulst);
     // read url
@@ -219,19 +310,31 @@ read_jp2_uinf_box(FILE * f, struct jp2_uinf_box *b)
 int
 read_jp2_xml_box(FILE *f, struct jp2_xml_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('x', 'm', 'l', ' '));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('x', 'm', 'l', ' '));
+    if (b->size <= 8) {
+        return b->size;
+    }
     b->data = malloc(b->size - 8);
-    FFREAD(b->data, 1, b->size - 8, f);
+    if (b->data == NULL) {
+        return b->size;
+    }
+    FFREAD_IGNORE(b->data, b->size - 8, 1, f);
     return b->size;
 }
 
 int
 read_jp2_uuid_box(FILE *f, struct jp2_uuid_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('u', 'u', 'i', 'd'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('u', 'u', 'i', 'd'));
+    if (b->size < 24) {
+        return b->size;
+    }
     FFREAD(&b->id, 16, 1, f);
-    b->data = malloc(b->size - 8 - 16);
-    FFREAD(b->data, 1, b->size - 24, f);
+    b->data = malloc(b->size - 24);
+    if (b->data == NULL) {
+        return b->size;
+    }
+    FFREAD_IGNORE(b->data, b->size - 24, 1, f);
     return b->size;
 }
 
@@ -239,15 +342,18 @@ read_jp2_uuid_box(FILE *f, struct jp2_uuid_box *b)
 uint16_t 
 read_marker(FILE *f)
 {
-    uint8_t c = fgetc(f);
+    int c = fgetc(f);
     if (c != 0xFF) {
-        printf("marker 0x%x\n", c);
+        if (c != EOF) {
+            printf("marker 0x%x\n", c);
+        }
         return 0;
     }
-    if (c == 0xFF && !feof(f)) {
-        c = fgetc(f);
+    c = fgetc(f);
+    if (c == EOF) {
+        return 0;
     }
-    return MARK(c);
+    return MARK((uint8_t)c);
 }
 
 int
@@ -269,13 +375,15 @@ read_siz(JP2* j, FILE *f)
     s->component_num = SWAP(s->component_num);
 
     l += 38;
-    s->comps = malloc(sizeof(struct scomponent)*s->component_num);
+    if (s->component_num == 0 || s->component_num > 16384) {
+        return -EINVAL;
+    }
+    s->comps = calloc(s->component_num, sizeof(struct scomponent));
+    if (s->comps == NULL) {
+        return -ENOMEM;
+    }
     FFREAD_IGNORE(s->comps, sizeof(struct scomponent), s->component_num, f);
     l += sizeof(struct scomponent)*s->component_num;
-
-    int width = ((s->width + 7) >> 3) << 3;
-    int pitch = ((width * 32 + 32 - 1) >> 5) << 2;
-    j->data = malloc(pitch * s->height);
     return l;
 }
 
@@ -306,9 +414,15 @@ read_cap(JP2 *j, FILE *f)
     l += 6;
     j->main_h.cap.length = SWAP(j->main_h.cap.length);
     j->main_h.cap.bitmap = SWAP(j->main_h.cap.bitmap);
-    j->main_h.cap.extensions = malloc(j->main_h.cap.length - 6);
-    FFREAD_IGNORE(j->main_h.cap.extensions, 2, j->main_h.cap.length - 6/2, f);
-    l += j->main_h.cap.length - 6;
+    int ext_len = (int)j->main_h.cap.length - 6;
+    if (ext_len > 0) {
+        j->main_h.cap.extensions = calloc(ext_len, 1);
+        if (j->main_h.cap.extensions == NULL) {
+            return -ENOMEM;
+        }
+        FFREAD_IGNORE(j->main_h.cap.extensions, ext_len, 1, f);
+        l += ext_len;
+    }
     return l;
 }
 
@@ -319,10 +433,13 @@ read_cme(JP2 *j, FILE *f)
     FFREAD_IGNORE(&j->main_h.cme, 4, 1, f);
     j->main_h.cme.length = SWAP(j->main_h.cme.length);
     j->main_h.cme.use = SWAP(j->main_h.cme.use);
-    if (j->main_h.cme.length - 4) {
-        j->main_h.cme.str = malloc(j->main_h.cme.length - 4 + 1);
-        FFREAD_IGNORE(j->main_h.cme.str, j->main_h.cme.length - 4, 1, f);
-        j->main_h.cme.str[j->main_h.cme.length - 4] = '\0';
+    if (j->main_h.cme.length > 4) {
+        int str_len = (int)j->main_h.cme.length - 4;
+        j->main_h.cme.str = calloc(str_len + 1, 1);
+        if (j->main_h.cme.str == NULL) {
+            return -ENOMEM;
+        }
+        FFREAD_IGNORE(j->main_h.cme.str, str_len, 1, f);
     }
     l += j->main_h.cme.length;
     return l;
@@ -331,28 +448,45 @@ read_cme(JP2 *j, FILE *f)
 int
 read_qcd(JP2 *j, FILE *f)
 {
+    struct qcd *q = &j->main_h.qcd;
     int l = 0;
-    FFREAD_IGNORE(&j->main_h.qcd, 3, 1, f);
+    int table_len;
+
+    FFREAD_IGNORE(q, 3, 1, f);
     l += 3;
-    j->main_h.qcd.length = SWAP(j->main_h.qcd.length);
-    VDBG(jp2, "guard num %d table len %d, decomp %d\n", j->main_h.qcd.guard_num,
-           j->main_h.qcd.length - 3, j->main_h.cod.p.decomp_level_num);
-    if (j->main_h.qcd.guard_num == 0) {
-        j->main_h.qcd.table = malloc(3*j->main_h.cod.p.decomp_level_num + 1);
-        FFREAD_IGNORE(j->main_h.qcd.table, 3*j->main_h.cod.p.decomp_level_num + 1, 1, f);
-        l += 3*j->main_h.cod.p.decomp_level_num + 1;
-    } else if (j->main_h.qcd.guard_num == 1) {  //scalar
-        j->main_h.qcd.table = malloc(2);
-        FFREAD_IGNORE(j->main_h.qcd.table, 2, 1, f);
-        l += 2;
-    } else if (j->main_h.qcd.guard_num == 2) {
-        j->main_h.qcd.table = malloc(6*j->main_h.cod.p.decomp_level_num + 2);
-        FFREAD_IGNORE(j->main_h.qcd.table, 6*j->main_h.cod.p.decomp_level_num + 2, 1, f);
-        l += 6 * j->main_h.cod.p.decomp_level_num + 2;
+    q->length = SWAP(q->length);
+    VDBG(jp2, "quant type %d, guard bits %d, len %d, decomp %d\n",
+           q->quant_type, q->guard_num, q->length,
+           j->main_h.cod.p.decomp_level_num);
+    if (q->quant_type == 0) {
+        //no quantization, one byte per subband
+        table_len = 3*j->main_h.cod.p.decomp_level_num + 1;
+    } else if (q->quant_type == 1) {
+        //scalar derived, one exponent/mantissa pair shared by all subbands
+        table_len = 2;
+    } else if (q->quant_type == 2) {
+        //scalar expounded, one exponent/mantissa pair per subband
+        table_len = 6*j->main_h.cod.p.decomp_level_num + 2;
     } else {
-        printf("invalid guard num");
+        printf("invalid quant type %d\n", q->quant_type);
+        return l;
     }
-    return l;
+    //the marker length has to win over the value derived from the header
+    if (q->length < 3) {
+        return l;
+    }
+    if (table_len > q->length - 3) {
+        table_len = q->length - 3;
+    }
+    if (table_len <= 0) {
+        return l;
+    }
+    q->table = calloc(table_len, 1);
+    if (q->table == NULL) {
+        return -ENOMEM;
+    }
+    FFREAD_IGNORE(q->table, table_len, 1, f);
+    return l + table_len;
 }
 
 
@@ -363,11 +497,20 @@ read_sot(JP2 *j, FILE *f)
     struct tile_header * t;
 
     if (j->tile_nums == 0) {
-        j->tiles = malloc(sizeof(struct tile_header));
+        j->tiles = calloc(1, sizeof(struct tile_header));
+        if (j->tiles == NULL) {
+            return -ENOMEM;
+        }
         t = j->tiles;
     } else {
-        j->tiles = realloc(j->tiles, sizeof(struct tile_header) * (1 + j->tile_nums));
+        struct tile_header *n = realloc(j->tiles,
+                sizeof(struct tile_header) * (1 + j->tile_nums));
+        if (n == NULL) {
+            return -ENOMEM;
+        }
+        j->tiles = n;
         t = &j->tiles[j->tile_nums];
+        memset(t, 0, sizeof(*t));
     }
     j->tile_nums ++;
 
@@ -381,105 +524,22 @@ read_sot(JP2 *j, FILE *f)
     return l;
 }
 
-struct tag_tree {
-    struct tag_tree *parent;
-    int value;
-    int low;
-};
-
-// 2-D target
-int tag_tree_decode(struct bits_vec *v, uint32_t leafno, int thresh)
-{
-    struct tag_tree* tree[32] = {NULL};
-    struct tag_tree *node = tree[leafno];
-    struct tag_tree **pos = tree;
-    while(node->parent) {
-        *pos++ = node;
-        node = node->parent;
-    }
-    int low = 0;
-    while (true) {
-        if (node->low < low) {
-            node->low = low;
-        } else {
-            low = node->low;
-        }
-        while (low < thresh && low < node->value) {
-            if (READ_BIT(v)) {
-                node->value = low;
-                break;
-            }
-            low ++;
-        }
-        node->low = low;
-        if (pos == tree) {
-            break;
-        }
-        node = *--pos;
-    }
-    return node->value;
-}
-
-//see B.10 packet header information coding
-void read_packet_header(struct bits_vec *v, int tile_id UNUSED) {
-    // start process packet header: B.10
-    //  - zero length packet;
-    //  - code-block inclusion;
-    //  - zero bit-plane information
-    //  - number of coding passes
-    //  - length of the code-block compressed image data from a given code-block
-    // see B.10.3, first bit denotes whether the packet has a length of zero
-    // int layers_num = j->main_h.cod.layers_num;
-    int zl = READ_BIT(v);
-    int inclusion UNUSED;
-    // int bitplane;
-    // int pass = 0;
-    // VDBG(jp2, "layers_num %d zero length packet %d", layers_num, zl);
-    if (zl) {
-        inclusion = tag_tree_decode(v, 0, 0);
-    } else {
-        inclusion = READ_BIT(v);
-    }
-    VDBG(jp2, "zl %d, inclusion %d", zl, inclusion);
-}
-
 //last marker in a tile-part header, end with next SOT or EOC
-//a tile has sevaral bands, a bands contains
+//the coded image data is not needed to report the metadata, the tile-part
+//length carried by SOT is enough to jump to the next marker segment
 int
 read_sod(JP2 *j, FILE *f) {
-    /* read till eoc */
-    // uint8_t *p = j->data;
     int start = ftell(f);
-    int tile_id = j->tiles[j->tile_nums - 1].sot.tile_id;
-    int len = j->tiles[j->tile_nums-1].sot.tile_size -
-        (start - j->tiles[j->tile_nums-1].sot.offset_start);
-    uint8_t *data = malloc(len);
-    FFREAD_IGNORE(data, len, 1, f);
-    struct bits_vec *v =
-        bits_vec_alloc(data, len, BITS_MSB);
-    VDBG(jp2, "tile id %d, total tile len %d, at %p", tile_id, len, (void *)data);
-    if (j->main_h.cod.sop) {
-        //if SOP enabled, start with a SOP
-        assert((data[1]<<8|data[0]) == SOP);
-        data += 2;
-        SKIP_BITS(v, 16);
-        // a SOP segment is 4 bytes: its own length field and the sequence number
-        assert((data[0] << 8 | data[1]) == 4);
-        data += 4;
+    struct tile_header *t = &j->tiles[j->tile_nums - 1];
+    long len = (long)t->sot.tile_size - (start - (long)t->sot.offset_start);
+    if (len < 0) {
+        len = 0;
     }
-    // if we have ppm in main header or ppt in tile header
-    if (j->main_h.ppm.index) {
-
+    VDBG(jp2, "tile id %d, tile data len %ld", t->sot.tile_id, len);
+    if (len > 0 && fseek(f, len, SEEK_CUR) != 0) {
+        return -EINVAL;
     }
-    read_packet_header(v, tile_id);
-    if (j->main_h.cod.eph) {
-        // if EPH is enabled
-    }
-
-    int l = ftell(f) - start;
-    VDBG(jp2, "a tile %d", l);
-    bits_vec_free(v);
-    return l;
+    return ftell(f) - start;
 }
 
 // see A.6.6
@@ -572,16 +632,26 @@ read_stream(JP2 *j, FILE *f)
     }
     while(1) {
         mark = read_marker(f);
+        if (mark == 0) {
+            /* eof or garbage between marker segments: stop scanning */
+            return;
+        }
         VDBG(jp2, "marker %x, name %s", SWAP(mark), jp2_marker_name(mark));
         switch (mark) {
             case SOD:
-                read_sod(j, f);
+                if (read_sod(j, f) < 0) {
+                    return;
+                }
                 break;
             case SIZ:
-                read_siz(j, f);
+                if (read_siz(j, f) < 0) {
+                    return;
+                }
                 break;
             case CAP:
-                read_cap(j, f);
+                if (read_cap(j, f) < 0) {
+                    return;
+                }
                 break;
             case COD:
                 read_cod(j, f);
@@ -590,10 +660,14 @@ read_stream(JP2 *j, FILE *f)
                 read_qcd(j, f);
                 break;
             case CME:
-                read_cme(j, f);
+                if (read_cme(j, f) < 0) {
+                    return;
+                }
                 break;
             case SOT:
-                read_sot(j, f);
+                if (read_sot(j, f) < 0) {
+                    return;
+                }
                 break;
             case POC:
                 read_poc(j, f);
@@ -606,20 +680,21 @@ read_stream(JP2 *j, FILE *f)
                 VERR(jp2, "end of code stream  %ld", ftell(f));
                 return;
             default:
+                /* an unhandled marker segment, the rest of the codestream
+                 * cannot be parsed reliably: stop here instead of looping */
                 printf("marker %x\n", SWAP(mark));
-                fseek(f, 0, SEEK_END);
-                fgetc(f);
-                break;
+                return;
         }
     }
 }
 
 int read_jp2h_box(FILE *f, struct jp2h_box *b)
 {
-    FFREAD_BOX_ST(b, f, FOURCC2UINT('j', 'p', '2', 'h'));
+    JP2_READ_BOX_ST(b, f, FOURCC2UINT('j', 'p', '2', 'h'));
     read_jp2_ihdr_box(f, &b->ihdr);
-    int64_t size = b->size - b->ihdr.size - 8;
-    while(size) {
+    int64_t size = (int64_t)b->size - (int64_t)b->ihdr.size - 8;
+    while(size > 0) {
+        long before = ftell(f);
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(jp2, "JP2H %s", type2name(type));
@@ -631,13 +706,23 @@ int read_jp2h_box(FILE *f, struct jp2h_box *b)
             read_jp2_bpcc_box(f, &b->bpcc, b->ihdr.num_comp);
             break;
         case COLR:
-            if (b->n_colr == 0) {
-                b->colr = malloc(sizeof(struct jp2_colr_box));
-            } else {
-                b->colr = realloc(b->colr, sizeof(struct jp2_colr_box) * (b->n_colr + 1));
+            {
+                struct jp2_colr_box *n;
+                if (b->n_colr == 0) {
+                    n = calloc(1, sizeof(struct jp2_colr_box));
+                } else {
+                    n = realloc(b->colr, sizeof(struct jp2_colr_box) * (b->n_colr + 1));
+                    if (n) {
+                        memset(n + b->n_colr, 0, sizeof(struct jp2_colr_box));
+                    }
+                }
+                if (n == NULL) {
+                    return b->size;
+                }
+                b->colr = n;
+                read_jp2_colr_box(f, b->colr + b->n_colr);
+                b->n_colr ++;
             }
-            read_jp2_colr_box(f, b->colr + b->n_colr);
-            b->n_colr ++;
             break;
         case PCLR:
             read_jp2_pclr_box(f, &b->pclr);
@@ -652,9 +737,18 @@ int read_jp2h_box(FILE *f, struct jp2h_box *b)
             read_jp2_cmap_box(f, &b->cmap);
             break;
         default:
+            /* unknown sub box: skip its payload, and stop if the header
+             * is corrupt so the loop cannot spin forever */
+            if (p.size < 8) {
+                return b->size;
+            }
+            fseek(f, (long)(p.size - 8), SEEK_CUR);
             break;
         }
-        size -= p.size;
+        if (ftell(f) <= before) {
+            break;
+        }
+        size -= (int64_t)p.size;
     }
     return b->size;
 }
@@ -666,6 +760,10 @@ JP2_load(const char *filename, int skip_flag UNUSED)
     JP2 *j = p->pic;
     struct jp2_signature_box h;
     FILE * f = fopen(filename, "rb");
+    if (f == NULL) {
+        pic_free(p);
+        return NULL;
+    }
     fseek(f, 0 , SEEK_END);
     int size = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -673,13 +771,18 @@ JP2_load(const char *filename, int skip_flag UNUSED)
     //first box, JP signature box
     read_box(f, &h);
     h.magic = read_u32(f);
-    assert(h.magic == 0x0D0A870A);
+    if (h.magic != 0x0D0A870A) {
+        fclose(f);
+        pic_free(p);
+        return NULL;
+    }
 
     // second box, ftyp box
     read_ftyp(f, (void *)&(j->ftyp));
 
     // common process for other boxes
     while(ftell(f) < size) {
+        long before = ftell(f);
         struct box b;
         uint32_t type = probe_box(f, &b);
         VDBG(jp2, "box type %s", type2name(type));
@@ -691,35 +794,72 @@ JP2_load(const char *filename, int skip_flag UNUSED)
             read_stream(j, f);
             break;
         case UINF:
-            if (j->uinf_num == 0) {
-                j->uinf = malloc(sizeof(struct jp2_uinf_box));
-            } else {
-                j->uinf = realloc(j->uinf, sizeof(struct jp2_uinf_box) * (j->uinf_num + 1));
+            {
+                struct jp2_uinf_box *n;
+                if (j->uinf_num == 0) {
+                    n = calloc(1, sizeof(struct jp2_uinf_box));
+                } else {
+                    n = realloc(j->uinf, sizeof(struct jp2_uinf_box) * (j->uinf_num + 1));
+                    if (n) {
+                        memset(n + j->uinf_num, 0, sizeof(struct jp2_uinf_box));
+                    }
+                }
+                if (n == NULL) {
+                    break;
+                }
+                j->uinf = n;
+                read_jp2_uinf_box(f, j->uinf + j->uinf_num);
+                j->uinf_num++;
             }
-            read_jp2_uinf_box(f, j->uinf + j->uinf_num);
-            j->uinf_num++;
             break;
         case XML:
-            if (j->xml_num == 0) {
-                j->xml = malloc(sizeof(struct jp2_xml_box));
-            } else {
-                j->xml = realloc(j->uinf, sizeof(struct jp2_xml_box) * (j->xml_num + 1));
+            {
+                struct jp2_xml_box *n;
+                if (j->xml_num == 0) {
+                    n = calloc(1, sizeof(struct jp2_xml_box));
+                } else {
+                    n = realloc(j->xml, sizeof(struct jp2_xml_box) * (j->xml_num + 1));
+                    if (n) {
+                        memset(n + j->xml_num, 0, sizeof(struct jp2_xml_box));
+                    }
+                }
+                if (n == NULL) {
+                    break;
+                }
+                j->xml = n;
+                read_jp2_xml_box(f, j->xml + j->xml_num);
+                j->xml_num ++;
             }
-            read_jp2_xml_box(f, j->xml+j->xml_num);
-            j->xml_num ++;
             break;
         case UUID:
-            if (j->uuid_num == 0) {
-                j->uuid = malloc(sizeof(struct jp2_uuid_box));
-            } else {
-                j->uuid = realloc(j->uuid, sizeof(struct jp2_uuid_box) * (j->uuid_num + 1));
+            {
+                struct jp2_uuid_box *n;
+                if (j->uuid_num == 0) {
+                    n = calloc(1, sizeof(struct jp2_uuid_box));
+                } else {
+                    n = realloc(j->uuid, sizeof(struct jp2_uuid_box) * (j->uuid_num + 1));
+                    if (n) {
+                        memset(n + j->uuid_num, 0, sizeof(struct jp2_uuid_box));
+                    }
+                }
+                if (n == NULL) {
+                    break;
+                }
+                j->uuid = n;
+                read_jp2_uuid_box(f, j->uuid + j->uuid_num);
+                j->uuid_num ++;
             }
-            read_jp2_uuid_box(f, j->uuid + j->uuid_num);
-            j->uuid_num ++;
             break;
         default:
             printf("unkown marker \"%s\"\n", UINT2TYPE(type));
+            if (b.size < 8) {
+                break;
+            }
             fseek(f, b.size - 8, SEEK_CUR);
+            break;
+        }
+        /* corrupt or zero sized box: stop instead of looping on the spot */
+        if (ftell(f) <= before) {
             break;
         }
     }
@@ -739,6 +879,15 @@ JP2_free(struct pic *p)
         free(j->jp2h.colr[i].iccpro.iccp);
     }
     free(j->jp2h.colr);
+    free(j->jp2h.bpcc.bits_per_comp);
+    free(j->jp2h.pclr.bit_depth);
+    free(j->jp2h.pclr.entries);
+    free(j->jp2h.cmap.cmp);
+    free(j->jp2h.cmap.mtyp);
+    free(j->jp2h.cmap.pcol);
+    free(j->jp2h.cdef.comp_id);
+    free(j->jp2h.cdef.comp_type);
+    free(j->jp2h.cdef.comp_assoc);
 
     for (int i = 0; i <j->uinf_num; i ++) {
         if(j->uinf[i].ulst.num_uuid) {
@@ -756,6 +905,14 @@ JP2_free(struct pic *p)
     }
     if (j->xml)
         free(j->xml);
+    for (int i = 0; i < j->uuid_num; i++) {
+        if (j->uuid[i].data)
+            free(j->uuid[i].data);
+    }
+    if (j->uuid)
+        free(j->uuid);
+    if (j->tiles)
+        free(j->tiles);
     if (j->main_h.siz.comps) {
         free(j->main_h.siz.comps);
     }
@@ -764,6 +921,9 @@ JP2_free(struct pic *p)
     }
     if (j->main_h.qcd.table) {
         free(j->main_h.qcd.table);
+    }
+    if (j->main_h.cap.extensions) {
+        free(j->main_h.cap.extensions);
     }
     if (j->main_h.cme.str) {
         free(j->main_h.cme.str);
@@ -801,7 +961,7 @@ JP2_info(FILE *f, struct pic* p)
                     j->uinf[i].ulst.id[k].v[0],
                     j->uinf[i].ulst.id[k].v[1]);
         }
-        fprintf(f, "\turl %s\n", j->uinf[i].url.location);
+        fprintf(f, "\turl %s\n", j->uinf[i].url.location ? j->uinf[i].url.location : "");
     }
     // for (int i = 0; i < j->xml_num; i++) {
     //     fprintf(f, "\t xml %d: %s\n", i, j->xml[i].data);
@@ -814,6 +974,9 @@ JP2_info(FILE *f, struct pic* p)
     fprintf(f, "\tSIZ height %d, width %d, num_comp %d\n", j->main_h.siz.height,
                 j->main_h.siz.width, j->main_h.siz.component_num);
     for (int i = 0; i < j->main_h.siz.component_num; i++) {
+        if (j->main_h.siz.comps == NULL) {
+            break;
+        }
         fprintf(f, "\tdepth %d, horizon %d, vertical %d\n", j->main_h.siz.comps[i].depth+1,
                 j->main_h.siz.comps[i].horizontal_separation,
                 j->main_h.siz.comps[i].vertical_separation);
@@ -836,7 +999,7 @@ JP2_info(FILE *f, struct pic* p)
             j->main_h.cod.p.reset_on_boundary, j->main_h.cod.p.termination,
             j->main_h.cod.p.vertical_context,
             j->main_h.cod.p.predictable_termination, j->main_h.cod.p.segmentation_symbol);
-    if (j->main_h.cod.entropy) {
+    if (j->main_h.cod.entropy && j->main_h.cod.p.precinct_size) {
         for (int i = 0; i < j->main_h.cod.p.decomp_level_num+1; i ++) {
             fprintf(f, "\tCOD precinct witdh %d, height %d\n",
                     j->main_h.cod.p.precinct_size[i] & 0xF,
@@ -846,20 +1009,26 @@ JP2_info(FILE *f, struct pic* p)
     fprintf(f, "\tQCD len %d, guard_num %d quant_type %d\n", j->main_h.qcd.length,
             j->main_h.qcd.guard_num, j->main_h.qcd.quant_type);
     int table_len = 0;
-    if (j->main_h.qcd.guard_num == 0) {
+    if (j->main_h.qcd.quant_type == 0) {
         table_len = 3 * j->main_h.cod.p.decomp_level_num + 1;
-    } else if (j->main_h.qcd.guard_num == 1) {
+    } else if (j->main_h.qcd.quant_type == 1) {
         table_len = 2;
-    } else if (j->main_h.qcd.guard_num == 2) {
+    } else if (j->main_h.qcd.quant_type == 2) {
         table_len = 6 * j->main_h.cod.p.decomp_level_num + 2;
     }
+    if (j->main_h.qcd.length >= 3 && table_len > j->main_h.qcd.length - 3) {
+        table_len = j->main_h.qcd.length - 3;
+    }
     fprintf(f, "\t");
-    for (int i = 0; i < table_len; i++) {
-        fprintf(f, " %x", j->main_h.qcd.table[i]);
+    if (j->main_h.qcd.table) {
+        for (int i = 0; i < table_len; i++) {
+            fprintf(f, " %x", j->main_h.qcd.table[i]);
+        }
     }
     fprintf(f, "\n");
     fprintf(f, "\tCME len %d, use %d, %s\n", j->main_h.cme.length,
-            j->main_h.cme.use, j->main_h.cme.str);
+            j->main_h.cme.use,
+            j->main_h.cme.str ? (const char *)j->main_h.cme.str : "");
     fprintf(f, "\ttile num %d\n", j->tile_nums);
     for (int i = 0; i < j->tile_nums; i ++) {
         fprintf(f, "\tSOT tile id %d, size %d, part_index %d, part_nums %d\n",

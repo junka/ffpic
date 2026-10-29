@@ -251,24 +251,38 @@ read_pitm_box(FILE *f, struct pitm_box *b)
     return b->size;
 }
 
+/* read a NUL terminated string, one pass with a growing buffer. End of file
+ * ends the string as well, so a truncated file cannot spin the loop forever
+ * the way the old count-then-rewind version did. Returns the stored length
+ * including the terminator, or -1 when the buffer cannot be allocated. */
 int
 read_till_null(FILE *f, char **str)
 {
-    int i = 0;
-    while (fgetc(f) != '\0') {
-        i ++;
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf;
+    int c;
+
+    *str = NULL;
+    buf = malloc(cap);
+    if (buf == NULL) {
+        return -1;
     }
-    int len = i+1;
-    char *buf = malloc(i+1);
-    fseek(f, -i-1, SEEK_CUR);
-    char c;
-    i = 0;
-    while ((c = fgetc(f)) != 0) {
-        buf[i++] = c;
+    while ((c = fgetc(f)) != '\0' && c != EOF) {
+        if (len + 1 == cap) {
+            char *nb = realloc(buf, cap * 2);
+            if (nb == NULL) {
+                free(buf);
+                return -1;
+            }
+            buf = nb;
+            cap *= 2;
+        }
+        buf[len++] = (char)c;
     }
-    buf[i] = '\0';
+    buf[len] = '\0';
     *str = buf;
-    return len;
+    return (int)len + 1;
 }
 
 static int

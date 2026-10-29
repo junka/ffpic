@@ -690,6 +690,12 @@ int cabac_dec_egk(cabac_dec *dec, int kth, int max_pre_ext_len,
     return val;
 }
 
+void cabac_ctx_model(int tid, uint8_t *state, uint8_t *mpsbit)
+{
+    *state = ctx_table[tid].state;
+    *mpsbit = ctx_table[tid].mpsbit;
+}
+
 void cabac_dec_reset(cabac_dec *dec)
 {
     VDBG(cabac, "dec: count %d, range %x, v %x", dec->count, dec->range, dec->value);

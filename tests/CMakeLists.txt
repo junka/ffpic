@@ -28,6 +28,13 @@ target_link_libraries(test_dct ffpic m)
 add_test(NAME test_dct COMMAND test_dct)
 
 
+set(CABAC_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_cabac.c)
+add_executable(test_cabac ${CABAC_TEST})
+target_include_directories(test_cabac PRIVATE ${FFPIC_DIRS})
+target_link_libraries(test_cabac ffpic m)
+add_test(NAME test_cabac COMMAND test_cabac)
+
+
 set(DECODE_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_decode.c)
 add_executable(test_decode ${DECODE_TEST})
 target_include_directories(test_decode PRIVATE ${FFPIC_DIRS})

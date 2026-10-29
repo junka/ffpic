@@ -40,7 +40,7 @@ enum ctx_index_type {
   CTX_TYPE_PU_MERGE_IDX,
   CTX_TYPE_PU_INTER_PRED_IDC,
   CTX_TYPE_PU_REF_IDX = CTX_TYPE_PU_INTER_PRED_IDC + 5,
-  CTX_TYPE_PU_MVP_FLAG,
+  CTX_TYPE_PU_MVP_FLAG = CTX_TYPE_PU_REF_IDX + 2,
 
   CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG,
   CTX_TYPE_TU_CBF_LUMA = CTX_TYPE_TU_SPLIT_TRANSFORM_FLAG + 3,
@@ -58,7 +58,7 @@ enum ctx_index_type {
   CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM =
       CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP + 2,
   CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM_DIR =
-      CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP + 3,
+      CTX_TYPE_RESIDUAL_CODING_TRANSFORM_SKIP + 5,
   CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_X_PREFIX =
       CTX_TYPE_RESIDUAL_CODING_EXPLICIT_RDPCM_DIR + 3,
   CTX_TYPE_RESIDUAL_CODING_LAST_SIG_COEFF_Y_PREFIX =
@@ -118,6 +118,8 @@ void cabac_dec_free(cabac_dec *dec);
 void cabac_dec_reset(cabac_dec *dec);
 
 void cabac_init_models(int qpy, int initType);//here initType should alway be 0
+
+void cabac_ctx_model(int tid, uint8_t *state, uint8_t *mpsbit);
 
 #define CABAC(br, tid) cabac_dec_decision(br, tid)
 #define CABAC_BP(br) cabac_dec_bypass(br)

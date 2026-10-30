@@ -207,8 +207,12 @@ read_iloc_box(FILE *f, struct iloc_box *b)
 
     b->items = calloc(b->item_count, sizeof(struct item_location));
     for (int i = 0; i < b->item_count; i ++) {
-        b->items[i].item_id = read_u16(f);
-        if (b->version == 1) {
+        if (b->version < 2) {
+            b->items[i].item_id = read_u16(f);
+        } else {
+            b->items[i].item_id = read_u32(f);
+        }
+        if (b->version == 1 || b->version == 2) {
             b->items[i].construct_method = read_u16(f);
         }
         b->items[i].data_ref_id = read_u16(f);
@@ -220,7 +224,7 @@ read_iloc_box(FILE *f, struct iloc_box *b)
         b->items[i].extent_count = read_u16(f);
         b->items[i].extents = calloc(b->items[i].extent_count, sizeof(struct item_extent));
         for (int j = 0; j < b->items[i].extent_count; j ++) {
-            if (b->version == 1 && b->index_size > 0) {
+            if ((b->version == 1 || b->version == 2) && b->index_size > 0) {
                 if (b->index_size == 4) {
                     b->items[i].extents[j].extent_index = read_u32(f);
                 } else if (b->index_size == 8) {
@@ -246,7 +250,7 @@ int
 read_pitm_box(FILE *f, struct pitm_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('p', 'i', 't', 'm'));
-    b->item_id = read_u16(f);
+    b->item_id = b->version ? read_u32(f) : read_u16(f);
     VDBG(basemedia, "PITM: primary %d", b->item_id);
     return b->size;
 }

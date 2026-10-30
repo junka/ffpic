@@ -105,7 +105,7 @@ struct item_extent {
 };
 
 struct item_location {
-    uint16_t item_id;
+    uint32_t item_id; // 16 bits for iloc version 0, else 32 bits
 
     //valid when version 1, lsb 4 bits
     uint16_t construct_method;
@@ -140,14 +140,14 @@ struct iloc_box {
 struct pitm_box {
     FULL_BOX_ST;
 
-    uint16_t item_id;
+    uint32_t item_id; // 16 bits for version 0, else 32 bits
 };
 
 /* see 8.44.6 */
 struct infe_box {
     FULL_BOX_ST;
 
-    uint16_t item_id;
+    uint32_t item_id; // 16 bits before version 3, 32 bits for version 3
     uint16_t item_protection_index;
     uint32_t item_type;
 

@@ -1068,7 +1068,7 @@ AVIF_info(FILE *f, struct pic* p)
 
     fprintf(f, "\t");
     print_box(f, &h->meta.pitm);
-    fprintf(f, " item_id=%d", h->meta.pitm.item_id);
+    fprintf(f, " item_id=%u", h->meta.pitm.item_id);
     fprintf(f, "\n");
 
     fprintf(f, "\t");
@@ -1076,10 +1076,10 @@ AVIF_info(FILE *f, struct pic* p)
     fprintf(f, "\n");
     for (int i = 0; i < h->meta.iloc.item_count; i ++) {
         fprintf(f, "\t\t");
-        if (h->meta.iloc.version == 1) {
+        if (h->meta.iloc.version == 1 || h->meta.iloc.version == 2) {
             fprintf(f, "construct_method=%d,", h->meta.iloc.items[i].construct_method);
         }
-        fprintf(f,"item_id=%d,data_ref_id=%d,base_offset=%" PRIu64
+        fprintf(f,"item_id=%u,data_ref_id=%d,base_offset=%" PRIu64
                 ",extent_count=%d\n",
                 h->meta.iloc.items[i].item_id,
                 h->meta.iloc.items[i].data_ref_id,
@@ -1087,7 +1087,7 @@ AVIF_info(FILE *f, struct pic* p)
                 h->meta.iloc.items[i].extent_count);
         for (int j = 0; j < h->meta.iloc.items[i].extent_count; j ++) {
             fprintf(f, "\t\t\t");
-            if (h->meta.iloc.version == 1) {
+            if (h->meta.iloc.version == 1 || h->meta.iloc.version == 2) {
                 fprintf(f, "extent_id=%" PRIu64 ",",
                         h->meta.iloc.items[i].extents[j].extent_index);
             }
@@ -1105,7 +1105,7 @@ AVIF_info(FILE *f, struct pic* p)
         fprintf(f, "\t\t");
         print_box(f, &h->meta.iinf.item_infos[i]);
         s1 = UINT2TYPE(h->meta.iinf.item_infos[i].item_type);
-        fprintf(f, " item_id=%d,item_protection_index=%d,item_type=%s",
+        fprintf(f, " item_id=%u,item_protection_index=%d,item_type=%s",
             h->meta.iinf.item_infos[i].item_id, h->meta.iinf.item_infos[i].item_protection_index,
             s1);
         fprintf(f, "\n");

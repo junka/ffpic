@@ -152,11 +152,30 @@ def make_iloc(items):
     return full_box(b"iloc", 0, b"\0\0\0", body)
 
 
+def make_iloc_v2(items):
+    """iloc version 2: 32-bit item IDs plus the construction method."""
+    body = struct.pack(">BBH", 0x44, 0x00, len(items))
+    for item_id, extents in items:
+        body += struct.pack(">IHHH", item_id, 0, 0, len(extents))
+        for offset, length in extents:
+            body += struct.pack(">II", offset, length)
+    return full_box(b"iloc", 2, b"\0\0\0", body)
+
+
 def make_iinf(ids):
     body = struct.pack(">H", len(ids))
     for item_id in ids:
         body += full_box(b"infe", 2, b"\0\0\0",
                          struct.pack(">HH4s", item_id, 0, b"av01") + b"x\0")
+    return full_box(b"iinf", 0, b"\0\0\0", body)
+
+
+def make_iinf_v3(ids):
+    """infe version 3: 32-bit item IDs."""
+    body = struct.pack(">H", len(ids))
+    for item_id in ids:
+        body += full_box(b"infe", 3, b"\0\0\0",
+                         struct.pack(">IH4s", item_id, 0, b"av01") + b"x\0")
     return full_box(b"iinf", 0, b"\0\0\0", body)
 
 
@@ -167,6 +186,10 @@ def make_iref(ref_type, from_id, to_id):
 
 def make_pitm(item_id):
     return full_box(b"pitm", 0, b"\0\0\0", struct.pack(">H", item_id))
+
+
+def make_pitm_v1(item_id):
+    return full_box(b"pitm", 1, b"\0\0\0", struct.pack(">I", item_id))
 
 
 def write_derived(name, ftyp, meta, payload):
@@ -350,6 +373,38 @@ def make_alpha(src_color, src_alpha, name):
     return write_derived(name, ftyp, meta, payload)
 
 
+def make_pitm32(src_color, src_decoy, name):
+    """Primary item id above 65535: pitm v1, iloc v2 and infe v3 carry 32-bit
+    ids.  An unrelated av01 item is stored first, so only honouring pitm
+    selects the colour picture."""
+    color = open(src_color, "rb").read()
+    ftyp_size = struct.unpack_from(">I", color, 0)[0]
+    ftyp = color[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(color)
+    citems, _, _ = read_iloc(color, boxes[b"iloc"][0])
+    cpayload = item_payload(color, citems[0][1])
+
+    decoy = open(src_decoy, "rb").read()
+    _, _, dboxes, _ = parse_meta(decoy)
+    ditems, _, _ = read_iloc(decoy, dboxes[b"iloc"][0])
+    dpayload = item_payload(decoy, ditems[0][1])
+
+    primary = 70000
+    payload = dpayload + cpayload
+    meta = b""
+    for _ in range(4):
+        data_off = len(ftyp) + len(meta) + 8
+        iloc = make_iloc_v2([(1, [(data_off, len(dpayload))]),
+                             (primary, [(data_off + len(dpayload),
+                                         len(cpayload))])])
+        meta = full_box(b"meta", 0, b"\0\0\0",
+                        hdlr + make_pitm_v1(primary) + iloc +
+                        make_iinf_v3([1, primary]))
+        if data_off == len(ftyp) + len(meta) + 8:
+            break
+    return write_derived(name, ftyp, meta, payload)
+
+
 def main():
     os.makedirs(DATA, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -401,6 +456,7 @@ def main():
             ("mif1", make_mif1(mixed, "mif1")),
             ("extents", make_two_extents(mixed, "extents")),
             ("aux", make_aux_first(mixed, mono, "aux")),
+            ("pitm32", make_pitm32(mixed, mono, "pitm32")),
         ]
         for name, path in derived:
             shutil.copyfile(mixed_ref, os.path.join(DATA, f"avif_{name}.ref"))

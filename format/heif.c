@@ -153,7 +153,7 @@ int read_HEVCSampleEntry(FILE *f, struct SampleEntry **b)
 }
 
 struct heif_item *
-find_item_by_id(HEIF *h, int id)
+find_item_by_id(HEIF *h, uint32_t id)
 {
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
         if (h->items[i].item->item_id == id) {
@@ -164,11 +164,11 @@ find_item_by_id(HEIF *h, int id)
 }
 
 struct box *
-get_ipma_item_from_item_id(HEIF *h, int id, uint32_t fourcc)
+get_ipma_item_from_item_id(HEIF *h, uint32_t id, uint32_t fourcc)
 {
     for (uint32_t i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
         for (int j = 0; j < h->meta.iprp.ipma.entries[i].association_count; j++) {
-            if (h->meta.iprp.ipma.entries[i].item_id == (uint32_t)id) {
+            if (h->meta.iprp.ipma.entries[i].item_id == id) {
                 for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
                     // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                     int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
@@ -188,32 +188,33 @@ get_ipma_item_from_item_id(HEIF *h, int id, uint32_t fourcc)
 }
 
 struct hvcC_box *
-get_hvcc_from_item_id(HEIF *h, int id)
+get_hvcc_from_item_id(HEIF *h, uint32_t id)
 {
     return (struct hvcC_box *)get_ipma_item_from_item_id(h, id, FOURCC2UINT('h', 'v', 'c', 'C'));
 }
 
 struct auxC_box *
-get_auxc_from_item_id(HEIF *h, int id)
+get_auxc_from_item_id(HEIF *h, uint32_t id)
 {
     return (struct auxC_box *)get_ipma_item_from_item_id(h, id, FOURCC2UINT('a', 'u', 'x', 'C'));
 
 }
 
-int get_primary_item_id(HEIF *h)
+int has_primary_item(HEIF *h)
 {
-    //if no pitm, then return -1;
-    if (h->meta.pitm.type != FOURCC2UINT('p', 'i', 't', 'm')) {
-        return -1;
-    }
+    return h->meta.pitm.type == FOURCC2UINT('p', 'i', 't', 'm');
+}
+
+uint32_t get_primary_item_id(HEIF *h)
+{
     return h->meta.pitm.item_id;
 }
 
 struct ispe_box *
-get_ispe_by_item_id(HEIF *h, int id)
+get_ispe_by_item_id(HEIF *h, uint32_t id)
 {
     for (uint32_t i = 0; i < h->meta.iprp.ipma.entry_count; i++) {
-        if (h->meta.iprp.ipma.entries[i].item_id == (uint32_t)id) {
+        if (h->meta.iprp.ipma.entries[i].item_id == id) {
             for (int k = 0; k < h->meta.iprp.ipma.entries[i].association_count; k++) {
                 // int essential = h->meta.iprp.ipma.entries[i].property_index[k] >> 15;
                 int property_index = h->meta.iprp.ipma.entries[i].property_index[k] & 0x7FFF;
@@ -453,12 +454,12 @@ static int
 decode_primary_item(HEIF *h, struct pic *p)
 {
     int num = 0;
-    int primary_id = get_primary_item_id(h);
-    if (primary_id < 0) {
+    if (!has_primary_item(h)) {
         //no primary
         return num;
     }
-    VINFO(heif, "primary id %d", primary_id);
+    uint32_t primary_id = get_primary_item_id(h);
+    VINFO(heif, "primary id %u", primary_id);
     int pri_index = 0;
     for (pri_index = 0; pri_index < (int)h->meta.iloc.item_count; pri_index++) {
         if (h->items[pri_index].item->item_id == primary_id) {
@@ -491,7 +492,7 @@ decode_primary_item(HEIF *h, struct pic *p)
 }
 
 static int
-decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED)
+decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p UNUSED)
 {
     struct itemtype_ref_box *ref;
     for (int i = 0; i < h->meta.iref.refs_count; i++) {
@@ -499,7 +500,7 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
         // VDBG(heif, "from_id %d", from_id);
         ref = &h->meta.iref.refs[i];
         for (int j = 0; j < ref->ref_count; j++) {
-            int id = ref->to_item_ids[j];
+            uint32_t id = ref->to_item_ids[j];
             if (id == primary_id) {
                 struct heif_item *r = find_item_by_id(h, ref->from_item_id);
                 if (!r) {
@@ -544,7 +545,7 @@ decode_reference_items_for_primary(HEIF *h, int primary_id, struct pic *p UNUSED
 
 /* tiles of a dimg grid are not pictures of their own; the grid composes them */
 static bool
-is_grid_tile(HEIF *h, int id)
+is_grid_tile(HEIF *h, uint32_t id)
 {
     for (int i = 0; i < h->meta.iref.refs_count; i++) {
         struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
@@ -552,7 +553,7 @@ is_grid_tile(HEIF *h, int id)
             continue;
         }
         for (int j = 0; j < ref->ref_count; j++) {
-            if (ref->to_item_ids[j] == (uint32_t)id) {
+            if (ref->to_item_ids[j] == id) {
                 return true;
             }
         }
@@ -568,10 +569,9 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
         pre_read_item(h, f, i);
     }
 
-    int primary_id = get_primary_item_id(h);
-    if (primary_id >= 0) {
+    if (has_primary_item(h)) {
         num = decode_primary_item(h, p);
-        num += decode_reference_items_for_primary(h, primary_id, p);
+        num += decode_reference_items_for_primary(h, get_primary_item_id(h), p);
         return num;
     }
     // we may have no primary id
@@ -715,7 +715,7 @@ HEIF_load(const char *filename, int skip_flag)
     }
 
     // extract some info from meta box
-    if (get_primary_item_id(h) != -1) {
+    if (has_primary_item(h)) {
         struct ispe_box *ispe = get_ispe_by_item_id(h, get_primary_item_id(h));
         if (ispe) {
             p->height = ispe->image_height;
@@ -744,7 +744,7 @@ HEIF_load(const char *filename, int skip_flag)
         }
     }
 
-    if (!skip_flag && get_primary_item_id(h) >= 0 &&
+    if (!skip_flag && has_primary_item(h) &&
         (p->width <= 0 || p->height <= 0)) {
         VERR(heif, "no image size for the primary item");
         HEIF_free(p);
@@ -770,7 +770,7 @@ HEIF_load(const char *filename, int skip_flag)
      * already queued. without one every frame was queued and p only holds
      * the container, so it must not be freed after being handed to the
      * queue. */
-    if (get_primary_item_id(h) >= 0) {
+    if (has_primary_item(h)) {
         if (n == 1) {
             return p;
         }
@@ -842,7 +842,7 @@ HEIF_info(FILE *f, struct pic* p)
 
     fprintf(f, "\t");
     print_box(f, &h->meta.pitm);
-    fprintf(f, " item_id=%d", get_primary_item_id(h));
+    fprintf(f, " item_id=%u", get_primary_item_id(h));
     fprintf(f, "\n");
 
     fprintf(f, "\t");

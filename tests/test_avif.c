@@ -36,6 +36,7 @@ test_real_samples(void)
         {"avif_mif1", 100, 62, 6, 0, 0},
         {"avif_extents", 100, 62, 6, 0, 0},
         {"avif_aux", 100, 62, 6, 0, 0},
+        {"avif_pitm32", 100, 62, 6, 0, 0},
         {"avif_alpha", 100, 62, 6, 0, 1},
         /* the gamma curve bends the existing rounding, so allow a bit more */
         {"avif_icc", 100, 62, 8, 0, 0},

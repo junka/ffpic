@@ -252,6 +252,9 @@ struct colr_box {
     uint8_t full_range_flag:1;
     uint8_t reserved:7;
 #endif
+    /* ICC profile payload for the 'prof' / 'rICC' types */
+    uint8_t *icc_data;
+    uint32_t icc_len;
 };
 
 // struct icc_profile {

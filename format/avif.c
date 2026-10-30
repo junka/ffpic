@@ -25,12 +25,38 @@ AVIF_probe(FILE *f)
     if (f == NULL) {
         return -ENOENT;
     }
-    struct ftyp_box h;
-    FFREAD(&h, sizeof(h), 1, f);
-
-    if (h.major_brand == TYPE2UINT("ftyp")) {
-        if(h.minor_version == TYPE2UINT("avif"))
+    /* ftyp: size, 'ftyp', major_brand, minor_version, compatible_brands[] */
+    uint32_t hdr[4];
+    if (fread(hdr, sizeof(hdr[0]), 4, f) != 4) {
+        return -EINVAL;
+    }
+    if (hdr[1] != TYPE2UINT("ftyp")) {
+        return -EINVAL;
+    }
+    if (hdr[2] == TYPE2UINT("avif")) {
         return 0;
+    }
+    /* Some muxers use a generic HEIF major brand and only list avif among
+     * the compatible brands. */
+    if (hdr[2] != TYPE2UINT("mif1") && hdr[2] != TYPE2UINT("msf1")) {
+        return -EINVAL;
+    }
+    uint32_t box_size = SWAP(hdr[0]);
+    if (box_size < 20) {
+        return -EINVAL;
+    }
+    uint32_t n = (box_size - 16) / 4;
+    if (n > 64) {
+        n = 64;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t brand;
+        if (fread(&brand, sizeof(brand), 1, f) != 1) {
+            return -EINVAL;
+        }
+        if (brand == TYPE2UINT("avif")) {
+            return 0;
+        }
     }
     return -EINVAL;
 }
@@ -562,31 +588,58 @@ void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)
     }
 }
 
-static int pre_read_item(AVIF *h, FILE *f, uint32_t idx) {
-    // for now make sure, extent_count = 1 work
-    if (h->items[idx].item->extent_count == 1) {
-        h->items[idx].length = h->items[idx].item->extents[0].extent_length;
-        h->items[idx].data = malloc(h->items[idx].length);
-        fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET);
-        FFREAD(h->items[idx].data, h->items[idx].length, 1, f);
-    } else {
-        h->items[idx].data = malloc(1);
-        uint64_t total = 0;
-        for (int i = 0; i < h->items[idx].item->extent_count; i++) {
-            h->items[idx].data = realloc(h->items[idx].data,
-                        h->items[idx].item->extents[i].extent_length);
-            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET);
-            FFREAD(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
-            total += h->items[idx].item->extents[i].extent_length;
+/* Read every extent of an item into one contiguous buffer: the extents are
+ * pieces of the coded payload and only their concatenation is decodable. */
+static int pre_read_item(AVIF *h, FILE *f, uint32_t idx, uint64_t file_size)
+{
+    const struct item_location *it = h->items[idx].item;
+    uint64_t total = 0;
+
+    for (int i = 0; i < it->extent_count; i++) {
+        uint64_t off = it->base_offset + it->extents[i].extent_offset;
+        uint64_t len = it->extents[i].extent_length;
+        if (off > file_size || len > file_size - off) {
+            VERR(avif, "item %d extent %d runs past the file", it->item_id, i);
+            return -EINVAL;
         }
-        h->items[idx].length = total;
+        if (total + len < total || total + len > SIZE_MAX) {
+            return -EOVERFLOW;
+        }
+        total += len;
     }
+
+    uint8_t *buf = malloc(total ? (size_t)total : 1);
+    if (!buf) {
+        return -ENOMEM;
+    }
+    size_t passed = 0;
+    for (int i = 0; i < it->extent_count; i++) {
+        uint64_t off = it->base_offset + it->extents[i].extent_offset;
+        uint64_t len = it->extents[i].extent_length;
+        if (len && fseek(f, (long)off, SEEK_SET) != 0) {
+            free(buf);
+            return -EBADF;
+        }
+        if (len && fread(buf + passed, 1, (size_t)len, f) != len) {
+            free(buf);
+            return -EBADF;
+        }
+        passed += (size_t)len;
+    }
+
+    free(h->items[idx].data);
+    h->items[idx].data = buf;
+    h->items[idx].length = total;
     return 0;
 }
 
-static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
+static void decode_items(AVIF *h, FILE *f, uint64_t file_size,
+                         uint8_t **pixels)
+{
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
-        pre_read_item(h, f, i);
+        if (pre_read_item(h, f, i, file_size) < 0) {
+            continue;
+        }
         if (h->items[i].type == TYPE2UINT("mime")) {
             // exif mime, skip it
             // hexdump(stdout, "exif:", "", h->items[i].data,
@@ -599,6 +652,162 @@ static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
         }
     }
 }
+/* An auxiliary item (the alpha plane of a still image) is the source of an
+ * auxl reference, never the picture to show. */
+static int
+avif_item_is_aux(const AVIF *h, uint32_t item_id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        if (r->type == FOURCC2UINT('a', 'u', 'x', 'l') &&
+            r->from_item_id == item_id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The colr property associated with an item.  An embedded ICC profile is
+ * preferred over the nclx code points when both are present. */
+static const struct colr_box *
+avif_item_colr(const AVIF *h, uint32_t item_id)
+{
+    const struct ipma_box *ipma = &h->meta.iprp.ipma;
+    const struct colr_box *nclx = NULL;
+
+    for (uint32_t i = 0; i < ipma->entry_count; i++) {
+        if (ipma->entries[i].item_id != item_id) {
+            continue;
+        }
+        for (int j = 0; j < ipma->entries[i].association_count; j++) {
+            int idx = ipma->entries[i].property_index[j] & 0x7fff;
+            struct box *prop;
+            const struct colr_box *colr;
+
+            if (idx < 1 || idx > h->meta.iprp.ipco.n_property) {
+                continue;
+            }
+            prop = h->meta.iprp.ipco.property[idx - 1];
+            if (!prop || prop->type != TYPE2UINT("colr")) {
+                continue;
+            }
+            colr = (const struct colr_box *)prop;
+            if (colr->color_type == FOURCC2UINT('p', 'r', 'o', 'f') ||
+                colr->color_type == FOURCC2UINT('r', 'I', 'C', 'C')) {
+                return colr;
+            }
+            nclx = colr;
+        }
+    }
+    return nclx;
+}
+
+/* Container colour information wins over the CICP codes in the bitstream. */
+static struct cs_profile *
+avif_color_profile(const AVIF *h, uint32_t item_id,
+                   const struct av1_image *img)
+{
+    const struct colr_box *colr = avif_item_colr(h, item_id);
+
+    if (colr) {
+        if (colr->icc_data && colr->icc_len) {
+            struct cs_profile *cp = cs_profile_from_icc(colr->icc_data,
+                                                        colr->icc_len);
+            if (cp) {
+                return cp;
+            }
+            VWARN(avif, "the embedded ICC profile is not supported");
+        }
+        if (colr->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
+            struct cs_profile *cp =
+                cs_profile_from_cicp(colr->color_primaries,
+                                     colr->transfer_characteristics);
+            if (cp) {
+                return cp;
+            }
+        }
+    }
+    return cs_profile_from_cicp(img->color_primaries,
+                                img->transfer_characteristics);
+}
+
+/* The alpha plane of a still image is a monochrome AV1 item that an auxl
+ * reference points from; the reference targets the colour item. */
+static int
+avif_find_alpha_item(const AVIF *h, uint32_t color_id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        if (r->type != FOURCC2UINT('a', 'u', 'x', 'l')) {
+            continue;
+        }
+        for (int j = 0; j < r->ref_count; j++) {
+            if (r->to_item_ids[j] != color_id) {
+                continue;
+            }
+            for (int k = 0; k < h->meta.iloc.item_count; k++) {
+                if (h->items[k].item->item_id == r->from_item_id &&
+                    h->items[k].type == TYPE2UINT("av01")) {
+                    return k;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+/* AVIF alpha is a separate monochrome image and is not premultiplied, so it
+ * maps straight onto the alpha channel of the packed output. */
+static void
+avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels, int pitch,
+                 int w, int h)
+{
+    int shift = alpha->bitdepth - 8;
+    const uint16_t *src = alpha->plane[0];
+    int stride = alpha->stride[0];
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int v = src[(size_t)y * stride + x];
+            if (shift > 0) {
+                v = (v + (1 << (shift - 1))) >> shift;
+            }
+            pixels[(size_t)y * pitch + x * 4 + 3] =
+                (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+        }
+    }
+}
+
+/* Pick the coded image item: pitm names it, and an AVIF with alpha keeps the
+ * colour image there while the alpha plane is a separate auxiliary item. */
+static int
+avif_find_image_item(const AVIF *h)
+{
+    int count = h->meta.iloc.item_count;
+    uint32_t primary = h->meta.pitm.item_id;
+
+    if (primary) {
+        for (int i = 0; i < count; i++) {
+            if (h->items[i].item->item_id == primary) {
+                /* grid and other derived types have no single payload */
+                return h->items[i].type == TYPE2UINT("av01") ? i : -1;
+            }
+        }
+    }
+    for (int i = 0; i < count; i++) {
+        if (h->items[i].type == TYPE2UINT("av01") &&
+            !avif_item_is_aux(h, h->items[i].item->item_id)) {
+            return i;
+        }
+    }
+    for (int i = 0; i < count; i++) {
+        if (h->items[i].type == TYPE2UINT("av01")) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int
 avif_parse_meta(AVIF *h, FILE *f, uint64_t size)
 {
@@ -686,16 +895,31 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
 
     /* Decode the primary AV1 image item with the in-house spec-based
      * decoder.  The item payload is a low overhead bitstream. */
-    int av01_idx = -1;
-    for (int i = 0; i < h->meta.iloc.item_count; i++) {
-        if (h->items[i].type == TYPE2UINT("av01")) {
-            av01_idx = i;
-            break;
+    int av01_idx = avif_find_image_item(h);
+    if (av01_idx >= 0 &&
+        pre_read_item(h, f, av01_idx, (uint64_t)file_size) == 0 &&
+        h->items[av01_idx].length > 0) {
+        uint32_t color_id = h->items[av01_idx].item->item_id;
+        int alpha_idx = avif_find_alpha_item(h, color_id);
+        if (alpha_idx == av01_idx ||
+            (alpha_idx >= 0 &&
+             (pre_read_item(h, f, alpha_idx, (uint64_t)file_size) < 0 ||
+              h->items[alpha_idx].length == 0))) {
+            alpha_idx = -1;
         }
-    }
-    if (av01_idx >= 0) {
-        pre_read_item(h, f, av01_idx);
         fclose(f);
+        struct av1_image alpha;
+        int has_alpha = 0;
+        if (alpha_idx >= 0) {
+            has_alpha = av1_decode_image(h->items[alpha_idx].data,
+                                         (size_t)h->items[alpha_idx].length,
+                                         &alpha) == 0;
+            free(h->items[alpha_idx].data);
+            h->items[alpha_idx].data = NULL;
+            if (!has_alpha) {
+                VWARN(avif, "cannot decode the alpha item");
+            }
+        }
         struct av1_image img;
         int rc = av1_decode_image(h->items[av01_idx].data,
                                   (size_t)h->items[av01_idx].length, &img);
@@ -712,9 +936,30 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
             p->format = CS_PIXELFORMAT_RGBA8888;
             p->pixels = malloc((size_t)p->pitch * p->height);
             if (p->pixels) {
+                struct cs_profile *cp;
+
                 av1_image_to_bgra(&img, p->pixels, p->pitch);
+                cp = avif_color_profile(h, color_id, &img);
+                if (cp) {
+                    cs_profile_apply_bgra(cp, p->pixels, img.width,
+                                          img.height, p->pitch);
+                    cs_profile_free(cp);
+                }
+                if (has_alpha) {
+                    if (alpha.width == img.width &&
+                        alpha.height == img.height) {
+                        avif_apply_alpha(&alpha, p->pixels, p->pitch,
+                                         img.width, img.height);
+                    } else {
+                        VWARN(avif, "alpha item is %dx%d, picture is %dx%d",
+                             alpha.width, alpha.height, img.width, img.height);
+                    }
+                }
             }
             av1_image_free(&img);
+            if (has_alpha) {
+                av1_image_free(&alpha);
+            }
             if (!p->pixels) {
                 AVIF_free(p);
                 return NULL;
@@ -722,6 +967,9 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
             VINFO(avif, "decoded %dx%d with the built-in AV1 decoder",
                   img.width, img.height);
             return p;
+        }
+        if (has_alpha) {
+            av1_image_free(&alpha);
         }
         VERR(av1, "in-house AV1 decode failed: %d", rc);
         /* fall through to the container-only path */
@@ -763,7 +1011,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     p->pixels = calloc(1, (size_t)p->pitch * p->height);
     p->format = CS_PIXELFORMAT_RGBA8888;
     if (h->items) {
-        decode_items(h, f, (uint8_t **)&p->pixels);
+        decode_items(h, f, (uint64_t)file_size, (uint8_t **)&p->pixels);
     }
 
     fclose(f);

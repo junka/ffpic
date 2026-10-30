@@ -456,14 +456,21 @@ read_colr_box(FILE *f, struct colr_box *b)
         b->transfer_characteristics = read_u16(f);
         b->matrix_coefficients = read_u16(f);
         b->full_range_flag = fgetc(f) >> 7;
-    } else if (b->color_type == FOURCC2UINT('r', 'I', 'C', 'C') || b->color_type == FOURCC2UINT('p', 'r', 'o', 'f')) {
-        // ICC profile
-        int len = b->size - 4 - 8;
-        VDBG(basemedia, "profile len %d", len);
-        // uint8_t *data = malloc(len);
-        // hexdump(stdout, "icc profile", "", data, len);
-        // free(data);
-        fseek(f, len, SEEK_CUR);
+    } else if (b->color_type == FOURCC2UINT('r', 'I', 'C', 'C') ||
+               b->color_type == FOURCC2UINT('p', 'r', 'o', 'f')) {
+        /* ICC profile, kept for the colour management step */
+        int64_t len = (int64_t)b->size - 4 - 8;
+        VDBG(basemedia, "profile len %" PRId64, len);
+        if (len > 0) {
+            b->icc_data = malloc((size_t)len);
+            if (!b->icc_data ||
+                fread(b->icc_data, 1, (size_t)len, f) != (size_t)len) {
+                free(b->icc_data);
+                b->icc_data = NULL;
+                return b->size;
+            }
+            b->icc_len = (uint32_t)len;
+        }
     }
     return b->size;
 }
@@ -1300,6 +1307,8 @@ void free_ipco_box(struct ipco_box *b)
                 free_pixi_box((struct pixi_box *)b->property[i]);
             } else if(b->property[i]->type == FOURCC2UINT('a', 'u', 'x', 'C')) {
                 free_auxc_box((struct auxC_box *)b->property[i]);
+            } else if (b->property[i]->type == FOURCC2UINT('c', 'o', 'l', 'r')) {
+                free(((struct colr_box *)b->property[i])->icc_data);
             }
             free(b->property[i]);
         }

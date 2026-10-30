@@ -84,3 +84,11 @@ target_compile_definitions(test_avif PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_avif ffpic m)
 add_test(NAME test_avif COMMAND test_avif)
+
+set(COLORSPACE_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_colorspace.c)
+add_executable(test_colorspace ${COLORSPACE_TEST})
+target_include_directories(test_colorspace PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_colorspace PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_colorspace ffpic m)
+add_test(NAME test_colorspace COMMAND test_colorspace)

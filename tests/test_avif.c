@@ -2,9 +2,10 @@
  * bgra frame ffmpeg's own av1 decoder produces.  Both files come from
  * tests/gen_avif_samples.py.  The samples cover loop filtering, tiles, an
  * odd size that goes through the conformance window crop, coarse
- * quantization, lossless coding, 4:4:4 and 4:0:0.  Lossy coding moves
- * pixels, so every sample carries its own tolerance and the whole frame is
- * compared, not just a few points. */
+ * quantization, lossless coding, 4:4:4, 4:0:0, and the container cases:
+ * a generic HEIF major brand, a split item, and an alpha item.  Lossy
+ * coding moves pixels, so every sample carries its own tolerance and the
+ * whole frame is compared, not just a few points. */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -21,16 +22,23 @@ test_real_samples(void)
     static const struct {
         const char *name;
         int w, h, tol;
-        int mono;
+        int mono, alpha;
     } cases[] = {
-        {"avif_gradient", 96, 96, 6, 0},
-        {"avif_noise", 96, 96, 6, 0},
-        {"avif_mixed", 100, 62, 6, 0},
-        {"avif_tiles", 256, 192, 6, 0},
-        {"avif_highqp", 96, 96, 6, 0},
-        {"avif_lossless", 64, 64, 4, 0},
-        {"avif_yuv444", 96, 96, 6, 0},
-        {"avif_mono", 96, 96, 6, 1},
+        {"avif_gradient", 96, 96, 6, 0, 0},
+        {"avif_noise", 96, 96, 6, 0, 0},
+        {"avif_mixed", 100, 62, 6, 0, 0},
+        {"avif_tiles", 256, 192, 6, 0, 0},
+        {"avif_highqp", 96, 96, 6, 0, 0},
+        {"avif_lossless", 64, 64, 4, 0, 0},
+        {"avif_yuv444", 96, 96, 6, 0, 0},
+        {"avif_mono", 96, 96, 6, 1, 0},
+        /* derived containers: these decode to the mixed picture */
+        {"avif_mif1", 100, 62, 6, 0, 0},
+        {"avif_extents", 100, 62, 6, 0, 0},
+        {"avif_aux", 100, 62, 6, 0, 0},
+        {"avif_alpha", 100, 62, 6, 0, 1},
+        /* the gamma curve bends the existing rounding, so allow a bit more */
+        {"avif_icc", 100, 62, 8, 0, 0},
     };
     int rc = 0;
 
@@ -93,7 +101,7 @@ test_real_samples(void)
             uint8_t *row = (uint8_t *)p->pixels + (size_t)y * p->pitch;
             const uint8_t *rrow = ref + (size_t)y * cases[i].w * 4;
             for (int x = 0; x < cases[i].w && !bad; x++) {
-                for (int c = 0; c < 3; c++) {
+                for (int c = 0; c < (cases[i].alpha ? 4 : 3); c++) {
                     int d = abs(row[x * 4 + c] - rrow[x * 4 + c]);
                     if (d > maxdiff) {
                         maxdiff = d;
@@ -118,7 +126,7 @@ test_real_samples(void)
                         rc = -1;
                         break;
                     }
-                } else if (row[x * 4 + 3] != 0xFF) {
+                } else if (!cases[i].alpha && row[x * 4 + 3] != 0xFF) {
                     printf("%s: (%d,%d) alpha %d, expected 255\n", path, x, y,
                            row[x * 4 + 3]);
                     bad = 1;

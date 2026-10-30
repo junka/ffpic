@@ -1,4 +1,7 @@
+#include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "utils.h"
 #include "colorspace.h"
@@ -1069,6 +1072,425 @@ void BGRA32_TO_HSV(uint8_t *ptr, int pitch, int height, uint16_t* h, uint8_t *s,
             *s++ = (cmax == 0) ? 0 : 255 - 255 * cmin/cmax;
             *v++ = cmax;
         }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Colour management: ICC profiles and CICP code points to sRGB        */
+/* ------------------------------------------------------------------ */
+
+#define CS_TAG(a, b, c, d) ((uint32_t)(a) << 24 | (uint32_t)(b) << 16 | \
+                            (uint32_t)(c) << 8 | (uint32_t)(d))
+
+enum cs_curve_kind {
+    CS_CURVE_IDENTITY,
+    CS_CURVE_GAMMA,
+    CS_CURVE_SRGB,
+    CS_CURVE_BT709,
+    CS_CURVE_TABLE,
+    CS_CURVE_PARAM,
+};
+
+struct cs_curve {
+    enum cs_curve_kind kind;
+    double gamma;
+    const uint8_t *table;   /* big endian u16 entries inside the ICC blob */
+    int n;
+    int ptype;
+    double p[7];
+};
+
+struct cs_profile {
+    int identity;
+    int has_matrix;
+    double m[3][3];         /* source linear RGB -> XYZ (D65) */
+    struct cs_curve curve[3];
+    uint8_t *icc;           /* owned copy of the profile */
+};
+
+struct cs_tag {
+    const uint8_t *data;
+    uint32_t size;
+};
+
+static uint32_t cs_rd32(const uint8_t *p)
+{
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+           (uint32_t)p[2] << 8 | p[3];
+}
+
+static uint16_t cs_rd16(const uint8_t *p)
+{
+    return (uint16_t)(p[0] << 8 | p[1]);
+}
+
+static double cs_s15f16(const uint8_t *p)
+{
+    return (double)(int32_t)cs_rd32(p) / 65536.0;
+}
+
+static double cs_srgb_encode(double v)
+{
+    if (v <= 0.0) {
+        return 0.0;
+    }
+    if (v >= 1.0) {
+        return 1.0;
+    }
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+static double cs_curve_decode(const struct cs_curve *c, double x)
+{
+    double g, a, b, cc, d, e, f, t;
+
+    switch (c->kind) {
+    case CS_CURVE_IDENTITY:
+        return x;
+    case CS_CURVE_GAMMA:
+        return pow(x, c->gamma);
+    case CS_CURVE_SRGB:
+        return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
+    case CS_CURVE_BT709:
+        return x < 0.081 ? x / 4.5 : pow((x + 0.099) / 1.099, 1.0 / 0.45);
+    case CS_CURVE_TABLE:
+        if (c->n <= 0) {
+            return x;
+        }
+        t = x * (c->n - 1);
+        {
+            int i = (int)t;
+            if (i < 0) {
+                i = 0;
+            }
+            if (i >= c->n - 1) {
+                return cs_rd16(c->table + 2 * (c->n - 1)) / 65535.0;
+            }
+            t -= i;
+            return (cs_rd16(c->table + 2 * i) * (1.0 - t) +
+                    cs_rd16(c->table + 2 * i + 2) * t) / 65535.0;
+        }
+    case CS_CURVE_PARAM:
+        g = c->p[0];
+        a = c->p[1];
+        b = c->p[2];
+        cc = c->p[3];
+        d = c->p[4];
+        e = c->p[5];
+        f = c->p[6];
+        switch (c->ptype) {
+        case 0:
+            return pow(x, g);
+        case 1:
+            if (x < (a != 0.0 ? -b / a : 0.0)) {
+                return 0.0;
+            }
+            return pow(a * x + b, g);
+        case 2:
+            if (x < (a != 0.0 ? -b / a : 0.0)) {
+                return cc;
+            }
+            return pow(a * x + b, g) + cc;
+        case 3:
+            return x >= d ? pow(a * x + b, g) : cc * x;
+        case 4:
+            return x >= d ? pow(a * x + b, g) + e : cc * x + f;
+        }
+        break;
+    }
+    return x;
+}
+
+static int cs_find_tag(const uint8_t *d, uint32_t size, uint32_t sig,
+                       struct cs_tag *out)
+{
+    uint32_t count = cs_rd32(d + 128);
+    const uint8_t *t = d + 132;
+
+    if (count > (size - 132) / 12) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < count; i++, t += 12) {
+        uint32_t off, len;
+        if (cs_rd32(t) != sig) {
+            continue;
+        }
+        off = cs_rd32(t + 4);
+        len = cs_rd32(t + 8);
+        if (off > size || len > size - off) {
+            return -1;
+        }
+        out->data = d + off;
+        out->size = len;
+        return 0;
+    }
+    return -1;
+}
+
+static int cs_parse_xyz(const struct cs_tag *tag, double out[3])
+{
+    if (!tag->data || tag->size < 20 ||
+        cs_rd32(tag->data) != CS_TAG('X', 'Y', 'Z', ' ')) {
+        return -1;
+    }
+    for (int i = 0; i < 3; i++) {
+        out[i] = cs_s15f16(tag->data + 8 + 4 * i);
+    }
+    return 0;
+}
+
+static int cs_parse_curve(const struct cs_tag *tag, struct cs_curve *out)
+{
+    const uint8_t *d = tag->data;
+    uint32_t type;
+
+    if (!d || tag->size < 12) {
+        return -1;
+    }
+    type = cs_rd32(d);
+
+    if (type == CS_TAG('c', 'u', 'r', 'v')) {
+        uint32_t n = cs_rd32(d + 8);
+        if (n == 0) {
+            out->kind = CS_CURVE_IDENTITY;
+            return 0;
+        }
+        if (n == 1) {
+            if (tag->size < 14) {
+                return -1;
+            }
+            out->kind = CS_CURVE_GAMMA;
+            out->gamma = cs_rd16(d + 12) / 256.0;
+            return 0;
+        }
+        if (n > (tag->size - 12) / 2) {
+            return -1;
+        }
+        out->kind = CS_CURVE_TABLE;
+        out->n = (int)n;
+        out->table = d + 12;
+        return 0;
+    }
+
+    if (type == CS_TAG('p', 'a', 'r', 'a')) {
+        static const int nparam[5] = {1, 3, 4, 5, 7};
+        int ptype = cs_rd16(d + 8);
+        if (ptype > 4 ||
+            tag->size < 12 + 4 * (uint32_t)(nparam[ptype] - 1)) {
+            return -1;
+        }
+        out->kind = CS_CURVE_PARAM;
+        out->ptype = ptype;
+        for (int i = 0; i < nparam[ptype]; i++) {
+            out->p[i] = cs_s15f16(d + 12 + 4 * i);
+        }
+        return 0;
+    }
+
+    return -1;
+}
+
+static int cs_icc_tags(const uint8_t *d, uint32_t size, struct cs_tag tag[6])
+{
+    return cs_find_tag(d, size, CS_TAG('r', 'X', 'Y', 'Z'), &tag[0]) == 0 &&
+           cs_find_tag(d, size, CS_TAG('g', 'X', 'Y', 'Z'), &tag[1]) == 0 &&
+           cs_find_tag(d, size, CS_TAG('b', 'X', 'Y', 'Z'), &tag[2]) == 0 &&
+           cs_find_tag(d, size, CS_TAG('r', 'T', 'R', 'C'), &tag[3]) == 0 &&
+           cs_find_tag(d, size, CS_TAG('g', 'T', 'R', 'C'), &tag[4]) == 0 &&
+           cs_find_tag(d, size, CS_TAG('b', 'T', 'R', 'C'), &tag[5]) == 0;
+}
+
+/* Matrix/TRC profiles carry the source colourants (PCS D50) and one tone
+ * curve per channel.  LUT based profiles have no colourants and are not
+ * handled. */
+struct cs_profile *
+cs_profile_from_icc(const void *data, size_t len)
+{
+    /* Bradford chromatic adaptation from the D50 PCS to D65 */
+    static const double bradford[3][3] = {
+        { 0.9555766, -0.0230393,  0.0631636},
+        {-0.0282895,  1.0099416,  0.0210077},
+        { 0.0122982, -0.0204830,  1.3299098},
+    };
+    const uint8_t *d = data;
+    struct cs_tag tag[6];
+    struct cs_profile *p;
+    double c[3][3];
+    uint32_t size;
+
+    if (!data || len < 132 || memcmp(d + 36, "acsp", 4) != 0) {
+        return NULL;
+    }
+    size = cs_rd32(d);
+    if (size > len) {
+        size = (uint32_t)len;
+    }
+    if (size < 132 || !cs_icc_tags(d, size, tag)) {
+        return NULL;
+    }
+
+    p = calloc(1, sizeof(*p));
+    if (!p) {
+        return NULL;
+    }
+    p->icc = malloc(size);
+    if (!p->icc) {
+        free(p);
+        return NULL;
+    }
+    memcpy(p->icc, d, size);
+    if (!cs_icc_tags(p->icc, size, tag) ||
+        cs_parse_xyz(&tag[0], c[0]) < 0 ||
+        cs_parse_xyz(&tag[1], c[1]) < 0 ||
+        cs_parse_xyz(&tag[2], c[2]) < 0 ||
+        cs_parse_curve(&tag[3], &p->curve[0]) < 0 ||
+        cs_parse_curve(&tag[4], &p->curve[1]) < 0 ||
+        cs_parse_curve(&tag[5], &p->curve[2]) < 0) {
+        cs_profile_free(p);
+        return NULL;
+    }
+
+    /* c[colourant] is an XYZ triple; build the matrix whose columns are the
+     * colourants and adapt the PCS white point from D50 to D65 */
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            p->m[i][j] = bradford[i][0] * c[j][0] +
+                         bradford[i][1] * c[j][1] +
+                         bradford[i][2] * c[j][2];
+        }
+    }
+    p->has_matrix = 1;
+    return p;
+}
+
+struct cs_profile *
+cs_profile_from_cicp(int primaries, int transfer)
+{
+    /* linear RGB -> XYZ D65 for the supported primaries */
+    static const double bt2020[3][3] = {
+        {0.6369580, 0.1446169, 0.1688810},
+        {0.2627002, 0.6779981, 0.0593017},
+        {0.0000000, 0.0280727, 1.0609851},
+    };
+    static const double p3[3][3] = {
+        {0.4865709, 0.2656677, 0.1982173},
+        {0.2289746, 0.6917385, 0.0792869},
+        {0.0000000, 0.0451134, 1.0439444},
+    };
+    const double (*m)[3] = NULL;
+    struct cs_profile *p;
+    struct cs_curve c;
+
+    /* unspecified primaries/transfer follow the AV1 defaults */
+    if (primaries <= 0 || primaries == 2) {
+        primaries = 1;
+    }
+    if (transfer <= 0 || transfer == 2) {
+        transfer = 13;
+    }
+
+    switch (transfer) {
+    case 1:
+        c.kind = CS_CURVE_BT709;
+        break;
+    case 8:
+        c.kind = CS_CURVE_IDENTITY;
+        break;
+    case 13:
+        c.kind = CS_CURVE_SRGB;
+        break;
+    default:
+        return NULL;    /* PQ/HLG and the rest need tone mapping */
+    }
+
+    if (primaries == 1 && transfer == 13) {
+        p = calloc(1, sizeof(*p));
+        if (p) {
+            p->identity = 1;
+        }
+        return p;
+    }
+
+    switch (primaries) {
+    case 1:
+        m = NULL;       /* sRGB primaries: the matrix round trip is identity */
+        break;
+    case 9:
+        m = bt2020;
+        break;
+    case 12:
+        m = p3;
+        break;
+    default:
+        return NULL;
+    }
+
+    p = calloc(1, sizeof(*p));
+    if (!p) {
+        return NULL;
+    }
+    for (int i = 0; i < 3; i++) {
+        p->curve[i] = c;
+        if (m) {
+            for (int j = 0; j < 3; j++) {
+                p->m[i][j] = m[i][j];
+            }
+        }
+    }
+    p->has_matrix = m != NULL;
+    return p;
+}
+
+int cs_profile_is_identity(const struct cs_profile *p)
+{
+    return !p || p->identity;
+}
+
+void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
+                           int width, int height, int pitch)
+{
+    static const double xyz_to_srgb[3][3] = {
+        { 3.2404542, -1.5371385, -0.4985314},
+        {-0.9692660,  1.8760108,  0.0415560},
+        { 0.0556434, -0.2040259,  1.0572252},
+    };
+
+    if (!p || p->identity) {
+        return;
+    }
+    for (int y = 0; y < height; y++) {
+        uint8_t *row = pixels + (size_t)y * pitch;
+        for (int x = 0; x < width; x++) {
+            double r = row[x * 4 + 2] / 255.0;
+            double g = row[x * 4 + 1] / 255.0;
+            double b = row[x * 4 + 0] / 255.0;
+            double lr = cs_curve_decode(&p->curve[0], r);
+            double lg = cs_curve_decode(&p->curve[1], g);
+            double lb = cs_curve_decode(&p->curve[2], b);
+
+            if (p->has_matrix) {
+                double X = p->m[0][0] * lr + p->m[0][1] * lg + p->m[0][2] * lb;
+                double Y = p->m[1][0] * lr + p->m[1][1] * lg + p->m[1][2] * lb;
+                double Z = p->m[2][0] * lr + p->m[2][1] * lg + p->m[2][2] * lb;
+                lr = xyz_to_srgb[0][0] * X + xyz_to_srgb[0][1] * Y +
+                     xyz_to_srgb[0][2] * Z;
+                lg = xyz_to_srgb[1][0] * X + xyz_to_srgb[1][1] * Y +
+                     xyz_to_srgb[1][2] * Z;
+                lb = xyz_to_srgb[2][0] * X + xyz_to_srgb[2][1] * Y +
+                     xyz_to_srgb[2][2] * Z;
+            }
+            row[x * 4 + 2] = (uint8_t)lround(cs_srgb_encode(lr) * 255.0);
+            row[x * 4 + 1] = (uint8_t)lround(cs_srgb_encode(lg) * 255.0);
+            row[x * 4 + 0] = (uint8_t)lround(cs_srgb_encode(lb) * 255.0);
+        }
+    }
+}
+
+void cs_profile_free(struct cs_profile *p)
+{
+    if (p) {
+        free(p->icc);
+        free(p);
     }
 }
 

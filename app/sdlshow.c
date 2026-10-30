@@ -25,7 +25,7 @@ display_main(void *arg)
     struct file_ops *ops = (struct file_ops *)arg;
     // snprintf(title, 128, "%s (%d * %d)", "display", p->width, p->height);
 
-    struct display *d = display_get("SDL2");
+    struct display *d = display_get("SDL3");
     // if (p->width < 180 || p->height < 60) {
     //     display_init(d, title, 480, 360);
     // } else {
@@ -102,7 +102,7 @@ main(int argc, const char *argv[])
         printf("file format is not support\n");
         return -1;
     }
-    struct display *d = display_get("SDL2");
+    struct display *d = display_get("SDL3");
     struct pic *p = file_load(ops, filename, 0);
     if (!p) {
         p = file_dequeue_pic();

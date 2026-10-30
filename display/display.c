@@ -41,7 +41,7 @@ int display_show(struct display *d, void *buff, int left, int top, int width,
                  int height, int depth, int pitch, int format)
 {
     if (LIKELY(d->draw_pixels))
-        d->draw_pixels(buff, left, top, width, height, depth, pitch, format);
+        return d->draw_pixels(buff, left, top, width, height, depth, pitch, format);
     return 0;
 }
 

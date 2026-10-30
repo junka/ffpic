@@ -52,8 +52,6 @@ if (FFPIC_ENABLE_SANITIZERS AND NOT MSVC)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
 endif()
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/sdl2)
-
 list(APPEND FFPIC_DIRS
   "${FFPIC_ROOT}/display"
   "${FFPIC_ROOT}/format"
@@ -115,7 +113,33 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/bpg.c"
   "${FFPIC_ROOT}/format/predict.c")
 
-find_package(SDL2)
+# The display backend is SDL3, which carries the 16 bit pixel formats the
+# high bit depth decoders produce.  Prefer a system installation and fall
+# back to a pinned release so a fresh build tree works without one.
+find_package(SDL3 CONFIG QUIET)
+if (NOT SDL3_FOUND)
+  if (CMAKE_VERSION VERSION_LESS 3.14)
+    message(FATAL_ERROR "SDL3 is not installed; building it needs CMake 3.14+")
+  endif()
+  include(FetchContent)
+  FetchContent_Declare(SDL3
+    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+    GIT_TAG release-3.4.18
+    GIT_SHALLOW TRUE)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  # xtest is only for injected input and pulls an extra dev package
+  set(SDL_X11_XTEST OFF CACHE BOOL "" FORCE)
+  set(SDL_TEST OFF CACHE BOOL "" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  # the project wide -Werror/-Wall flags are for its own sources only
+  set(_ffpic_c_flags "${CMAKE_C_FLAGS}")
+  set(CMAKE_C_FLAGS "")
+  FetchContent_MakeAvailable(SDL3)
+  set(CMAKE_C_FLAGS "${_ffpic_c_flags}")
+  set(SDL3_FOUND TRUE)
+endif()
 find_package(OpenCL)
 find_library(MATH_LIBRARY m)
 find_package(Vulkan)
@@ -198,11 +222,11 @@ if(Vulkan_FOUND)
   target_compile_options(ffpic PRIVATE -DENABLE_VULKAN)
 endif()
 
-if(SDL2_FOUND)
+if(SDL3_FOUND)
   add_executable(sdlshow "${FFPIC_ROOT}/app/sdlshow.c" ${FFPIC_SDL})
   target_link_libraries(sdlshow ffpic m)
   target_include_directories(sdlshow PRIVATE ${FFPIC_DIRS})
-endif(SDL2_FOUND)
+endif(SDL3_FOUND)
 
 target_link_libraries(picinfo ffpic m ${CMAKE_DL_LIBS})
 target_link_libraries(transbmp ffpic m ${CMAKE_DL_LIBS})
@@ -211,13 +235,9 @@ target_include_directories(picinfo PRIVATE ${FFPIC_DIRS})
 target_include_directories(transbmp PRIVATE ${FFPIC_DIRS})
 target_include_directories(transcode PRIVATE ${FFPIC_DIRS})
 
-if(SDL2_FOUND)
-  target_include_directories(sdlshow PRIVATE ${SDL2_INCLUDE_DIRS})
-  message("SDL2 library found ${SDL2_INCLUDE_DIRS}")
-  target_link_libraries(sdlshow ${SDL2_LIBRARIES})
-else(SDL2_FOUND)
-  message("SDL2 library not found")
-endif(SDL2_FOUND)
+if(SDL3_FOUND)
+  target_link_libraries(sdlshow SDL3::SDL3)
+endif(SDL3_FOUND)
 
 if(OpenCL_FOUND)
   target_include_directories(ffpic PRIVATE ${OpenCL_INCLUDE_DIRS})
@@ -226,9 +246,9 @@ if(OpenCL_FOUND)
   target_link_libraries(picinfo OpenCL::OpenCL)
   target_link_libraries(transbmp OpenCL::OpenCL)
   target_link_libraries(transcode OpenCL::OpenCL)
-  if(SDL2_FOUND)
+  if(SDL3_FOUND)
     target_link_libraries(sdlshow OpenCL::OpenCL)
-  endif(SDL2_FOUND)
+  endif(SDL3_FOUND)
 endif()
 
 if (Vulkan_FOUND)
@@ -236,9 +256,9 @@ if (Vulkan_FOUND)
   target_link_libraries(picinfo ${CMAKE_DL_LIBS})
   target_link_libraries(transbmp ${CMAKE_DL_LIBS})
   target_link_libraries(transcode ${CMAKE_DL_LIBS})
-  if(SDL2_FOUND)
+  if(SDL3_FOUND)
     target_link_libraries(sdlshow ${CMAKE_DL_LIBS})
-  endif(SDL2_FOUND)
+  endif(SDL3_FOUND)
 endif()
 
 include(CTest)

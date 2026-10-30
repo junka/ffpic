@@ -6,13 +6,13 @@ extern "C"{
 #endif
 
 #include <stdbool.h>
-#include <SDL.h>
+#include <SDL3/SDL.h>
 
 typedef struct {
     SDL_Window *w;
     SDL_Renderer *r;
     SDL_Texture *t;
-    SDL_Rect rect;
+    SDL_FRect rect;
     // SDL_Thread *tid;
 } sdl_screen;
 

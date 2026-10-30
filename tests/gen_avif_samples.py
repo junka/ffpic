@@ -33,6 +33,9 @@ SAMPLES = [
     ("lossless",  64, 64, "yuv420p", "noise",    "lossless=1"),
     ("yuv444",    96, 96, "yuv444p", "gradient", ""),
     ("mono",      96, 96, "gray",    "mixed",    ""),
+    # high bit depth: the output keeps 16 bit channels
+    ("tenbit",    96, 96, "yuv420p10le", "gradient", ""),
+    ("twelvebit", 96, 96, "yuv420p12le", "gradient", ""),
 ]
 
 
@@ -414,6 +417,7 @@ def main():
                 f.write(make_source(kind, w, h))
             avif = os.path.join(DATA, f"avif_{name}.avif")
             ref = os.path.join(DATA, f"avif_{name}.ref")
+            wide = name in ("tenbit", "twelvebit")
 
             cmd = ["ffmpeg", "-y", "-loglevel", "error",
                    "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -436,13 +440,16 @@ def main():
                     cmd += ["-" + k, v]
             cmd += ["-f", "avif", avif]
             run(cmd)
-            # the reference: ffmpeg's own av1 decoder, converted to bgra
+            # the reference: ffmpeg's own av1 decoder, packed to the depth
+            # the picture claims
+            pix_fmt = "rgba64le" if wide else "bgra"
             run(["ffmpeg", "-y", "-loglevel", "error", "-i", avif,
-                 "-pix_fmt", "bgra", "-f", "rawvideo", ref])
+                 "-pix_fmt", pix_fmt, "-f", "rawvideo", ref])
             size = os.path.getsize(ref)
-            if size != w * h * 4:
+            bpp = 8 if wide else 4
+            if size != w * h * bpp:
                 raise SystemExit(
-                    f"{name}: reference is {size} bytes, expected {w * h * 4}")
+                    f"{name}: reference is {size} bytes, expected {w * h * bpp}")
             print(f"{name}: {os.path.getsize(avif)} bytes, "
                   f"ref {size} bytes")
 
@@ -502,6 +509,49 @@ def main():
         with open(os.path.join(DATA, "avif_icc.ref"), "wb") as f:
             f.write(ref)
         print(f"icc: {os.path.getsize(path)} bytes (derived)")
+
+        # The same profile on the 10 bit picture: the colour transform runs
+        # on 16 bit samples.
+        tenbit = os.path.join(DATA, "avif_tenbit.avif")
+        tenbit_ref = os.path.join(DATA, "avif_tenbit.ref")
+        path = make_icc_item(tenbit, icc, "icc10")
+        raw = open(tenbit_ref, "rb").read()
+        vals = list(struct.unpack("<%dH" % (len(raw) // 2), raw))
+        for i in range(0, len(vals), 4):
+            for c in range(3):
+                v = (vals[i + c] / 65535.0) ** 1.8
+                vals[i + c] = round(srgb_encode(v) * 65535)
+        with open(os.path.join(DATA, "avif_icc10.ref"), "wb") as f:
+            f.write(struct.pack("<%dH" % len(vals), *vals))
+        print(f"icc10: {os.path.getsize(path)} bytes (derived)")
+
+        # A 10 bit alpha plane next to the 10 bit colour item: the alpha
+        # channel keeps 16 bit precision too.
+        tw, th = 96, 96
+        ramp10 = b"".join(struct.pack("<H", x * 1023 // (tw - 1))
+                          for _ in range(th) for x in range(tw))
+        ramp10_src = os.path.join(tmp, "alpha10.raw")
+        with open(ramp10_src, "wb") as f:
+            f.write(ramp10)
+        ramp10_avif = os.path.join(tmp, "alpha10.avif")
+        run(["ffmpeg", "-y", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "gray10le", "-s", f"{tw}x{th}",
+             "-r", "1", "-i", ramp10_src, "-frames:v", "1",
+             "-c:v", "libaom-av1", "-usage", "allintra",
+             "-still-picture", "1", "-pix_fmt", "gray10le",
+             "-cpu-used", "1", "-crf", "0", "-aom-params", "lossless=1",
+             "-f", "avif", ramp10_avif])
+        path = make_alpha(tenbit, ramp10_avif, "alpha10")
+        ref = bytearray(open(tenbit_ref, "rb").read())
+        for y in range(th):
+            for x in range(tw):
+                v = x * 1023 // (tw - 1)
+                a = (v * 65535 + 511) // 1023
+                ref[(y * tw + x) * 8 + 6:(y * tw + x) * 8 + 8] = \
+                    struct.pack("<H", a)
+        with open(os.path.join(DATA, "avif_alpha10.ref"), "wb") as f:
+            f.write(ref)
+        print(f"alpha10: {os.path.getsize(path)} bytes (derived)")
 
 
 if __name__ == "__main__":

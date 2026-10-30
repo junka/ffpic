@@ -213,6 +213,12 @@ typedef enum
     CS_PIXELFORMAT_ARGB2101010 =
         CS_DEFINE_PIXELFORMAT(CS_PIXELTYPE_PACKED32, CS_PACKEDORDER_ARGB,
                                CS_PACKEDLAYOUT_2101010, 32, 4),
+    CS_PIXELFORMAT_RGBA64 =
+        CS_DEFINE_PIXELFORMAT(CS_PIXELTYPE_ARRAYU16, CS_ARRAYORDER_RGBA, 0,
+                              64, 8),
+    CS_PIXELFORMAT_BGRA64 =
+        CS_DEFINE_PIXELFORMAT(CS_PIXELTYPE_ARRAYU16, CS_ARRAYORDER_BGRA, 0,
+                              64, 8),
 
     /* Aliases for RGBA byte arrays of color data, for the current platform */
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -252,9 +258,10 @@ const char *CS_GetPixelFormatName(uint32_t format);
 
 void blend_BGRA32_8bit_alpha(uint8_t *fg, uint8_t *bg, int pitch, int height);
 
-/* Colour management for decoded still images.  A profile maps a packed 8 bit
- * B,G,R,A buffer from the source colour space to sRGB, the space the
- * RGBA8888 pictures in this project carry.  A profile is built from an
+/* Colour management for decoded still images.  A profile maps a packed
+ * B,G,R,A buffer, 8 or 16 bit per channel, from the source colour space to
+ * sRGB, the space the RGBA8888 pictures in this project carry.  A profile is
+ * built from an
  * embedded ICC profile (matrix/TRC profiles) or from the CICP code points
  * carried by the container or the bitstream. */
 struct cs_profile;
@@ -264,6 +271,9 @@ struct cs_profile *cs_profile_from_cicp(int primaries, int transfer);
 int cs_profile_is_identity(const struct cs_profile *p);
 void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
                            int width, int height, int pitch);
+/* The same transform for 16 bit B,G,R,A samples. */
+void cs_profile_apply_bgra16(const struct cs_profile *p, uint8_t *pixels,
+                             int width, int height, int pitch);
 void cs_profile_free(struct cs_profile *p);
 
 #ifdef __cplusplus

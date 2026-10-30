@@ -759,6 +759,25 @@ avif_find_alpha_item(const AVIF *h, uint32_t color_id)
 /* AVIF alpha is a separate monochrome image and is not premultiplied, so it
  * maps straight onto the alpha channel of the packed output. */
 static void
+avif_apply_alpha16(const struct av1_image *alpha, uint8_t *pixels, int pitch,
+                   int w, int h)
+{
+    int max = (1 << alpha->bitdepth) - 1;
+    const uint16_t *src = alpha->plane[0];
+    int stride = alpha->stride[0];
+
+    for (int y = 0; y < h; y++) {
+        uint16_t *row = (uint16_t *)(pixels + (size_t)y * pitch);
+        for (int x = 0; x < w; x++) {
+            int v = src[(size_t)y * stride + x];
+            v = v < 0 ? 0 : v > max ? max : v;
+            row[x * 4 + 3] =
+                (uint16_t)(((int64_t)v * 65535 + max / 2) / max);
+        }
+    }
+}
+
+static void
 avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels, int pitch,
                  int w, int h)
 {
@@ -928,28 +947,46 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         if (rc == 0 && img.width > 0 && img.height > 0) {
             /* Keep the AVIF box metadata in p->pic so AVIF_info() still has
              * the container data to report. */
+            /* 10 and 12 bit streams keep their precision in 16 bit
+             * channels; 8 bit streams stay packed BGRA. */
+            int wide = img.bitdepth > 8;
+
             p->width = img.width;
             p->height = img.height;
-            p->depth = 32;
-            p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth +
-                         p->depth - 1) >> 5) << 2;
-            p->format = CS_PIXELFORMAT_RGBA8888;
+            p->depth = wide ? 64 : 32;
+            p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+            p->format = wide ? CS_PIXELFORMAT_BGRA64
+                             : CS_PIXELFORMAT_RGBA8888;
             p->pixels = malloc((size_t)p->pitch * p->height);
             if (p->pixels) {
                 struct cs_profile *cp;
 
-                av1_image_to_bgra(&img, p->pixels, p->pitch);
+                if (wide) {
+                    av1_image_to_rgba16(&img, p->pixels, p->pitch);
+                } else {
+                    av1_image_to_bgra(&img, p->pixels, p->pitch);
+                }
                 cp = avif_color_profile(h, color_id, &img);
                 if (cp) {
-                    cs_profile_apply_bgra(cp, p->pixels, img.width,
-                                          img.height, p->pitch);
+                    if (wide) {
+                        cs_profile_apply_bgra16(cp, p->pixels, img.width,
+                                                img.height, p->pitch);
+                    } else {
+                        cs_profile_apply_bgra(cp, p->pixels, img.width,
+                                              img.height, p->pitch);
+                    }
                     cs_profile_free(cp);
                 }
                 if (has_alpha) {
                     if (alpha.width == img.width &&
                         alpha.height == img.height) {
-                        avif_apply_alpha(&alpha, p->pixels, p->pitch,
-                                         img.width, img.height);
+                        if (wide) {
+                            avif_apply_alpha16(&alpha, p->pixels, p->pitch,
+                                               img.width, img.height);
+                        } else {
+                            avif_apply_alpha(&alpha, p->pixels, p->pitch,
+                                             img.width, img.height);
+                        }
                     } else {
                         VWARN(avif, "alpha item is %dx%d, picture is %dx%d",
                              alpha.width, alpha.height, img.width, img.height);

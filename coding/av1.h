@@ -41,6 +41,10 @@ void av1_image_free(struct av1_image *img);
  * bytes. */
 int av1_image_to_bgra(const struct av1_image *img, uint8_t *dst, int pitch);
 
+/* The same conversion at full 16 bit per channel, for 10 and 12 bit
+ * streams.  The samples are scaled to the 0..65535 range. */
+int av1_image_to_rgba16(const struct av1_image *img, uint8_t *dst, int pitch);
+
 #ifdef __cplusplus
 }
 #endif

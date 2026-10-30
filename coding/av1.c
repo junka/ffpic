@@ -1443,54 +1443,84 @@ av1_yuv_to_rgb(int y, int u, int v, int bitdepth, int full_range,
     }
 }
 
+/* RGB of one pixel, in the sample range of the coded bit depth. */
+static void
+av1_pixel_to_rgb(const struct av1_image *img, int x, int y,
+                 int *r, int *g, int *b)
+{
+    int shift = img->bitdepth - 8;
+    int yy = img->plane[0][(size_t)y * img->stride[0] + x];
+    int u = 128 << shift, v = 128 << shift;
+
+    if (img->num_planes > 1) {
+        int cx = img->subsampling_x ? x >> 1 : x;
+        int cy = img->subsampling_y ? y >> 1 : y;
+        u = img->plane[1][(size_t)cy * img->stride[1] + cx];
+        v = img->plane[2][(size_t)cy * img->stride[2] + cx];
+    }
+    if (img->num_planes > 1 && img->matrix_coefficients == 0 &&
+        !img->subsampling_x && !img->subsampling_y) {
+        /* identity (GBR) */
+        *r = v;
+        *g = yy;
+        *b = u;
+    } else if (img->num_planes == 1) {
+        *r = *g = *b = yy;
+    } else {
+        av1_yuv_to_rgb(yy, u, v, img->bitdepth, img->color_range,
+                       img->matrix_coefficients, r, g, b);
+    }
+}
+
+static inline uint8_t
+av1_scale_to_8(int v, int bitdepth)
+{
+    if (bitdepth > 8) {
+        v = av1_clip_pixel(v, bitdepth);
+        v = (v + (1 << (bitdepth - 9))) >> (bitdepth - 8);
+    }
+    return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
+static inline uint16_t
+av1_scale_to_16(int v, int bitdepth)
+{
+    int max = (1 << bitdepth) - 1;
+    v = av1_clip_pixel(v, bitdepth);
+    return (uint16_t)(((int64_t)v * 65535 + max / 2) / max);
+}
+
 int
 av1_image_to_bgra(const struct av1_image *img, uint8_t *dst, int pitch)
 {
-    int w = img->width;
-    int h = img->height;
-    int bd = img->bitdepth;
-    int shift = bd - 8;
-    int max = (1 << bd) - 1;
-
-    for (int y = 0; y < h; y++) {
+    for (int y = 0; y < img->height; y++) {
         uint8_t *row = dst + (size_t)y * pitch;
-        for (int x = 0; x < w; x++) {
-            int yy = img->plane[0][(size_t)y * img->stride[0] + x];
-            int u = 128 << shift, v = 128 << shift;
-            if (img->num_planes > 1) {
-                int sx = img->subsampling_x;
-                int sy = img->subsampling_y;
-                int cx = sx ? x >> 1 : x;
-                int cy = sy ? y >> 1 : y;
-                u = img->plane[1][(size_t)cy * img->stride[1] + cx];
-                v = img->plane[2][(size_t)cy * img->stride[2] + cx];
-            }
+        for (int x = 0; x < img->width; x++) {
             int r, g, b;
-            if (img->num_planes > 1 && img->matrix_coefficients == 0 &&
-                !img->subsampling_x && !img->subsampling_y) {
-                /* identity (GBR) */
-                r = v;
-                g = yy;
-                b = u;
-            } else if (img->num_planes == 1) {
-                r = g = b = yy;
-            } else {
-                av1_yuv_to_rgb(yy, u, v, bd, img->color_range,
-                               img->matrix_coefficients, &r, &g, &b);
-            }
-            r = av1_clip_pixel(r, bd);
-            g = av1_clip_pixel(g, bd);
-            b = av1_clip_pixel(b, bd);
-            if (bd > 8) {
-                r = (r + (1 << (shift - 1))) >> shift;
-                g = (g + (1 << (shift - 1))) >> shift;
-                b = (b + (1 << (shift - 1))) >> shift;
-            }
-            row[x * 4 + 0] = (uint8_t)b;
-            row[x * 4 + 1] = (uint8_t)g;
-            row[x * 4 + 2] = (uint8_t)r;
+            av1_pixel_to_rgb(img, x, y, &r, &g, &b);
+            /* clip after the downshift: rounding the sample maximum up
+             * would otherwise wrap to 0 */
+            row[x * 4 + 0] = av1_scale_to_8(b, img->bitdepth);
+            row[x * 4 + 1] = av1_scale_to_8(g, img->bitdepth);
+            row[x * 4 + 2] = av1_scale_to_8(r, img->bitdepth);
             row[x * 4 + 3] = 255;
-            (void)max;
+        }
+    }
+    return 0;
+}
+
+int
+av1_image_to_rgba16(const struct av1_image *img, uint8_t *dst, int pitch)
+{
+    for (int y = 0; y < img->height; y++) {
+        uint16_t *row = (uint16_t *)(dst + (size_t)y * pitch);
+        for (int x = 0; x < img->width; x++) {
+            int r, g, b;
+            av1_pixel_to_rgb(img, x, y, &r, &g, &b);
+            row[x * 4 + 0] = av1_scale_to_16(b, img->bitdepth);
+            row[x * 4 + 1] = av1_scale_to_16(g, img->bitdepth);
+            row[x * 4 + 2] = av1_scale_to_16(r, img->bitdepth);
+            row[x * 4 + 3] = 65535;
         }
     }
     return 0;

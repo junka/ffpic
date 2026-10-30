@@ -1031,6 +1031,8 @@ const char *CS_GetPixelFormatName(uint32_t format) {
         CASE(CS_PIXELFORMAT_ABGR8888)
         CASE(CS_PIXELFORMAT_BGRA8888)
         CASE(CS_PIXELFORMAT_ARGB2101010)
+        CASE(CS_PIXELFORMAT_RGBA64)
+        CASE(CS_PIXELFORMAT_BGRA64)
         CASE(CS_PIXELFORMAT_YV12)
         CASE(CS_PIXELFORMAT_IYUV)
         CASE(CS_PIXELFORMAT_YUY2)
@@ -1446,15 +1448,38 @@ int cs_profile_is_identity(const struct cs_profile *p)
     return !p || p->identity;
 }
 
-void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
-                           int width, int height, int pitch)
+/* Maps one source RGB triple (0..1) to sRGB encoded components (0..1). */
+static void
+cs_transform_pixel(const struct cs_profile *p, double *r, double *g, double *b)
 {
     static const double xyz_to_srgb[3][3] = {
         { 3.2404542, -1.5371385, -0.4985314},
         {-0.9692660,  1.8760108,  0.0415560},
         { 0.0556434, -0.2040259,  1.0572252},
     };
+    double lr = cs_curve_decode(&p->curve[0], *r);
+    double lg = cs_curve_decode(&p->curve[1], *g);
+    double lb = cs_curve_decode(&p->curve[2], *b);
 
+    if (p->has_matrix) {
+        double X = p->m[0][0] * lr + p->m[0][1] * lg + p->m[0][2] * lb;
+        double Y = p->m[1][0] * lr + p->m[1][1] * lg + p->m[1][2] * lb;
+        double Z = p->m[2][0] * lr + p->m[2][1] * lg + p->m[2][2] * lb;
+        lr = xyz_to_srgb[0][0] * X + xyz_to_srgb[0][1] * Y +
+             xyz_to_srgb[0][2] * Z;
+        lg = xyz_to_srgb[1][0] * X + xyz_to_srgb[1][1] * Y +
+             xyz_to_srgb[1][2] * Z;
+        lb = xyz_to_srgb[2][0] * X + xyz_to_srgb[2][1] * Y +
+             xyz_to_srgb[2][2] * Z;
+    }
+    *r = cs_srgb_encode(lr);
+    *g = cs_srgb_encode(lg);
+    *b = cs_srgb_encode(lb);
+}
+
+void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
+                           int width, int height, int pitch)
+{
     if (!p || p->identity) {
         return;
     }
@@ -1464,24 +1489,32 @@ void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
             double r = row[x * 4 + 2] / 255.0;
             double g = row[x * 4 + 1] / 255.0;
             double b = row[x * 4 + 0] / 255.0;
-            double lr = cs_curve_decode(&p->curve[0], r);
-            double lg = cs_curve_decode(&p->curve[1], g);
-            double lb = cs_curve_decode(&p->curve[2], b);
 
-            if (p->has_matrix) {
-                double X = p->m[0][0] * lr + p->m[0][1] * lg + p->m[0][2] * lb;
-                double Y = p->m[1][0] * lr + p->m[1][1] * lg + p->m[1][2] * lb;
-                double Z = p->m[2][0] * lr + p->m[2][1] * lg + p->m[2][2] * lb;
-                lr = xyz_to_srgb[0][0] * X + xyz_to_srgb[0][1] * Y +
-                     xyz_to_srgb[0][2] * Z;
-                lg = xyz_to_srgb[1][0] * X + xyz_to_srgb[1][1] * Y +
-                     xyz_to_srgb[1][2] * Z;
-                lb = xyz_to_srgb[2][0] * X + xyz_to_srgb[2][1] * Y +
-                     xyz_to_srgb[2][2] * Z;
-            }
-            row[x * 4 + 2] = (uint8_t)lround(cs_srgb_encode(lr) * 255.0);
-            row[x * 4 + 1] = (uint8_t)lround(cs_srgb_encode(lg) * 255.0);
-            row[x * 4 + 0] = (uint8_t)lround(cs_srgb_encode(lb) * 255.0);
+            cs_transform_pixel(p, &r, &g, &b);
+            row[x * 4 + 2] = (uint8_t)lround(r * 255.0);
+            row[x * 4 + 1] = (uint8_t)lround(g * 255.0);
+            row[x * 4 + 0] = (uint8_t)lround(b * 255.0);
+        }
+    }
+}
+
+void cs_profile_apply_bgra16(const struct cs_profile *p, uint8_t *pixels,
+                             int width, int height, int pitch)
+{
+    if (!p || p->identity) {
+        return;
+    }
+    for (int y = 0; y < height; y++) {
+        uint16_t *row = (uint16_t *)(pixels + (size_t)y * pitch);
+        for (int x = 0; x < width; x++) {
+            double r = row[x * 4 + 2] / 65535.0;
+            double g = row[x * 4 + 1] / 65535.0;
+            double b = row[x * 4 + 0] / 65535.0;
+
+            cs_transform_pixel(p, &r, &g, &b);
+            row[x * 4 + 2] = (uint16_t)lround(r * 65535.0);
+            row[x * 4 + 1] = (uint16_t)lround(g * 65535.0);
+            row[x * 4 + 0] = (uint16_t)lround(b * 65535.0);
         }
     }
 }

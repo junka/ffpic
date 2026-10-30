@@ -181,8 +181,8 @@ read_hdlr_box(FILE *f, struct hdlr_box *b)
     b->pre_defined = read_u32(f);
     FFREAD(&b->handler_type, 4, 1, f);
     FFREAD(b->reserved, 4, 3, f);
-    if (b->size - 32 - 1) {
-        b->name = malloc(b->size - 32 -1);
+    if (b->size > 32) {
+        b->name = malloc(b->size - 32);
         FFREAD(b->name, 1, b->size - 32, f);
     } else {
         fseek(f, 1, SEEK_CUR);

@@ -76,3 +76,11 @@ target_compile_definitions(test_hevc PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_hevc ffpic m)
 add_test(NAME test_hevc COMMAND test_hevc)
+
+set(AVIF_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_avif.c)
+add_executable(test_avif ${AVIF_TEST})
+target_include_directories(test_avif PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_avif PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_avif ffpic m)
+add_test(NAME test_avif COMMAND test_avif)

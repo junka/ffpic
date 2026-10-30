@@ -11,9 +11,13 @@
 #include "vlog.h"
 #include "file.h"
 #include "avif.h"
+#include "av1.h"
 #include "utils.h"
 
+extern int vlog_av1;
 VLOG_REGISTER(avif, DEBUG)
+
+static void AVIF_free(struct pic *p);
 
 static int
 AVIF_probe(FILE *f)
@@ -502,50 +506,44 @@ int parse_obu(struct bits_vec *v, int sz, struct obu_header **obu, int idx UNUSE
 int
 read_av1c_box(FILE *f, struct box **bn)
 {
-    struct av1C_box *b = malloc(sizeof(struct av1C_box));
-    b->n_obu = 0;
-    // b->configOBUs = (struct obu_header **)malloc(sizeof(struct obu_header *) * 32);
-    // memset(b->configOBUs, 0, sizeof(struct obu_header *) * 32);
-    assert (b->configOBUs);
     if (*bn == NULL) {
-        *bn = (struct box *)b;
-    }
-    FFREAD(b, 8, 1, f);
-    b->size = SWAP(b->size);
-
-    FFREAD(&b->type + 4, 4, 1, f);
-
-    VDBG(avif, "size %" PRIu64 "", b->size);
-    uint8_t *data = malloc(b->size - 12);
-    FFREAD(data, b->size - 12, 1, f);
-    struct bits_vec *v = bits_vec_alloc(data, b->size - 12, BITS_LSB);
-    
-    // configOBUs field contains zero or more OBUs. Any OBU may be present provided that the following procedures produce compliant AV1 bitstreams:
-
-    //the configOBUs field SHALL contain at most one Sequence Header OBU
-    // and if present, it SHALL be the first OBU.
-
-    int sz = b->size - 12;
-    while (sz) {
-        // if (b->n_obu >= 32) {
-        //     b->configOBUs = realloc(b->configOBUs, sizeof(void *) *(b->n_obu + 1));
-        // }
-        assert(b->configOBUs);
-        sz -= parse_obu(v, sz, b->configOBUs + b->n_obu, b->n_obu);
-        b->n_obu ++;
-    }
-    bits_vec_free(v);
-    VDBG(avif, "n_obu %d", b->n_obu);
-    for (int i = 0; i < b->n_obu; i ++) {
-        struct obu_header *h = b->configOBUs[i];
-        if (h->obu_type == OBU_SEQUENCE_HEADER) {
-            // struct sequence_header_obu *obu = (struct sequence_header_obu *)b->configOBUs[i];
-            // VDBG(avif, "still_picture %d, reduced_still_picture_header %d", obu->still_picture, obu->reduced_still_picture_header);
+        *bn = calloc(1, sizeof(struct av1C_box));
+        if (*bn == NULL) {
+            return -ENOMEM;
         }
     }
+    struct av1C_box *b = (struct av1C_box *)*bn;
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('a', 'v', '1', 'C'));
 
-    VDBG(avif, "av1C: version %d, marker 0x%x", b->version,
-                b->marker);
+    b->n_obu = 0;
+    VDBG(avif, "av1C size %" PRIu64 "", b->size);
+    if (b->size < 12) {
+        return b->size;
+    }
+
+    /* AV1CodecConfigurationRecord: four fixed bytes followed by configOBUs.
+     * The sequence header lives in the configOBUs, but the fixed fields are
+     * all AVIF_info() needs and walking the OBUs is the AV1 decoder's job. */
+    uint8_t cfg[4];
+    FFREAD(cfg, 1, 4, f);
+    b->marker = cfg[0] >> 7;
+    b->version = cfg[0] & 0x7F;
+    b->seq_profile = cfg[1] >> 5;
+    b->seq_level_idx_0 = cfg[1] & 0x1F;
+    b->seq_tier_0 = cfg[2] >> 7;
+    b->high_bitdepth = (cfg[2] >> 6) & 1;
+    b->twelve_bit = (cfg[2] >> 5) & 1;
+    b->monochrome = (cfg[2] >> 4) & 1;
+    b->chroma_subsampling_x = (cfg[2] >> 3) & 1;
+    b->chroma_subsampling_y = (cfg[2] >> 2) & 1;
+    b->chroma_sample_position = cfg[2] & 3;
+    b->reserved = cfg[3] >> 5;
+    b->initial_presentation_delay_present = (cfg[3] >> 4) & 1;
+    b->initial_presentation_delay_minus_one = cfg[3] & 0xF;
+
+    fseek(f, (long)(b->size - 12), SEEK_CUR);
+
+    VDBG(avif, "av1C: version %d, marker 0x%x", b->version, b->marker);
 
     return b->size;
 }
@@ -601,47 +599,56 @@ static void decode_items(AVIF *h, FILE *f, uint8_t **pixels) {
         }
     }
 }
-static struct pic* 
-AVIF_load(const char *filename, int skip_flag UNUSED)
+static int
+avif_parse_meta(AVIF *h, FILE *f, uint64_t size)
 {
-        struct pic *p = pic_alloc(sizeof(AVIF));
-    AVIF *h = p->pic;
-    FILE *f = fopen(filename, "rb");
-    fseek(f, 0, SEEK_END);
-    uint64_t size = ftell(f);
+    if (size < 12) {
+        return -EINVAL;
+    }
     fseek(f, 0, SEEK_SET);
+    int ftyp_size = read_ftyp(f, &h->ftyp);
+    if (ftyp_size < 0 || (uint64_t)ftyp_size > size) {
+        return -EINVAL;
+    }
 
-    size -= read_ftyp(f, &h->ftyp);
-    // h->mdat = malloc(sizeof(struct mdat_box));
-    struct box b;
-    while (size) {
+    uint64_t left = size - ftyp_size;
+    while (left >= 8) {
+        struct box b;
         uint32_t type = probe_box(f, &b);
+        if (b.size < 8 || b.size > left) {
+            VERR(avif, "box %s size %" PRIu64 " runs past the file",
+                 UINT2TYPE(type), b.size);
+            break;
+        }
         switch (type) {
         case FOURCC2UINT('m', 'e', 't', 'a'):
             read_meta_box(f, &h->meta);
             break;
         case FOURCC2UINT('m', 'd', 'a', 't'):
-            h->mdat_num ++;
-            // h->mdat = realloc(h->mdat, h->mdat_num * sizeof(struct mdat_box));
-            // read_mdat_box(f, h->mdat + h->mdat_num - 1);
+            h->mdat_num++;
+            fseek(f, b.size, SEEK_CUR);
             break;
         default:
+            fseek(f, b.size, SEEK_CUR);
             break;
         }
-        size -= b.size;
+        left -= b.size;
         VDBG(avif, "%s, read %" PRIu64 ", left %" PRIu64 "", UINT2TYPE(type),
-             b.size, size);
+             b.size, left);
     }
+    return 0;
+}
 
-    // extract some info from meta box
-    for (int i = 0; i < h->meta.iprp.ipco.n_property; i ++) {
-        struct box *prop = h->meta.iprp.ipco.property[i];
-        if (prop && prop->type == TYPE2UINT("ispe")) {
-            p->width = ((struct ispe_box *)prop)->image_width;
-            p->height = ((struct ispe_box *)prop)->image_height;
-        }
+static void
+avif_build_items(AVIF *h)
+{
+    if (h->items || h->meta.iloc.item_count == 0) {
+        return;
     }
     h->items = calloc(h->meta.iloc.item_count, sizeof(struct avif_item));
+    if (!h->items) {
+        return;
+    }
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
         h->items[i].item = &h->meta.iloc.items[i];
         for (int j = 0; j < (int)h->meta.iinf.entry_count; j++) {
@@ -651,23 +658,113 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
             }
         }
     }
-    uint16_t primary_id = h->meta.pitm.item_id;
-    VINFO(avif, "primary id %d", h->meta.pitm.item_id);
-    for (int i = 0; i < (int)h->meta.iloc.item_count; i++) {
-        if (h->meta.iloc.items[i].item_id == primary_id) {
-            VINFO(avif, "primary loc at %" PRIu64,
-                  h->meta.iloc.items[i].base_offset);
+}
+
+static struct pic*
+AVIF_load(const char *filename, int skip_flag UNUSED)
+{
+    FILE *f = fopen(filename, "rb");
+    if (f == NULL) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (file_size < 12) {
+        fclose(f);
+        return NULL;
+    }
+
+    struct pic *p = pic_alloc(sizeof(AVIF));
+    AVIF *h = p->pic;
+    if (avif_parse_meta(h, f, (uint64_t)file_size) < 0) {
+        fclose(f);
+        AVIF_free(p);
+        return NULL;
+    }
+    avif_build_items(h);
+
+    /* Decode the primary AV1 image item with the in-house spec-based
+     * decoder.  The item payload is a low overhead bitstream. */
+    int av01_idx = -1;
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        if (h->items[i].type == TYPE2UINT("av01")) {
+            av01_idx = i;
             break;
         }
     }
-    // process mdata
-    VINFO(avif, "mdat_num %d", h->mdat_num);
+    if (av01_idx >= 0) {
+        pre_read_item(h, f, av01_idx);
+        fclose(f);
+        struct av1_image img;
+        int rc = av1_decode_image(h->items[av01_idx].data,
+                                  (size_t)h->items[av01_idx].length, &img);
+        free(h->items[av01_idx].data);
+        h->items[av01_idx].data = NULL;
+        if (rc == 0 && img.width > 0 && img.height > 0) {
+            /* Keep the AVIF box metadata in p->pic so AVIF_info() still has
+             * the container data to report. */
+            p->width = img.width;
+            p->height = img.height;
+            p->depth = 32;
+            p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth +
+                         p->depth - 1) >> 5) << 2;
+            p->format = CS_PIXELFORMAT_RGBA8888;
+            p->pixels = malloc((size_t)p->pitch * p->height);
+            if (p->pixels) {
+                av1_image_to_bgra(&img, p->pixels, p->pitch);
+            }
+            av1_image_free(&img);
+            if (!p->pixels) {
+                AVIF_free(p);
+                return NULL;
+            }
+            VINFO(avif, "decoded %dx%d with the built-in AV1 decoder",
+                  img.width, img.height);
+            return p;
+        }
+        VERR(av1, "in-house AV1 decode failed: %d", rc);
+        /* fall through to the container-only path */
+        f = fopen(filename, "rb");
+        if (f == NULL) {
+            return NULL;
+        }
+        p = pic_alloc(sizeof(AVIF));
+        h = p->pic;
+        if (avif_parse_meta(h, f, (uint64_t)file_size) < 0) {
+            fclose(f);
+            AVIF_free(p);
+            return NULL;
+        }
+    } else {
+        fclose(f);
+        f = fopen(filename, "rb");
+        if (f == NULL) {
+            return NULL;
+        }
+    }
+
+    /* Container-only path.  Probe-only files (and the synthetic fixture in
+     * the test suite) have no decodable AV1 item but still expose the ispe
+     * size. */
+    for (int i = 0; i < h->meta.iprp.ipco.n_property; i ++) {
+        struct box *prop = h->meta.iprp.ipco.property[i];
+        if (prop && prop->type == TYPE2UINT("ispe")) {
+            p->width = ((struct ispe_box *)prop)->image_width;
+            p->height = ((struct ispe_box *)prop)->image_height;
+        }
+    }
+    avif_build_items(h);
+    VINFO(avif, "no AV1 item decoded, using the ispe size %dx%d", p->width,
+          p->height);
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = malloc(p->pitch * p->height);
-    p->format = CS_PIXELFORMAT_RGB888;
-    decode_items(h, f, (uint8_t **)&p->pixels);
+    p->pixels = calloc(1, (size_t)p->pitch * p->height);
+    p->format = CS_PIXELFORMAT_RGBA8888;
+    if (h->items) {
+        decode_items(h, f, (uint8_t **)&p->pixels);
+    }
 
     fclose(f);
 
@@ -699,10 +796,16 @@ AVIF_info(FILE *f, struct pic* p)
     AVIF * h = (AVIF *)p->pic;
     fprintf(f, "AVIF file format:\n");
     fprintf(f, "-----------------------\n");
-    char *s1 = UINT2TYPE(h->ftyp.minor_version);
-    fprintf(f, "\tbrand: %s", s1);
-    char *s2 = UINT2TYPE(h->ftyp.compatible_brands[1]);
-    fprintf(f," compatible %s\n", s2);
+    char *s1;
+    /* read_ftyp() reads the box header straight into ftyp_box, so the
+     * "major_brand" member holds the box type, "minor_version" holds the
+     * ftyp major brand and compatible_brands[0] holds the minor version. */
+    fprintf(f, "\tbrand: %s", UINT2TYPE(h->ftyp.minor_version));
+    if (h->ftyp.compatible_brands && h->ftyp.size >= 20) {
+        fprintf(f, " compatible %s",
+                UINT2TYPE(h->ftyp.compatible_brands[1]));
+    }
+    fprintf(f, "\n");
     fprintf(f, "\theight: %d, width: %d\n", p->height, p->width);
 
     fprintf(f, "\tmeta box --------------\n");

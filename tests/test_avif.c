@@ -4,9 +4,9 @@
  * odd size that goes through the conformance window crop, coarse
  * quantization, lossless coding, 4:4:4, 4:0:0, 10 and 12 bit output, film
  * grain synthesis, the container cases (a generic HEIF major brand, a split
- * item, an alpha item and a 32 bit primary item id), the transformative
- * properties irot, imir and clap, and PQ/HLG streams tone mapped to SDR.
- * Lossy coding moves pixels, so every
+ * item, an alpha item, a 32 bit primary item id and a sequence header kept
+ * in av1C configOBUs), the transformative properties irot, imir and clap,
+ * and PQ/HLG streams tone mapped to SDR.  Lossy coding moves pixels, so every
  * sample carries its own tolerance and the whole frame is compared, not
  * just a few points.  High bit depth pictures are compared in 16 bit
  * units, and the check also rejects an 8 bit picture widened to 16 bits. */
@@ -49,6 +49,8 @@ test_real_samples(void)
         {"avif_extents", 100, 62, 6, 0, 0, 0},
         {"avif_aux", 100, 62, 6, 0, 0, 0},
         {"avif_pitm32", 100, 62, 6, 0, 0, 0},
+        /* the sequence header only in the av1C configOBUs */
+        {"avif_cfgobu", 100, 62, 6, 0, 0, 0},
         {"avif_alpha", 100, 62, 6, 0, 1, 0},
         /* the gamma curve bends the existing rounding, so allow a bit more */
         {"avif_icc", 100, 62, 8, 0, 0, 0},

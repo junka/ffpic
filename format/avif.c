@@ -541,15 +541,13 @@ read_av1c_box(FILE *f, struct box **bn)
     struct av1C_box *b = (struct av1C_box *)*bn;
     FFREAD_BOX_ST(b, f, FOURCC2UINT('a', 'v', '1', 'C'));
 
-    b->n_obu = 0;
     VDBG(avif, "av1C size %" PRIu64 "", b->size);
     if (b->size < 12) {
         return b->size;
     }
 
-    /* AV1CodecConfigurationRecord: four fixed bytes followed by configOBUs.
-     * The sequence header lives in the configOBUs, but the fixed fields are
-     * all AVIF_info() needs and walking the OBUs is the AV1 decoder's job. */
+    /* AV1CodecConfigurationRecord: four fixed bytes followed by configOBUs,
+     * which may carry the sequence header instead of the item payload. */
     uint8_t cfg[4];
     FFREAD(cfg, 1, 4, f);
     b->marker = cfg[0] >> 7;
@@ -567,11 +565,27 @@ read_av1c_box(FILE *f, struct box **bn)
     b->initial_presentation_delay_present = (cfg[3] >> 4) & 1;
     b->initial_presentation_delay_minus_one = cfg[3] & 0xF;
 
-    fseek(f, (long)(b->size - 12), SEEK_CUR);
+    if (b->size > 12) {
+        size_t len = (size_t)(b->size - 12);
+        b->config_obus = malloc(len);
+        if (b->config_obus) {
+            FFREAD(b->config_obus, 1, len, f);
+            b->config_obus_len = (uint32_t)len;
+        } else {
+            fseek(f, (long)len, SEEK_CUR);
+        }
+    }
 
-    VDBG(avif, "av1C: version %d, marker 0x%x", b->version, b->marker);
+    VDBG(avif, "av1C: version %d, marker 0x%x, configOBUs %u", b->version,
+         b->marker, b->config_obus_len);
 
     return b->size;
+}
+
+void
+free_av1c_box(void *box)
+{
+    free(((struct av1C_box *)box)->config_obus);
 }
 
 void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)
@@ -665,6 +679,58 @@ avif_item_is_aux(const AVIF *h, uint32_t item_id)
         }
     }
     return 0;
+}
+
+/* The av1C property associated with an item; its configOBUs may hold the
+ * sequence header, which the item payload then omits. */
+static const struct av1C_box *
+avif_item_av1c(const AVIF *h, uint32_t item_id)
+{
+    const struct ipma_box *ipma = &h->meta.iprp.ipma;
+
+    for (uint32_t i = 0; i < ipma->entry_count; i++) {
+        if (ipma->entries[i].item_id != item_id) {
+            continue;
+        }
+        for (int j = 0; j < ipma->entries[i].association_count; j++) {
+            int idx = ipma->entries[i].property_index[j] & 0x7fff;
+            struct box *prop;
+
+            if (idx < 1 || idx > h->meta.iprp.ipco.n_property) {
+                continue;
+            }
+            prop = h->meta.iprp.ipco.property[idx - 1];
+            if (prop && prop->type == TYPE2UINT("av1C")) {
+                return (const struct av1C_box *)prop;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Join the configOBUs in front of the item payload when present: the
+ * decoder consumes one low overhead bitstream and needs the sequence
+ * header from whichever place carries it. */
+static int
+avif_decode_item(const AVIF *h, uint32_t item_id, const uint8_t *data,
+                 size_t len, struct av1_image *img)
+{
+    const struct av1C_box *av1c = avif_item_av1c(h, item_id);
+    uint8_t *joined;
+    int rc;
+
+    if (!av1c || !av1c->config_obus || av1c->config_obus_len == 0) {
+        return av1_decode_image(data, len, img);
+    }
+    joined = malloc((size_t)av1c->config_obus_len + len);
+    if (!joined) {
+        return -ENOMEM;
+    }
+    memcpy(joined, av1c->config_obus, av1c->config_obus_len);
+    memcpy(joined + av1c->config_obus_len, data, len);
+    rc = av1_decode_image(joined, (size_t)av1c->config_obus_len + len, img);
+    free(joined);
+    return rc;
 }
 
 /* The colr property associated with an item.  An embedded ICC profile is
@@ -1094,7 +1160,8 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         struct av1_image alpha;
         int has_alpha = 0;
         if (alpha_idx >= 0) {
-            has_alpha = av1_decode_image(h->items[alpha_idx].data,
+            has_alpha = avif_decode_item(h, h->items[alpha_idx].item->item_id,
+                                         h->items[alpha_idx].data,
                                          (size_t)h->items[alpha_idx].length,
                                          &alpha) == 0;
             free(h->items[alpha_idx].data);
@@ -1104,7 +1171,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
             }
         }
         struct av1_image img;
-        int rc = av1_decode_image(h->items[av01_idx].data,
+        int rc = avif_decode_item(h, color_id, h->items[av01_idx].data,
                                   (size_t)h->items[av01_idx].length, &img);
         free(h->items[av01_idx].data);
         h->items[av01_idx].data = NULL;

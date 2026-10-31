@@ -432,6 +432,65 @@ def transform_pixels(data, w, h, bpp, props):
     return data, w, h
 
 
+def split_obus(data):
+    """Return [(obu_type, raw bytes), ...] for a low overhead bitstream."""
+    obus = []
+    p = 0
+    while p < len(data):
+        hdr = data[p]
+        typ = (hdr >> 3) & 0xF
+        ext = hdr & 1
+        q = p + 1 + (1 if ext else 0)
+        size = 0
+        shift = 0
+        while True:
+            b = data[q]
+            q += 1
+            size |= (b & 0x7F) << shift
+            shift += 7
+            if not (b & 0x80):
+                break
+        obus.append((typ, data[p:q + size]))
+        p = q + size
+    return obus
+
+
+def make_config_obus(src, name):
+    """Move the sequence header from the item payload into av1C configOBUs."""
+    data = open(src, "rb").read()
+    ftyp_size = struct.unpack_from(">I", data, 0)[0]
+    ftyp = data[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(data)
+    citems, _, _ = read_iloc(data, boxes[b"iloc"][0])
+    payload = item_payload(data, citems[0][1])
+
+    obus = split_obus(payload)
+    seq = b"".join(o for t, o in obus if t == 1)
+    rest = b"".join(o for t, o in obus if t != 1)
+    if not seq or seq == payload:
+        raise SystemExit(f"{name}: no sequence header to move")
+
+    # reuse the original av1C fixed fields
+    pos = data.find(b"av1C")
+    if pos < 4:
+        raise SystemExit(f"{name}: no av1C property")
+    cfg = data[pos + 4:pos + 8] + seq
+    ipco = box(b"ipco", box(b"av1C", cfg))
+    ipma = full_box(b"ipma", 0, b"\0\0\0",
+                    struct.pack(">IHB", 1, 1, 1) + b"\x01")
+    iprp = box(b"iprp", ipco + ipma)
+
+    meta = b""
+    for _ in range(4):
+        data_off = len(ftyp) + len(meta) + 8
+        iloc = make_iloc([(1, [(data_off, len(rest))])])
+        meta = full_box(b"meta", 0, b"\0\0\0",
+                        hdlr + make_pitm(1) + iloc + make_iinf([1]) + iprp)
+        if data_off == len(ftyp) + len(meta) + 8:
+            break
+    return write_derived(name, ftyp, meta, rest)
+
+
 def make_alpha(src_color, src_alpha, name):
     """Colour item plus a monochrome alpha item referenced by auxl."""
     color = open(src_color, "rb").read()
@@ -684,6 +743,7 @@ def main():
             ("extents", make_two_extents(mixed, "extents")),
             ("aux", make_aux_first(mixed, mono, "aux")),
             ("pitm32", make_pitm32(mixed, mono, "pitm32")),
+            ("cfgobu", make_config_obus(mixed, "cfgobu")),
         ]
         for name, path in derived:
             shutil.copyfile(mixed_ref, os.path.join(DATA, f"avif_{name}.ref"))

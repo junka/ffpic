@@ -378,8 +378,8 @@ struct av1C_box {
     uint8_t initial_presentation_delay_minus_one:4;
 #endif
 
-    int n_obu;
-    struct obu_header *configOBUs[32];
+    uint8_t *config_obus;   /* owned copy; may carry the sequence header */
+    uint32_t config_obus_len;
 
 };
 

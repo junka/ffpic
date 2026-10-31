@@ -532,6 +532,7 @@ read_pasp_box(FILE *f, struct pasp_box *b)
 
 extern int read_hvcc_box(FILE *f, struct box **bn);
 extern int read_av1c_box(FILE *f, struct box **bn);
+extern void free_av1c_box(void *box);
 
 static int
 read_ipco_box(FILE *f, struct ipco_box *b)
@@ -1340,6 +1341,8 @@ void free_ipco_box(struct ipco_box *b)
                 free_auxc_box((struct auxC_box *)b->property[i]);
             } else if (b->property[i]->type == FOURCC2UINT('c', 'o', 'l', 'r')) {
                 free(((struct colr_box *)b->property[i])->icc_data);
+            } else if (b->property[i]->type == FOURCC2UINT('a', 'v', '1', 'C')) {
+                free_av1c_box(b->property[i]);
             }
             free(b->property[i]);
         }

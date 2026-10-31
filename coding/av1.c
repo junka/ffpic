@@ -1397,33 +1397,44 @@ av1_yuv_to_rgb(int y, int u, int v, int bitdepth, int full_range,
                int matrix, int *r, int *g, int *b)
 {
     int shift = bitdepth - 8;
-    int cr, cb;
-    if (full_range) {
-        cr = v - (128 << shift);
-        cb = u - (128 << shift);
-    } else {
-        int half = 1 << (bitdepth - 1);
-        y = y - (16 << shift);
-        cr = v - half;
-        cb = u - half;
-    }
-
+    int cr = v - (128 << shift);
+    int cb = u - (128 << shift);
     int ry, gu, gv, bu;
+    int luma;
+
+    /* Q14 chroma coefficients; the limited-range entries carry the
+     * 255/224 chroma excursion scaling from the AV1 colour conversion. */
     switch (matrix) {
     case 1:     /* BT.709 */
-        ry = 18997; gu = 7884; gv = 16388; bu = 23172;
+        if (full_range) {
+            ry = 25802; gu = 3069; gv = 7670; bu = 30402;
+        } else {
+            ry = 29372; gu = 3494; gv = 8731; bu = 34610;
+        }
         break;
     case 9:     /* BT.2020 non-constant luminance */
     case 10:    /* BT.2020 constant luminance */
-        ry = 18986; gu = 7673; gv = 16142; bu = 24041;
+        if (full_range) {
+            ry = 24160; gu = 2696; gv = 9361; bu = 30825;
+        } else {
+            ry = 27503; gu = 3069; gv = 10657; bu = 35091;
+        }
         break;
     case 4:     /* FCC */
-        ry = 23136; gu = 7874; gv = 16244; bu = 18504;
+        if (full_range) {
+            ry = 22938; gu = 5437; gv = 11663; bu = 29164;
+        } else {
+            ry = 26112; gu = 6190; gv = 13277; bu = 33200;
+        }
         break;
     case 5:     /* BT.470 B/G */
     case 6:     /* BT.601 */
     default:
-        ry = 26149; gu = 6419; gv = 13320; bu = 33050;
+        if (full_range) {
+            ry = 22970; gu = 5638; gv = 11700; bu = 29032;
+        } else {
+            ry = 26149; gu = 6419; gv = 13320; bu = 33050;
+        }
         break;
     }
 
@@ -1432,15 +1443,12 @@ av1_yuv_to_rgb(int y, int u, int v, int bitdepth, int full_range,
         *g = y - av1_round_shift(gu * cb + gv * cr, 14);
         *b = y + av1_round_shift(bu * cb, 14);
     } else {
-        /* fixed point BT.601 style conversion for limited range */
-        int c = 1 << (bitdepth - 8);
-        int yy = y < 0 ? 0 : y;
-        *r = av1_round_shift(ry * (cr >> 0), 14);
-        *g = -av1_round_shift(gu * cb + gv * cr, 14);
-        *b = av1_round_shift(bu * cb, 14);
-        *r += av1_round_shift(298 * (yy * c) , 8) >> shift;
-        *g += av1_round_shift(298 * (yy * c) , 8) >> shift;
-        *b += av1_round_shift(298 * (yy * c) , 8) >> shift;
+        int yy = y - (16 << shift);
+        /* 1.164 * (Y - 16), in source sample units */
+        luma = av1_round_shift(298 * (yy < 0 ? 0 : yy), 8);
+        *r = luma + av1_round_shift(ry * cr, 14);
+        *g = luma - av1_round_shift(gu * cb + gv * cr, 14);
+        *b = luma + av1_round_shift(bu * cb, 14);
     }
 }
 

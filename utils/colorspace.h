@@ -263,7 +263,9 @@ void blend_BGRA32_8bit_alpha(uint8_t *fg, uint8_t *bg, int pitch, int height);
  * sRGB, the space the RGBA8888 pictures in this project carry.  A profile is
  * built from an
  * embedded ICC profile (matrix/TRC profiles) or from the CICP code points
- * carried by the container or the bitstream. */
+ * carried by the container or the bitstream.  PQ and HLG transfers are
+ * decoded to cd/m2 and tone mapped to SDR with an extended Reinhard curve
+ * normalised by the picture's peak. */
 struct cs_profile;
 
 struct cs_profile *cs_profile_from_icc(const void *data, size_t len);

@@ -4,8 +4,9 @@
  * odd size that goes through the conformance window crop, coarse
  * quantization, lossless coding, 4:4:4, 4:0:0, 10 and 12 bit output, film
  * grain synthesis, the container cases (a generic HEIF major brand, a split
- * item, an alpha item and a 32 bit primary item id), and the transformative
- * properties irot, imir and clap.  Lossy coding moves pixels, so every
+ * item, an alpha item and a 32 bit primary item id), the transformative
+ * properties irot, imir and clap, and PQ/HLG streams tone mapped to SDR.
+ * Lossy coding moves pixels, so every
  * sample carries its own tolerance and the whole frame is compared, not
  * just a few points.  High bit depth pictures are compared in 16 bit
  * units, and the check also rejects an 8 bit picture widened to 16 bits. */
@@ -63,6 +64,12 @@ test_real_samples(void)
         {"avif_clapneg", 60, 40, 6, 0, 0, 0},
         {"avif_rotimir", 62, 100, 6, 0, 0, 0},
         {"avif_irot90_10", 96, 96, 1024, 0, 0, 1},
+        /* HDR: PQ and HLG tone mapped to SDR sRGB; a few out-of-gamut
+         * samples clip differently where the PQ curve is very steep */
+        {"avif_pq10", 96, 96, 2048, 0, 0, 1},
+        {"avif_hlg10", 96, 96, 2048, 0, 0, 1},
+        /* an explicit BT.709 matrix, not the unspecified fallback */
+        {"avif_bt709", 96, 96, 8, 0, 0, 0},
     };
     int rc = 0;
 

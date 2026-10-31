@@ -1091,6 +1091,8 @@ enum cs_curve_kind {
     CS_CURVE_BT709,
     CS_CURVE_TABLE,
     CS_CURVE_PARAM,
+    CS_CURVE_PQ,        /* SMPTE ST 2084, 1.0 = 10000 cd/m2 */
+    CS_CURVE_HLG,       /* BT.2100 HLG inverse OETF, scene light */
 };
 
 struct cs_curve {
@@ -1106,9 +1108,21 @@ struct cs_profile {
     int identity;
     int has_matrix;
     double m[3][3];         /* source linear RGB -> XYZ (D65) */
+    double luma[3];         /* source RGB -> Y coefficients */
     struct cs_curve curve[3];
     uint8_t *icc;           /* owned copy of the profile */
 };
+
+/* linear XYZ (D65) -> linear sRGB */
+static const double cs_xyz_to_srgb[3][3] = {
+    { 3.2404542, -1.5371385, -0.4985314},
+    {-0.9692660,  1.8760108,  0.0415560},
+    { 0.0556434, -0.2040259,  1.0572252},
+};
+
+static const double cs_srgb_luma[3] = {0.2126390, 0.7151687, 0.0721923};
+static const double cs_bt2020_luma[3] = {0.2627002, 0.6779981, 0.0593017};
+static const double cs_p3_luma[3] = {0.2289746, 0.6917385, 0.0792869};
 
 struct cs_tag {
     const uint8_t *data;
@@ -1142,6 +1156,46 @@ static double cs_srgb_encode(double v)
     return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1.0 / 2.4) - 0.055;
 }
 
+/* SMPTE ST 2084 EOTF, normalised so that 1.0 is 10000 cd/m2. */
+static double cs_pq_decode(double n)
+{
+    const double m1 = 2610.0 / 16384.0;
+    const double m2 = 2523.0 / 4096.0 * 128.0;
+    const double c1 = 3424.0 / 4096.0;
+    const double c2 = 2413.0 / 4096.0 * 32.0;
+    const double c3 = 2392.0 / 4096.0 * 32.0;
+    double p;
+
+    if (n <= 0.0) {
+        return 0.0;
+    }
+    if (n >= 1.0) {
+        return 1.0;
+    }
+    p = pow(n, 1.0 / m2);
+    if (p <= c1) {
+        return 0.0;
+    }
+    return pow((p - c1) / (c2 - c3 * p), 1.0 / m1);
+}
+
+/* BT.2100 HLG inverse OETF: signal -> scene linear light. */
+static double cs_hlg_decode(double x)
+{
+    const double a = 0.17883277, b = 0.28466892, c = 0.55991073;
+
+    if (x <= 0.0) {
+        return 0.0;
+    }
+    if (x <= 0.5) {
+        return x * x / 3.0;
+    }
+    if (x >= 1.0) {
+        return 1.0;
+    }
+    return (exp((x - c) / a) + b) / 12.0;
+}
+
 static double cs_curve_decode(const struct cs_curve *c, double x)
 {
     double g, a, b, cc, d, e, f, t;
@@ -1155,6 +1209,10 @@ static double cs_curve_decode(const struct cs_curve *c, double x)
         return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
     case CS_CURVE_BT709:
         return x < 0.081 ? x / 4.5 : pow((x + 0.099) / 1.099, 1.0 / 0.45);
+    case CS_CURVE_PQ:
+        return cs_pq_decode(x);
+    case CS_CURVE_HLG:
+        return cs_hlg_decode(x);
     case CS_CURVE_TABLE:
         if (c->n <= 0) {
             return x;
@@ -1380,6 +1438,7 @@ cs_profile_from_cicp(int primaries, int transfer)
         {0.0000000, 0.0451134, 1.0439444},
     };
     const double (*m)[3] = NULL;
+    const double *luma = NULL;
     struct cs_profile *p;
     struct cs_curve c;
 
@@ -1401,8 +1460,14 @@ cs_profile_from_cicp(int primaries, int transfer)
     case 13:
         c.kind = CS_CURVE_SRGB;
         break;
+    case 16:
+        c.kind = CS_CURVE_PQ;
+        break;
+    case 18:
+        c.kind = CS_CURVE_HLG;
+        break;
     default:
-        return NULL;    /* PQ/HLG and the rest need tone mapping */
+        return NULL;    /* the other CICP transfers are not mapped */
     }
 
     if (primaries == 1 && transfer == 13) {
@@ -1416,12 +1481,15 @@ cs_profile_from_cicp(int primaries, int transfer)
     switch (primaries) {
     case 1:
         m = NULL;       /* sRGB primaries: the matrix round trip is identity */
+        luma = cs_srgb_luma;
         break;
     case 9:
         m = bt2020;
+        luma = cs_bt2020_luma;
         break;
     case 12:
         m = p3;
+        luma = cs_p3_luma;
         break;
     default:
         return NULL;
@@ -1433,6 +1501,7 @@ cs_profile_from_cicp(int primaries, int transfer)
     }
     for (int i = 0; i < 3; i++) {
         p->curve[i] = c;
+        p->luma[i] = luma[i];
         if (m) {
             for (int j = 0; j < 3; j++) {
                 p->m[i][j] = m[i][j];
@@ -1448,15 +1517,146 @@ int cs_profile_is_identity(const struct cs_profile *p)
     return !p || p->identity;
 }
 
+static int
+cs_profile_is_hdr(const struct cs_profile *p)
+{
+    return p->curve[0].kind == CS_CURVE_PQ ||
+           p->curve[0].kind == CS_CURVE_HLG;
+}
+
+/* Decodes one source triple to linear sRGB in cd/m2. */
+static void
+cs_hdr_linear(const struct cs_profile *p, double r, double g, double b,
+              double *lr, double *lg, double *lb)
+{
+    double y, scale = 10000.0;    /* PQ normalises 1.0 to 10000 cd/m2 */
+
+    r = cs_curve_decode(&p->curve[0], r);
+    g = cs_curve_decode(&p->curve[1], g);
+    b = cs_curve_decode(&p->curve[2], b);
+    if (p->curve[0].kind == CS_CURVE_HLG) {
+        /* BT.2100 OOTF for a 1000 cd/m2 HLG display */
+        y = p->luma[0] * r + p->luma[1] * g + p->luma[2] * b;
+        scale = y > 0.0 ? 1000.0 * pow(y, 0.2) : 0.0;
+    }
+    r *= scale;
+    g *= scale;
+    b *= scale;
+    if (p->has_matrix) {
+        double X = p->m[0][0] * r + p->m[0][1] * g + p->m[0][2] * b;
+        double Y = p->m[1][0] * r + p->m[1][1] * g + p->m[1][2] * b;
+        double Z = p->m[2][0] * r + p->m[2][1] * g + p->m[2][2] * b;
+        r = cs_xyz_to_srgb[0][0] * X + cs_xyz_to_srgb[0][1] * Y +
+            cs_xyz_to_srgb[0][2] * Z;
+        g = cs_xyz_to_srgb[1][0] * X + cs_xyz_to_srgb[1][1] * Y +
+            cs_xyz_to_srgb[1][2] * Z;
+        b = cs_xyz_to_srgb[2][0] * X + cs_xyz_to_srgb[2][1] * Y +
+            cs_xyz_to_srgb[2][2] * Z;
+    }
+    *lr = r;
+    *lg = g;
+    *lb = b;
+}
+
+/* Extended Reinhard, normalised by the content peak: the brightest sample
+ * lands on SDR white and every channel is scaled by the same factor so the
+ * hue survives.  Inputs and the white point are in cd/m2. */
+static void
+cs_hdr_tonemap(double *r, double *g, double *b, double w)
+{
+    double lr = *r / 100.0, lg = *g / 100.0, lb = *b / 100.0;
+    double m = lr > lg ? lr : lg;
+
+    if (lb > m) {
+        m = lb;
+    }
+    if (m > 0.0) {
+        double s = (m * (1.0 + m / (w * w)) / (1.0 + m)) / m;
+        lr *= s;
+        lg *= s;
+        lb *= s;
+    }
+    *r = cs_srgb_encode(lr);
+    *g = cs_srgb_encode(lg);
+    *b = cs_srgb_encode(lb);
+}
+
+static void
+cs_hdr_apply(const struct cs_profile *p, uint8_t *pixels, int width, int height,
+             int pitch, int wide)
+{
+    double peak = 0.0, w;
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            double r, g, b;
+
+            if (wide) {
+                const uint16_t *px =
+                    (const uint16_t *)(pixels + (size_t)y * pitch) + x * 4;
+                r = px[2] / 65535.0;
+                g = px[1] / 65535.0;
+                b = px[0] / 65535.0;
+            } else {
+                const uint8_t *px = pixels + (size_t)y * pitch + x * 4;
+                r = px[2] / 255.0;
+                g = px[1] / 255.0;
+                b = px[0] / 255.0;
+            }
+            cs_hdr_linear(p, r, g, b, &r, &g, &b);
+            if (r > peak) {
+                peak = r;
+            }
+            if (g > peak) {
+                peak = g;
+            }
+            if (b > peak) {
+                peak = b;
+            }
+        }
+    }
+    w = peak / 100.0;
+    if (w < 1.0) {
+        w = 1.0;
+    }
+    if (w > 100.0) {
+        w = 100.0;
+    }
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            double r, g, b;
+
+            if (wide) {
+                uint16_t *px =
+                    (uint16_t *)(pixels + (size_t)y * pitch) + x * 4;
+                r = px[2] / 65535.0;
+                g = px[1] / 65535.0;
+                b = px[0] / 65535.0;
+                cs_hdr_linear(p, r, g, b, &r, &g, &b);
+                cs_hdr_tonemap(&r, &g, &b, w);
+                px[2] = (uint16_t)lround(r * 65535.0);
+                px[1] = (uint16_t)lround(g * 65535.0);
+                px[0] = (uint16_t)lround(b * 65535.0);
+            } else {
+                uint8_t *px = pixels + (size_t)y * pitch + x * 4;
+                r = px[2] / 255.0;
+                g = px[1] / 255.0;
+                b = px[0] / 255.0;
+                cs_hdr_linear(p, r, g, b, &r, &g, &b);
+                cs_hdr_tonemap(&r, &g, &b, w);
+                px[2] = (uint8_t)lround(r * 255.0);
+                px[1] = (uint8_t)lround(g * 255.0);
+                px[0] = (uint8_t)lround(b * 255.0);
+            }
+        }
+    }
+}
+
 /* Maps one source RGB triple (0..1) to sRGB encoded components (0..1). */
 static void
 cs_transform_pixel(const struct cs_profile *p, double *r, double *g, double *b)
 {
-    static const double xyz_to_srgb[3][3] = {
-        { 3.2404542, -1.5371385, -0.4985314},
-        {-0.9692660,  1.8760108,  0.0415560},
-        { 0.0556434, -0.2040259,  1.0572252},
-    };
     double lr = cs_curve_decode(&p->curve[0], *r);
     double lg = cs_curve_decode(&p->curve[1], *g);
     double lb = cs_curve_decode(&p->curve[2], *b);
@@ -1465,12 +1665,12 @@ cs_transform_pixel(const struct cs_profile *p, double *r, double *g, double *b)
         double X = p->m[0][0] * lr + p->m[0][1] * lg + p->m[0][2] * lb;
         double Y = p->m[1][0] * lr + p->m[1][1] * lg + p->m[1][2] * lb;
         double Z = p->m[2][0] * lr + p->m[2][1] * lg + p->m[2][2] * lb;
-        lr = xyz_to_srgb[0][0] * X + xyz_to_srgb[0][1] * Y +
-             xyz_to_srgb[0][2] * Z;
-        lg = xyz_to_srgb[1][0] * X + xyz_to_srgb[1][1] * Y +
-             xyz_to_srgb[1][2] * Z;
-        lb = xyz_to_srgb[2][0] * X + xyz_to_srgb[2][1] * Y +
-             xyz_to_srgb[2][2] * Z;
+        lr = cs_xyz_to_srgb[0][0] * X + cs_xyz_to_srgb[0][1] * Y +
+             cs_xyz_to_srgb[0][2] * Z;
+        lg = cs_xyz_to_srgb[1][0] * X + cs_xyz_to_srgb[1][1] * Y +
+             cs_xyz_to_srgb[1][2] * Z;
+        lb = cs_xyz_to_srgb[2][0] * X + cs_xyz_to_srgb[2][1] * Y +
+             cs_xyz_to_srgb[2][2] * Z;
     }
     *r = cs_srgb_encode(lr);
     *g = cs_srgb_encode(lg);
@@ -1481,6 +1681,10 @@ void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
                            int width, int height, int pitch)
 {
     if (!p || p->identity) {
+        return;
+    }
+    if (cs_profile_is_hdr(p)) {
+        cs_hdr_apply(p, pixels, width, height, pitch, 0);
         return;
     }
     for (int y = 0; y < height; y++) {
@@ -1502,6 +1706,10 @@ void cs_profile_apply_bgra16(const struct cs_profile *p, uint8_t *pixels,
                              int width, int height, int pitch)
 {
     if (!p || p->identity) {
+        return;
+    }
+    if (cs_profile_is_hdr(p)) {
+        cs_hdr_apply(p, pixels, width, height, pitch, 1);
         return;
     }
     for (int y = 0; y < height; y++) {

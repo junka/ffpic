@@ -1,7 +1,8 @@
-/* Colour management: an ICC matrix/TRC profile and the CICP fallbacks have
- * to bring the decoded samples into sRGB.  The expected values below were
- * computed independently with the ICC/CIE formulas; the ICC file itself
- * comes from tests/gen_avif_samples.py. */
+/* Colour management: an ICC matrix/TRC profile, the CICP fallbacks and the
+ * PQ/HLG tone mapper have to bring the decoded samples into sRGB.  The
+ * expected values below were computed independently with the ICC/CIE and
+ * BT.2100 formulas; the ICC file itself comes from
+ * tests/gen_avif_samples.py. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,17 +97,58 @@ test_cicp(void)
     }
     cs_profile_free(p);
 
-    /* PQ needs tone mapping, which is not implemented */
-    if (cs_profile_from_cicp(9, 16) != NULL) {
-        printf("PQ transfer was reported as supported\n");
-        rc = -1;
-    }
-
     /* a non-profile blob must not parse */
     if (cs_profile_from_icc("junk", 4) != NULL) {
         printf("a junk ICC blob parsed\n");
         rc = -1;
     }
+    return rc;
+}
+
+static int
+test_hdr(void)
+{
+    struct cs_profile *p;
+    uint16_t px[8];
+    int rc = 0;
+
+    /* 1000 and 203 cd/m2 in PQ, both grey.  The content peak is the first
+     * sample, so it maps to SDR white and 203 cd/m2 maps to 55400. */
+    p = cs_profile_from_cicp(9, 16);
+    if (!p || cs_profile_is_identity(p)) {
+        printf("PQ transfer is not mapped\n");
+        return -1;
+    }
+    px[0] = px[1] = px[2] = 49271;
+    px[3] = 65535;
+    px[4] = px[5] = px[6] = 38055;
+    px[7] = 65535;
+    cs_profile_apply_bgra16(p, (unsigned char *)px, 2, 1, 16);
+    if (!near(px[0], 65535, 2) || !near(px[4], 55400, 2) ||
+        px[3] != 65535 || px[7] != 65535) {
+        printf("PQ tone map came out %d and %d\n", px[0], px[4]);
+        rc = -1;
+    }
+    cs_profile_free(p);
+
+    /* HLG: 75% signal is the 203 cd/m2 reference white and 50% is
+     * 50.7 cd/m2, which maps to 42484. */
+    p = cs_profile_from_cicp(9, 18);
+    if (!p || cs_profile_is_identity(p)) {
+        printf("HLG transfer is not mapped\n");
+        return -1;
+    }
+    px[0] = px[1] = px[2] = 49151;
+    px[3] = 65535;
+    px[4] = px[5] = px[6] = 32768;
+    px[7] = 65535;
+    cs_profile_apply_bgra16(p, (unsigned char *)px, 2, 1, 16);
+    if (!near(px[0], 65535, 2) || !near(px[4], 42484, 2) ||
+        px[3] != 65535 || px[7] != 65535) {
+        printf("HLG tone map came out %d and %d\n", px[0], px[4]);
+        rc = -1;
+    }
+    cs_profile_free(p);
     return rc;
 }
 
@@ -117,6 +159,9 @@ main(void)
         return -1;
     }
     if (test_cicp()) {
+        return -1;
+    }
+    if (test_hdr()) {
         return -1;
     }
     printf("colorspace: ok\n");

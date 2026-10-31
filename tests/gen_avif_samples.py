@@ -13,6 +13,7 @@ need the conformance window crop, coarse quantization, lossless coding,
 4:4:4 and 4:0:0 monochrome.
 """
 
+import math
 import os
 import shutil
 import struct
@@ -43,6 +44,13 @@ SAMPLES = [
     ("grain15",   96, 100, "yuv420p", "gradient", ""),
     ("grain16",   96, 100, "yuv420p", "gradient", ""),
     ("grain5_10", 96, 100, "yuv420p10le", "gradient", ""),
+    # HDR: 10 bit PQ and HLG streams tone mapped to SDR sRGB.  4:4:4 keeps
+    # the sample free of chroma upsampling differences, which the PQ curve
+    # would amplify near white.
+    ("pq10",      96, 96, "yuv444p10le", "gradient", ""),
+    ("hlg10",     96, 96, "yuv444p10le", "gradient", ""),
+    # an explicit BT.709 matrix/transfer, unlike the untagged samples
+    ("bt709",     96, 96, "yuv444p", "gradient", ""),
 ]
 
 
@@ -484,6 +492,113 @@ def make_pitm32(src_color, src_decoy, name):
     return write_derived(name, ftyp, meta, payload)
 
 
+PQ_M1 = 2610.0 / 16384.0
+PQ_M2 = 2523.0 / 4096.0 * 128.0
+PQ_C1 = 3424.0 / 4096.0
+PQ_C2 = 2413.0 / 4096.0 * 32.0
+PQ_C3 = 2392.0 / 4096.0 * 32.0
+
+BT2020_TO_XYZ = (
+    (0.6369580, 0.1446169, 0.1688810),
+    (0.2627002, 0.6779981, 0.0593017),
+    (0.0000000, 0.0280727, 1.0609851),
+)
+XYZ_TO_SRGB = (
+    (3.2404542, -1.5371385, -0.4985314),
+    (-0.9692660, 1.8760108, 0.0415560),
+    (0.0556434, -0.2040259, 1.0572252),
+)
+BT2020_LUMA = (0.2627002, 0.6779981, 0.0593017)
+
+
+def pq_eotf(n):
+    """ST 2084 EOTF; 1.0 is 10000 cd/m2."""
+    if n <= 0.0:
+        return 0.0
+    p = n ** (1.0 / PQ_M2)
+    if p <= PQ_C1:
+        return 0.0
+    return ((p - PQ_C1) / (PQ_C2 - PQ_C3 * p)) ** (1.0 / PQ_M1)
+
+
+def hlg_inverse_oetf(x):
+    if x <= 0.5:
+        return x * x / 3.0
+    return (math.exp((x - 0.55991073) / 0.17883277) + 0.28466892) / 12.0
+
+
+def bt709_decode(v):
+    if v < 0.081:
+        return v / 4.5
+    return ((v + 0.099) / 1.099) ** (1 / 0.45)
+
+
+def bt709_reference(raw):
+    out = bytearray(raw)
+    for i in range(0, len(out), 4):
+        for c in range(3):
+            out[i + c] = round(
+                srgb_encode(bt709_decode(out[i + c] / 255.0)) * 255)
+    return bytes(out)
+
+
+def hdr_reference(raw, w, h, kind):
+    """Tone map ffmpeg's rgba64le decode of a PQ/HLG stream to SDR sRGB.
+
+    The channel chain mirrors cs_hdr_apply(): the transfer decode gives
+    cd/m2, BT.2020 becomes linear sRGB, the content peak sets the extended
+    Reinhard white point and every channel is scaled by the same factor.
+    """
+    vals = struct.unpack("<%dH" % (w * h * 4), raw)
+    lin = [0.0] * (w * h * 3)
+    peak = 0.0
+    for i in range(w * h):
+        r = vals[4 * i] / 65535.0
+        g = vals[4 * i + 1] / 65535.0
+        b = vals[4 * i + 2] / 65535.0
+        if kind == "pq":
+            lr = pq_eotf(r) * 10000.0
+            lg = pq_eotf(g) * 10000.0
+            lb = pq_eotf(b) * 10000.0
+        else:
+            er = hlg_inverse_oetf(r)
+            eg = hlg_inverse_oetf(g)
+            eb = hlg_inverse_oetf(b)
+            y = (BT2020_LUMA[0] * er + BT2020_LUMA[1] * eg +
+                 BT2020_LUMA[2] * eb)
+            s = 1000.0 * y ** 0.2 if y > 0.0 else 0.0
+            lr, lg, lb = er * s, eg * s, eb * s
+        X = (BT2020_TO_XYZ[0][0] * lr + BT2020_TO_XYZ[0][1] * lg +
+             BT2020_TO_XYZ[0][2] * lb)
+        Y = (BT2020_TO_XYZ[1][0] * lr + BT2020_TO_XYZ[1][1] * lg +
+             BT2020_TO_XYZ[1][2] * lb)
+        Z = (BT2020_TO_XYZ[2][0] * lr + BT2020_TO_XYZ[2][1] * lg +
+             BT2020_TO_XYZ[2][2] * lb)
+        lin[3 * i] = (XYZ_TO_SRGB[0][0] * X + XYZ_TO_SRGB[0][1] * Y +
+                      XYZ_TO_SRGB[0][2] * Z)
+        lin[3 * i + 1] = (XYZ_TO_SRGB[1][0] * X + XYZ_TO_SRGB[1][1] * Y +
+                          XYZ_TO_SRGB[1][2] * Z)
+        lin[3 * i + 2] = (XYZ_TO_SRGB[2][0] * X + XYZ_TO_SRGB[2][1] * Y +
+                          XYZ_TO_SRGB[2][2] * Z)
+        peak = max(peak, lin[3 * i], lin[3 * i + 1], lin[3 * i + 2])
+
+    white = min(max(peak / 100.0, 1.0), 100.0)
+    out = [0] * (w * h * 4)
+    for i in range(w * h):
+        lr = lin[3 * i] / 100.0
+        lg = lin[3 * i + 1] / 100.0
+        lb = lin[3 * i + 2] / 100.0
+        m = max(lr, lg, lb)
+        if m > 0.0:
+            s = (m * (1.0 + m / (white * white)) / (1.0 + m)) / m
+            lr, lg, lb = lr * s, lg * s, lb * s
+        out[4 * i] = round(srgb_encode(lr) * 65535)
+        out[4 * i + 1] = round(srgb_encode(lg) * 65535)
+        out[4 * i + 2] = round(srgb_encode(lb) * 65535)
+        out[4 * i + 3] = vals[4 * i + 3]
+    return struct.pack("<%dH" % (w * h * 4), *out)
+
+
 def main():
     os.makedirs(DATA, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
@@ -517,6 +632,17 @@ def main():
             if name.startswith("grain"):
                 vector = name[5:].split("_")[0]
                 cmd += ["-aom-params", "film-grain-test=" + vector]
+            if name.startswith("pq"):
+                cmd += ["-color_trc", "smpte2084",
+                        "-color_primaries", "bt2020",
+                        "-colorspace", "bt2020nc"]
+            elif name.startswith("hlg"):
+                cmd += ["-color_trc", "arib-std-b67",
+                        "-color_primaries", "bt2020",
+                        "-colorspace", "bt2020nc"]
+            elif name.startswith("bt709"):
+                cmd += ["-color_trc", "bt709", "-color_primaries", "bt709",
+                        "-colorspace", "bt709"]
             cmd += ["-f", "avif", avif]
             run(cmd)
             # the reference: ffmpeg's own av1 decoder, packed to the depth
@@ -533,6 +659,17 @@ def main():
             if size != w * h * bpp:
                 raise SystemExit(
                     f"{name}: reference is {size} bytes, expected {w * h * bpp}")
+            if name.startswith("pq") or name.startswith("hlg"):
+                with open(ref, "rb") as f:
+                    raw = f.read()
+                kind = "pq" if name.startswith("pq") else "hlg"
+                with open(ref, "wb") as f:
+                    f.write(hdr_reference(raw, w, h, kind))
+            elif name.startswith("bt709"):
+                with open(ref, "rb") as f:
+                    raw = f.read()
+                with open(ref, "wb") as f:
+                    f.write(bt709_reference(raw))
             print(f"{name}: {os.path.getsize(avif)} bytes, "
                   f"ref {size} bytes")
 

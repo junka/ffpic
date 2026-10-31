@@ -304,6 +304,32 @@ struct av1_frame {
 
     int film_grain_params_present;
 
+    /* film grain parameters, spec 5.9.30.  A still picture is always an
+     * intra frame, so update_grain is 1 and no reference slots exist. */
+    int apply_grain;
+    int grain_seed;
+    int num_y_points;
+    uint8_t point_y_value[16];
+    uint8_t point_y_scaling[16];
+    int chroma_scaling_from_luma;
+    int num_cb_points;
+    int num_cr_points;
+    uint8_t point_cb_value[16];
+    uint8_t point_cb_scaling[16];
+    uint8_t point_cr_value[16];
+    uint8_t point_cr_scaling[16];
+    int grain_scaling_minus_8;
+    int ar_coeff_lag;
+    int ar_coeff_shift_minus_6;
+    int grain_scale_shift;
+    int cb_mult, cb_luma_mult, cb_offset;
+    int cr_mult, cr_luma_mult, cr_offset;
+    int overlap_flag;
+    int clip_to_restricted_range;
+    int8_t ar_coeffs_y[24];     /* ar_coeffs_y_plus_128 - 128 */
+    int8_t ar_coeffs_cb[25];
+    int8_t ar_coeffs_cr[25];
+
     struct av1_tile_layout tiles;
 };
 
@@ -430,5 +456,8 @@ void av1_loop_filter_frame(struct av1_dec *d);
 void av1_cdef_frame(struct av1_dec *d);
 void av1_loop_restoration_frame(struct av1_dec *d);
 void av1_superres_frame(struct av1_dec *d);
+
+/* av1_grain.c */
+void av1_apply_film_grain(struct av1_dec *d);
 
 #endif /* _AV1_INTERNAL_H_ */

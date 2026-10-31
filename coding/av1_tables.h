@@ -492,6 +492,8 @@ extern const uint16_t Default_Coeff_Base_Eob_Cdf[4][5][2][4][4];
 extern const uint16_t Default_Coeff_Base_Cdf[4][5][2][42][5];
 extern const uint16_t Default_Coeff_Br_Cdf[4][5][2][21][5];
 
+extern const int16_t Gaussian_Sequence[2048];
+
 #ifdef __cplusplus
 }
 #endif

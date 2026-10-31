@@ -10,8 +10,9 @@ extern "C" {
 
 /* AV1 still picture decoding, following the AV1 Bitstream & Decoding
  * Process Specification.  Only the intra/key frame tools needed by AVIF
- * image items are implemented; inter prediction, reference frames and film
- * grain are not part of a still image item. */
+ * image items are implemented; inter prediction and reference frames are
+ * not part of a still image item.  Film grain is synthesised when the
+ * sequence and frame headers ask for it. */
 
 struct av1_image {
     int width;                  /* upscaled / display width */

@@ -4,9 +4,9 @@
  * This implements the subset of the AV1 Bitstream & Decoding Process
  * Specification needed to decode an AVIF image item: sequence/frame header
  * parsing, the symbol (range) decoder, intra prediction, transforms,
- * coefficient decoding and the in-loop filters.  Inter frames, reference
- * frame handling and film grain synthesis are outside the scope of a still
- * image item and are rejected.
+ * coefficient decoding, the in-loop filters and film grain synthesis.
+ * Inter frames and reference frame handling are outside the scope of a
+ * still image item and are rejected.
  */
 
 #include <errno.h>
@@ -919,73 +919,71 @@ parse_uncompressed_header(struct av1_bits *b, struct av1_dec *d)
     /* global_motion_params() returns immediately for an intra frame */
 
     /* film_grain_params() */
-    if (!f->film_grain_params_present || (!f->show_frame && !f->showable_frame)) {
-        /* reset */
-    } else {
-        int apply_grain = av1_bits_bit(b);
-        if (apply_grain) {
-            (void)av1_bits_get(b, 16);
-            int update_grain = (f->frame_type == 1) ? av1_bits_bit(b) : 1;
-            if (update_grain) {
-                int num_y_points = (int)av1_bits_get(b, 4);
-                for (int i = 0; i < num_y_points; i++) {
-                    (void)av1_bits_get(b, 8);
-                    (void)av1_bits_get(b, 8);
-                }
-                int chroma_scaling_from_luma = 0;
-                if (f->mono_chrome) {
-                    chroma_scaling_from_luma = 0;
-                } else {
-                    chroma_scaling_from_luma = av1_bits_bit(b);
-                }
-                int num_cb_points = 0, num_cr_points = 0;
-                if (!f->mono_chrome && !chroma_scaling_from_luma) {
-                    num_cb_points = (int)av1_bits_get(b, 4);
-                    for (int i = 0; i < num_cb_points; i++) {
-                        (void)av1_bits_get(b, 8);
-                        (void)av1_bits_get(b, 8);
-                    }
-                    num_cr_points = (int)av1_bits_get(b, 4);
-                    for (int i = 0; i < num_cr_points; i++) {
-                        (void)av1_bits_get(b, 8);
-                        (void)av1_bits_get(b, 8);
-                    }
-                }
-                (void)av1_bits_get(b, 2);       /* grain_scaling_minus_8 */
-                int ar_coeff_lag = (int)av1_bits_get(b, 2);
-                int num_pos_luma = 2 * ar_coeff_lag * (ar_coeff_lag + 1);
-                if (num_y_points) {
-                    for (int i = 0; i < num_pos_luma; i++) {
-                        (void)av1_bits_get(b, 8);
-                    }
-                }
-                if (chroma_scaling_from_luma || num_cb_points) {
-                    for (int i = 0; i < num_pos_luma + 1; i++) {
-                        (void)av1_bits_get(b, 8);
-                    }
-                }
-                if (chroma_scaling_from_luma || num_cr_points) {
-                    for (int i = 0; i < num_pos_luma + 1; i++) {
-                        (void)av1_bits_get(b, 8);
-                    }
-                }
-                (void)av1_bits_get(b, 2);       /* ar_coeff_shift_minus_6 */
-                (void)av1_bits_get(b, 2);       /* grain_scale_shift */
-                if (num_cb_points) {
-                    (void)av1_bits_get(b, 8);
-                    (void)av1_bits_get(b, 8);
-                    (void)av1_bits_get(b, 9);
-                }
-                if (num_cr_points) {
-                    (void)av1_bits_get(b, 8);
-                    (void)av1_bits_get(b, 8);
-                    (void)av1_bits_get(b, 9);
-                }
-                (void)av1_bits_get(b, 2);       /* grain_center */
-                (void)av1_bits_get(b, 2);       /* grain_min */
-                (void)av1_bits_get(b, 2);       /* grain_max */
+    f->apply_grain = 0;
+    if (f->film_grain_params_present &&
+        (f->show_frame || f->showable_frame)) {
+        f->apply_grain = (int)av1_bits_bit(b);
+    }
+    if (f->apply_grain) {
+        f->grain_seed = (int)av1_bits_get(b, 16);
+        /* update_grain is only signalled for inter frames; a still picture
+         * is always intra, so the parameters are sent here */
+        f->num_y_points = (int)av1_bits_get(b, 4);
+        for (int i = 0; i < f->num_y_points; i++) {
+            f->point_y_value[i] = (uint8_t)av1_bits_get(b, 8);
+            f->point_y_scaling[i] = (uint8_t)av1_bits_get(b, 8);
+        }
+        f->chroma_scaling_from_luma =
+            f->mono_chrome ? 0 : (int)av1_bits_bit(b);
+        f->num_cb_points = 0;
+        f->num_cr_points = 0;
+        if (!f->mono_chrome && !f->chroma_scaling_from_luma &&
+            !(f->subsampling_x == 1 && f->subsampling_y == 1 &&
+              f->num_y_points == 0)) {
+            f->num_cb_points = (int)av1_bits_get(b, 4);
+            for (int i = 0; i < f->num_cb_points; i++) {
+                f->point_cb_value[i] = (uint8_t)av1_bits_get(b, 8);
+                f->point_cb_scaling[i] = (uint8_t)av1_bits_get(b, 8);
+            }
+            f->num_cr_points = (int)av1_bits_get(b, 4);
+            for (int i = 0; i < f->num_cr_points; i++) {
+                f->point_cr_value[i] = (uint8_t)av1_bits_get(b, 8);
+                f->point_cr_scaling[i] = (uint8_t)av1_bits_get(b, 8);
             }
         }
+        f->grain_scaling_minus_8 = (int)av1_bits_get(b, 2);
+        f->ar_coeff_lag = (int)av1_bits_get(b, 2);
+        int num_pos_luma = 2 * f->ar_coeff_lag * (f->ar_coeff_lag + 1);
+        int num_pos_chroma = num_pos_luma + (f->num_y_points ? 1 : 0);
+        if (f->num_y_points) {
+            for (int i = 0; i < num_pos_luma; i++) {
+                f->ar_coeffs_y[i] = (int8_t)(av1_bits_get(b, 8) - 128);
+            }
+        }
+        if (f->chroma_scaling_from_luma || f->num_cb_points) {
+            for (int i = 0; i < num_pos_chroma; i++) {
+                f->ar_coeffs_cb[i] = (int8_t)(av1_bits_get(b, 8) - 128);
+            }
+        }
+        if (f->chroma_scaling_from_luma || f->num_cr_points) {
+            for (int i = 0; i < num_pos_chroma; i++) {
+                f->ar_coeffs_cr[i] = (int8_t)(av1_bits_get(b, 8) - 128);
+            }
+        }
+        f->ar_coeff_shift_minus_6 = (int)av1_bits_get(b, 2);
+        f->grain_scale_shift = (int)av1_bits_get(b, 2);
+        if (f->num_cb_points) {
+            f->cb_mult = (int)av1_bits_get(b, 8);
+            f->cb_luma_mult = (int)av1_bits_get(b, 8);
+            f->cb_offset = (int)av1_bits_get(b, 9);
+        }
+        if (f->num_cr_points) {
+            f->cr_mult = (int)av1_bits_get(b, 8);
+            f->cr_luma_mult = (int)av1_bits_get(b, 8);
+            f->cr_offset = (int)av1_bits_get(b, 9);
+        }
+        f->overlap_flag = (int)av1_bits_bit(b);
+        f->clip_to_restricted_range = (int)av1_bits_bit(b);
     }
 
     return b->error ? -EINVAL : 0;
@@ -1339,6 +1337,9 @@ av1_decode_image(const uint8_t *data, size_t len, struct av1_image *img)
         }
         if (f->use_superres) {
             av1_superres_frame(d);
+        }
+        if (f->apply_grain) {
+            av1_apply_film_grain(d);
         }
 
         img->width = f->upscaled_width;

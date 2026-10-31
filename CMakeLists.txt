@@ -79,6 +79,7 @@ list(APPEND FFPIC_CODING
   "${FFPIC_ROOT}/coding/av1.c"
   "${FFPIC_ROOT}/coding/av1_decode.c"
   "${FFPIC_ROOT}/coding/av1_filter.c"
+  "${FFPIC_ROOT}/coding/av1_grain.c"
   "${FFPIC_ROOT}/coding/av1_recon.c"
   "${FFPIC_ROOT}/utils/crc.c"
   "${FFPIC_ROOT}/utils/alder.c"

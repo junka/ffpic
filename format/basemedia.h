@@ -221,21 +221,21 @@ struct pasp_box {
     uint32_t vSpacing; 
 };
 
-/* clean aperture */
+/* clean aperture; the offsets are signed in the format */
 struct clap_box {
     BOX_ST;
 
-    uint32_t cleanApertureWidthN;
-    uint32_t cleanApertureWidthD;
+    int32_t cleanApertureWidthN;
+    int32_t cleanApertureWidthD;
 
-    uint32_t cleanApertureHeightN;
-    uint32_t cleanApertureHeightD;
+    int32_t cleanApertureHeightN;
+    int32_t cleanApertureHeightD;
 
-    uint32_t horizOffN;
-    uint32_t horizOffD;
+    int32_t horizOffN;
+    int32_t horizOffD;
 
-    uint32_t vertOffN;
-    uint32_t vertOffD;
+    int32_t vertOffN;
+    int32_t vertOffD;
 };
 
 /* color information */
@@ -587,6 +587,19 @@ struct irot_box {
 #else
     uint8_t angle:2;
     uint8_t reserved:6;
+#endif
+};
+
+/* see ISO/IEC 23008-12 6.5.12: axis 0 exchanges top and bottom,
+ * axis 1 exchanges left and right */
+struct imir_box {
+    BOX_ST;
+#if BYTE_ORDER == LITTLE_ENDIAN
+    uint8_t reserved : 7;
+    uint8_t axis : 1;
+#else
+    uint8_t axis:1;
+    uint8_t reserved:7;
 #endif
 };
 

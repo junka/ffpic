@@ -494,14 +494,14 @@ int
 read_clap_box(FILE *f, struct clap_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'l', 'a', 'p'));
-    b->cleanApertureWidthN = read_u32(f);
-    b->cleanApertureWidthD = read_u32(f);
-    b->cleanApertureHeightN = read_u32(f);
-    b->cleanApertureHeightD = read_u32(f);
-    b->horizOffN = read_u32(f);
-    b->horizOffD = read_u32(f);
-    b->vertOffN = read_u32(f);
-    b->vertOffD = read_u32(f);
+    b->cleanApertureWidthN = (int32_t)read_u32(f);
+    b->cleanApertureWidthD = (int32_t)read_u32(f);
+    b->cleanApertureHeightN = (int32_t)read_u32(f);
+    b->cleanApertureHeightD = (int32_t)read_u32(f);
+    b->horizOffN = (int32_t)read_u32(f);
+    b->horizOffD = (int32_t)read_u32(f);
+    b->vertOffN = (int32_t)read_u32(f);
+    b->vertOffD = (int32_t)read_u32(f);
     return b->size;
 }
 
@@ -510,6 +510,23 @@ read_irot_box(FILE *f, struct irot_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'r', 'o', 't'));
     b->angle = read_u8(f) & 0x3;
+    return b->size;
+}
+
+int
+read_imir_box(FILE *f, struct imir_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('i', 'm', 'i', 'r'));
+    b->axis = read_u8(f) & 0x1;
+    return b->size;
+}
+
+int
+read_pasp_box(FILE *f, struct pasp_box *b)
+{
+    FFREAD_BOX_ST(b, f, FOURCC2UINT('p', 'a', 's', 'p'));
+    b->hSpacing = read_u32(f);
+    b->vSpacing = read_u32(f);
     return b->size;
 }
 
@@ -573,6 +590,16 @@ read_ipco_box(FILE *f, struct ipco_box *b)
             case FOURCC2UINT('i', 'r', 'o', 't'):
                 cc = calloc(1, sizeof(struct irot_box));
                 s -= read_irot_box(f, (struct irot_box*)cc);
+                b->property[n++] = (struct box *)cc;
+                break;
+            case FOURCC2UINT('i', 'm', 'i', 'r'):
+                cc = calloc(1, sizeof(struct imir_box));
+                s -= read_imir_box(f, (struct imir_box*)cc);
+                b->property[n++] = (struct box *)cc;
+                break;
+            case FOURCC2UINT('p', 'a', 's', 'p'):
+                cc = calloc(1, sizeof(struct pasp_box));
+                s -= read_pasp_box(f, (struct pasp_box*)cc);
                 b->property[n++] = (struct box *)cc;
                 break;
             default:

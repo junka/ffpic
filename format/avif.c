@@ -797,6 +797,170 @@ avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels, int pitch,
     }
 }
 
+/* Transformative properties (irot, imir, clap) act on the reconstructed
+ * picture in the order they are associated in ipma.  The alpha plane is
+ * already merged into the packed samples, so it follows every transform. */
+struct packed_frame {
+    uint8_t *pixels;
+    int width, height, pitch, bpp;
+};
+
+enum {
+    PACKED_ROT90,
+    PACKED_ROT180,
+    PACKED_ROT270,
+    PACKED_VFLIP,
+    PACKED_HFLIP,
+    PACKED_CROP,
+};
+
+static int
+packed_transform(struct packed_frame *im, int kind, int nw, int nh,
+                 int ox, int oy)
+{
+    uint8_t *dst = malloc((size_t)nw * nh * im->bpp);
+
+    if (!dst) {
+        return -1;
+    }
+    for (int y = 0; y < nh; y++) {
+        uint8_t *drow = dst + (size_t)y * nw * im->bpp;
+        for (int x = 0; x < nw; x++) {
+            int sx, sy;
+
+            switch (kind) {
+            case PACKED_ROT90:
+                sx = im->width - 1 - y;
+                sy = x;
+                break;
+            case PACKED_ROT180:
+                sx = im->width - 1 - x;
+                sy = im->height - 1 - y;
+                break;
+            case PACKED_ROT270:
+                sx = y;
+                sy = im->height - 1 - x;
+                break;
+            case PACKED_VFLIP:
+                sx = x;
+                sy = im->height - 1 - y;
+                break;
+            case PACKED_HFLIP:
+                sx = im->width - 1 - x;
+                sy = y;
+                break;
+            default: /* PACKED_CROP */
+                sx = x + ox;
+                sy = y + oy;
+                break;
+            }
+            memcpy(drow + (size_t)x * im->bpp,
+                   im->pixels + (size_t)sy * im->pitch +
+                       (size_t)sx * im->bpp, im->bpp);
+        }
+    }
+    free(im->pixels);
+    im->pixels = dst;
+    im->width = nw;
+    im->height = nh;
+    im->pitch = nw * im->bpp;
+    return 0;
+}
+
+/* ISO/IEC 14496-12 12.1.4.1: the clean aperture is centred on the image
+ * centre displaced by the offsets, both given as fractions. */
+static int
+avif_clap_rect(const struct clap_box *c, int w, int h,
+               int *ox, int *oy, int *cw, int *ch)
+{
+    int64_t cwn = c->cleanApertureWidthN, cwd = c->cleanApertureWidthD;
+    int64_t chn = c->cleanApertureHeightN, chd = c->cleanApertureHeightD;
+    int64_t xn, xd, yn, yd, cwid, chgt;
+
+    if (cwd <= 0 || chd <= 0 || c->horizOffD <= 0 || c->vertOffD <= 0 ||
+        cwn < 0 || chn < 0 || cwn % cwd || chn % chd) {
+        return -1;
+    }
+    cwid = cwn / cwd;
+    chgt = chn / chd;
+    if (cwid <= 0 || chgt <= 0) {
+        return -1;
+    }
+    xn = ((int64_t)w - cwid) * c->horizOffD + 2 * (int64_t)c->horizOffN;
+    xd = 2 * (int64_t)c->horizOffD;
+    yn = ((int64_t)h - chgt) * c->vertOffD + 2 * (int64_t)c->vertOffN;
+    yd = 2 * (int64_t)c->vertOffD;
+    if (xn % xd || yn % yd) {
+        return -1;
+    }
+    xn /= xd;
+    yn /= yd;
+    if (xn < 0 || yn < 0 || xn + cwid > w || yn + chgt > h) {
+        return -1;
+    }
+    *ox = (int)xn;
+    *oy = (int)yn;
+    *cw = (int)cwid;
+    *ch = (int)chgt;
+    return 0;
+}
+
+static void
+avif_apply_transforms(const AVIF *h, uint32_t item_id,
+                      struct packed_frame *im)
+{
+    const struct ipma_box *ipma = &h->meta.iprp.ipma;
+
+    for (uint32_t i = 0; i < ipma->entry_count; i++) {
+        if (ipma->entries[i].item_id != item_id) {
+            continue;
+        }
+        for (int j = 0; j < ipma->entries[i].association_count; j++) {
+            int idx = ipma->entries[i].property_index[j] & 0x7fff;
+            struct box *prop;
+            int nw, nh, ox = 0, oy = 0, kind;
+
+            if (idx < 1 || idx > h->meta.iprp.ipco.n_property) {
+                continue;
+            }
+            prop = h->meta.iprp.ipco.property[idx - 1];
+            if (!prop) {
+                continue;
+            }
+            if (prop->type == TYPE2UINT("irot")) {
+                int angle = ((struct irot_box *)prop)->angle & 0x3;
+
+                if (angle == 0) {
+                    continue;
+                }
+                kind = angle == 1 ? PACKED_ROT90
+                     : angle == 2 ? PACKED_ROT180 : PACKED_ROT270;
+                nw = angle == 2 ? im->width : im->height;
+                nh = angle == 2 ? im->height : im->width;
+            } else if (prop->type == TYPE2UINT("imir")) {
+                kind = ((struct imir_box *)prop)->axis ? PACKED_HFLIP
+                                                       : PACKED_VFLIP;
+                nw = im->width;
+                nh = im->height;
+            } else if (prop->type == TYPE2UINT("clap")) {
+                if (avif_clap_rect((struct clap_box *)prop, im->width,
+                                   im->height, &ox, &oy, &nw, &nh)) {
+                    VWARN(avif, "ignoring a clean aperture that does not "
+                          "fit the picture");
+                    continue;
+                }
+                kind = PACKED_CROP;
+            } else {
+                /* pasp and the descriptive properties do not move pixels */
+                continue;
+            }
+            if (packed_transform(im, kind, nw, nh, ox, oy)) {
+                return;
+            }
+        }
+    }
+}
+
 /* Pick the coded image item: pitm names it, and an AVIF with alpha keeps the
  * colour image there while the alpha plane is a separate auxiliary item. */
 static int
@@ -992,6 +1156,18 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
                              alpha.width, alpha.height, img.width, img.height);
                     }
                 }
+                struct packed_frame frame;
+
+                frame.pixels = p->pixels;
+                frame.width = p->width;
+                frame.height = p->height;
+                frame.pitch = p->pitch;
+                frame.bpp = p->depth >> 3;
+                avif_apply_transforms(h, color_id, &frame);
+                p->pixels = frame.pixels;
+                p->width = frame.width;
+                p->height = frame.height;
+                p->pitch = frame.pitch;
             }
             av1_image_free(&img);
             if (has_alpha) {
@@ -1002,7 +1178,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
                 return NULL;
             }
             VINFO(avif, "decoded %dx%d with the built-in AV1 decoder",
-                  img.width, img.height);
+                  p->width, p->height);
             return p;
         }
         if (has_alpha) {
@@ -1180,6 +1356,25 @@ AVIF_info(FILE *f, struct pic* p)
             for (int i = 0; i < pixi->num_channels; i ++) {
                 fprintf(f, "\t\t\t\t bits_per_channel %d\n", pixi->bits_per_channel[i]);
             }
+        } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("irot")) {
+            fprintf(f, ", angle %d", ((struct irot_box *)
+                    h->meta.iprp.ipco.property[i])->angle * 90);
+        } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("imir")) {
+            fprintf(f, ", axis %d", ((struct imir_box *)
+                    h->meta.iprp.ipco.property[i])->axis);
+        } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("clap")) {
+            struct clap_box *clap = (struct clap_box *)
+                h->meta.iprp.ipco.property[i];
+            fprintf(f, ", width %d/%d, height %d/%d, offset %d/%d %d/%d",
+                    clap->cleanApertureWidthN, clap->cleanApertureWidthD,
+                    clap->cleanApertureHeightN, clap->cleanApertureHeightD,
+                    clap->horizOffN, clap->horizOffD,
+                    clap->vertOffN, clap->vertOffD);
+        } else if (h->meta.iprp.ipco.property[i]->type == TYPE2UINT("pasp")) {
+            struct pasp_box *pasp = (struct pasp_box *)
+                h->meta.iprp.ipco.property[i];
+            fprintf(f, ", hSpacing %d, vSpacing %d", pasp->hSpacing,
+                    pasp->vSpacing);
         }
         fprintf(f, "\n\t");
     }

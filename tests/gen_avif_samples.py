@@ -36,6 +36,13 @@ SAMPLES = [
     # high bit depth: the output keeps 16 bit channels
     ("tenbit",    96, 96, "yuv420p10le", "gradient", ""),
     ("twelvebit", 96, 96, "yuv420p12le", "gradient", ""),
+    # film grain: the libaom test vectors carry fixed grain parameters.
+    # 96x100 leaves a partial 32 sample stripe, and the vectors differ in
+    # overlap, clipping and chroma scaling from luma.
+    ("grain1",    96, 100, "yuv420p", "gradient", ""),
+    ("grain15",   96, 100, "yuv420p", "gradient", ""),
+    ("grain16",   96, 100, "yuv420p", "gradient", ""),
+    ("grain5_10", 96, 100, "yuv420p10le", "gradient", ""),
 ]
 
 
@@ -348,6 +355,75 @@ def make_icc_item(src_color, icc, name):
     return write_derived(name, ftyp, meta, cpayload)
 
 
+def make_transform(src_color, name, props):
+    """Attach transformative properties to the colour item in ipma order."""
+    color = open(src_color, "rb").read()
+    ftyp_size = struct.unpack_from(">I", color, 0)[0]
+    ftyp = color[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(color)
+    citems, _, _ = read_iloc(color, boxes[b"iloc"][0])
+    cpayload = item_payload(color, citems[0][1])
+
+    ipco = box(b"ipco", b"".join(box(t, p) for t, p in props))
+    assoc = bytes(range(1, len(props) + 1))
+    ipma = full_box(b"ipma", 0, b"\0\0\0",
+                    struct.pack(">IHB", 1, 1, len(props)) + assoc)
+    iprp = box(b"iprp", ipco + ipma)
+
+    meta = b""
+    for _ in range(4):
+        data_off = len(ftyp) + len(meta) + 8
+        iloc = make_iloc([(1, [(data_off, len(cpayload))])])
+        meta = full_box(b"meta", 0, b"\0\0\0",
+                        hdlr + make_pitm(1) + iloc + make_iinf([1]) + iprp)
+        if data_off == len(ftyp) + len(meta) + 8:
+            break
+    return write_derived(name, ftyp, meta, cpayload)
+
+
+def transform_pixels(data, w, h, bpp, props):
+    """Apply the same transformative properties to a packed reference."""
+    for typ, val in props:
+        if typ == "irot":
+            angle = val
+            if angle == 0:
+                continue
+            nw, nh = (h, w) if angle != 2 else (w, h)
+            out = bytearray(len(data))
+            for y in range(nh):
+                for x in range(nw):
+                    if angle == 1:      # 90 CCW
+                        sx, sy = w - 1 - y, x
+                    elif angle == 2:    # 180
+                        sx, sy = w - 1 - x, h - 1 - y
+                    else:               # 270 CCW
+                        sx, sy = y, h - 1 - x
+                    out[(y * nw + x) * bpp:(y * nw + x + 1) * bpp] = \
+                        data[(sy * w + sx) * bpp:(sy * w + sx + 1) * bpp]
+            data, w, h = bytes(out), nw, nh
+        elif typ == "imir":
+            out = bytearray(len(data))
+            for y in range(h):
+                for x in range(w):
+                    if val == 0:        # top and bottom exchanged
+                        sx, sy = x, h - 1 - y
+                    else:               # left and right exchanged
+                        sx, sy = w - 1 - x, y
+                    out[(y * w + x) * bpp:(y * w + x + 1) * bpp] = \
+                        data[(sy * w + sx) * bpp:(sy * w + sx + 1) * bpp]
+            data = bytes(out)
+        elif typ == "clap":
+            cw, ch, hoff, voff = val
+            x0 = (w - cw) // 2 + hoff
+            y0 = (h - ch) // 2 + voff
+            out = bytearray()
+            for y in range(ch):
+                start = ((y0 + y) * w + x0) * bpp
+                out += data[start:start + cw * bpp]
+            data, w, h = bytes(out), cw, ch
+    return data, w, h
+
+
 def make_alpha(src_color, src_alpha, name):
     """Colour item plus a monochrome alpha item referenced by auxl."""
     color = open(src_color, "rb").read()
@@ -417,7 +493,7 @@ def main():
                 f.write(make_source(kind, w, h))
             avif = os.path.join(DATA, f"avif_{name}.avif")
             ref = os.path.join(DATA, f"avif_{name}.ref")
-            wide = name in ("tenbit", "twelvebit")
+            wide = "10le" in pixfmt or "12le" in pixfmt
 
             cmd = ["ffmpeg", "-y", "-loglevel", "error",
                    "-f", "rawvideo", "-pix_fmt", "rgb24",
@@ -438,13 +514,20 @@ def main():
                 for kv in params.split(":"):
                     k, v = kv.split("=")
                     cmd += ["-" + k, v]
+            if name.startswith("grain"):
+                vector = name[5:].split("_")[0]
+                cmd += ["-aom-params", "film-grain-test=" + vector]
             cmd += ["-f", "avif", avif]
             run(cmd)
             # the reference: ffmpeg's own av1 decoder, packed to the depth
             # the picture claims
             pix_fmt = "rgba64le" if wide else "bgra"
-            run(["ffmpeg", "-y", "-loglevel", "error", "-i", avif,
-                 "-pix_fmt", pix_fmt, "-f", "rawvideo", ref])
+            ref_cmd = ["ffmpeg", "-y", "-loglevel", "error"]
+            if name.startswith("grain"):
+                ref_cmd += ["-filmgrain", "1"]
+            ref_cmd += ["-i", avif, "-pix_fmt", pix_fmt, "-f", "rawvideo",
+                        ref]
+            run(ref_cmd)
             size = os.path.getsize(ref)
             bpp = 8 if wide else 4
             if size != w * h * bpp:
@@ -552,6 +635,46 @@ def main():
         with open(os.path.join(DATA, "avif_alpha10.ref"), "wb") as f:
             f.write(ref)
         print(f"alpha10: {os.path.getsize(path)} bytes (derived)")
+
+        # irot, imir and clap rewrite the packed picture in the order ipma
+        # associates them, so the reference frame goes through the same
+        # steps.  rotimir also associates a pasp property, which must be
+        # parsed but does not move pixels.
+        mref = open(mixed_ref, "rb").read()
+        tref = open(tenbit_ref, "rb").read()
+        transforms = [
+            ("irot90", mixed, mref, 100, 62, 4,
+             [(b"irot", bytes([1]))], [("irot", 1)]),
+            ("irot180", mixed, mref, 100, 62, 4,
+             [(b"irot", bytes([2]))], [("irot", 2)]),
+            ("irot270", mixed, mref, 100, 62, 4,
+             [(b"irot", bytes([3]))], [("irot", 3)]),
+            ("imir0", mixed, mref, 100, 62, 4,
+             [(b"imir", bytes([0]))], [("imir", 0)]),
+            ("imir1", mixed, mref, 100, 62, 4,
+             [(b"imir", bytes([1]))], [("imir", 1)]),
+            ("clap", mixed, mref, 100, 62, 4,
+             [(b"clap", struct.pack(">8i", 60, 1, 40, 1, 4, 1, 2, 1))],
+             [("clap", (60, 40, 4, 2))]),
+            # the offsets are signed
+            ("clapneg", mixed, mref, 100, 62, 4,
+             [(b"clap", struct.pack(">8i", 60, 1, 40, 1, -4, 1, -2, 1))],
+             [("clap", (60, 40, -4, -2))]),
+            ("rotimir", mixed, mref, 100, 62, 4,
+             [(b"irot", bytes([1])), (b"imir", bytes([0])),
+              (b"pasp", struct.pack(">II", 4, 3))],
+             [("irot", 1), ("imir", 0)]),
+            # the same path on 16 bit samples
+            ("irot90_10", tenbit, tref, 96, 96, 8,
+             [(b"irot", bytes([1]))], [("irot", 1)]),
+        ]
+        for name, src, refbytes, w, h, bpp, props, ops in transforms:
+            path = make_transform(src, name, props)
+            ref, rw, rh = transform_pixels(refbytes, w, h, bpp, ops)
+            with open(os.path.join(DATA, f"avif_{name}.ref"), "wb") as f:
+                f.write(ref)
+            print(f"{name}: {os.path.getsize(path)} bytes "
+                  f"(derived, {rw}x{rh})")
 
 
 if __name__ == "__main__":

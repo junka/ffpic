@@ -2,9 +2,10 @@
  * bgra frame ffmpeg's own av1 decoder produces.  Both files come from
  * tests/gen_avif_samples.py.  The samples cover loop filtering, tiles, an
  * odd size that goes through the conformance window crop, coarse
- * quantization, lossless coding, 4:4:4, 4:0:0, 10 and 12 bit output, and
- * the container cases: a generic HEIF major brand, a split item, an alpha
- * item and a 32 bit primary item id.  Lossy coding moves pixels, so every
+ * quantization, lossless coding, 4:4:4, 4:0:0, 10 and 12 bit output, film
+ * grain synthesis, the container cases (a generic HEIF major brand, a split
+ * item, an alpha item and a 32 bit primary item id), and the transformative
+ * properties irot, imir and clap.  Lossy coding moves pixels, so every
  * sample carries its own tolerance and the whole frame is compared, not
  * just a few points.  High bit depth pictures are compared in 16 bit
  * units, and the check also rejects an 8 bit picture widened to 16 bits. */
@@ -37,6 +38,11 @@ test_real_samples(void)
         /* 16 bit output: the tolerance is in 16 bit units */
         {"avif_tenbit", 96, 96, 1024, 0, 0, 1},
         {"avif_twelvebit", 96, 96, 1024, 0, 0, 1},
+        /* film grain synthesis, including a partial grain stripe */
+        {"avif_grain1", 96, 100, 6, 0, 0, 0},
+        {"avif_grain15", 96, 100, 6, 0, 0, 0},
+        {"avif_grain16", 96, 100, 6, 0, 0, 0},
+        {"avif_grain5_10", 96, 100, 1024, 0, 0, 1},
         /* derived containers: these decode to the mixed picture */
         {"avif_mif1", 100, 62, 6, 0, 0, 0},
         {"avif_extents", 100, 62, 6, 0, 0, 0},
@@ -47,6 +53,16 @@ test_real_samples(void)
         {"avif_icc", 100, 62, 8, 0, 0, 0},
         {"avif_icc10", 96, 96, 1024, 0, 0, 1},
         {"avif_alpha10", 96, 96, 1024, 0, 1, 1},
+        /* transformative properties, applied in ipma association order */
+        {"avif_irot90", 62, 100, 6, 0, 0, 0},
+        {"avif_irot180", 100, 62, 6, 0, 0, 0},
+        {"avif_irot270", 62, 100, 6, 0, 0, 0},
+        {"avif_imir0", 100, 62, 6, 0, 0, 0},
+        {"avif_imir1", 100, 62, 6, 0, 0, 0},
+        {"avif_clap", 60, 40, 6, 0, 0, 0},
+        {"avif_clapneg", 60, 40, 6, 0, 0, 0},
+        {"avif_rotimir", 62, 100, 6, 0, 0, 0},
+        {"avif_irot90_10", 96, 96, 1024, 0, 0, 1},
     };
     int rc = 0;
 

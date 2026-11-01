@@ -702,6 +702,20 @@ read_mdat_box(FILE *f, struct mdat_box *b)
     return b->size;
 }
 
+static int
+read_ipro_box(FILE *f, struct ipro_box *b)
+{
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('i', 'p', 'r', 'o'));
+    b->protection_count = read_u16(f);
+    /* the protection_info boxes carry the scheme; only the count matters
+     * when deciding whether an item is encrypted */
+    if (b->size > 14) {
+        fseek(f, (long)(b->size - 14), SEEK_CUR);
+    }
+    VDBG(basemedia, "IPRO: protection_count %d", b->protection_count);
+    return b->size;
+}
+
 int read_dref_box(FILE *f, struct dref_box *b)
 {
     FFREAD_BOX_FULL(b, f, FOURCC2UINT('d', 'r', 'e', 'f'));
@@ -1173,6 +1187,9 @@ read_meta_box(FILE *f, struct meta_box *meta)
             break;
         case FOURCC2UINT('g', 'r', 'p', 'l'):
             read_grpl_box(f, &meta->grpl);
+            break;
+        case FOURCC2UINT('i', 'p', 'r', 'o'):
+            read_ipro_box(f, &meta->ipro);
             break;
         default:
             fseek(f, b.size, SEEK_CUR);

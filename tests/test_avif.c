@@ -4,9 +4,10 @@
  * odd size that goes through the conformance window crop, coarse
  * quantization, lossless coding, 4:4:4, 4:0:0, 10 and 12 bit output, film
  * grain synthesis, the container cases (a generic HEIF major brand, a split
- * item, an alpha item, a 32 bit primary item id and a sequence header kept
- * in av1C configOBUs), the transformative properties irot, imir and clap,
- * and PQ/HLG streams tone mapped to SDR.  Lossy coding moves pixels, so every
+ * item, an alpha item, a 32 bit primary item id, a sequence header kept in
+ * av1C configOBUs, and Exif/XMP/thumbnail metadata), the transformative
+ * properties irot, imir and clap, and PQ/HLG streams tone mapped to SDR.
+ * Lossy coding moves pixels, so every
  * sample carries its own tolerance and the whole frame is compared, not
  * just a few points.  High bit depth pictures are compared in 16 bit
  * units, and the check also rejects an 8 bit picture widened to 16 bits. */
@@ -19,6 +20,25 @@
 #include "colorspace.h"
 #include "file.h"
 #include "vlog.h"
+
+/* What the metadata report must say for each metadata fixture. */
+static int
+check_metadata_report(const char *name, const char *txt)
+{
+    if (strcmp(name, "avif_meta") == 0) {
+        if (!strstr(txt, "orientation 6") ||
+            !strstr(txt, "application/rdf+xml") ||
+            !strstr(txt, "thumbnail item 4")) {
+            return -1;
+        }
+    } else if (strcmp(name, "avif_meta2") == 0) {
+        /* the non-RDF mime item is not XMP */
+        if (!strstr(txt, "orientation 8") || strstr(txt, "xmp item")) {
+            return -1;
+        }
+    }
+    return 0;
+}
 
 static int
 test_real_samples(void)
@@ -51,6 +71,10 @@ test_real_samples(void)
         {"avif_pitm32", 100, 62, 6, 0, 0, 0},
         /* the sequence header only in the av1C configOBUs */
         {"avif_cfgobu", 100, 62, 6, 0, 0, 0},
+        /* Exif, XMP and a thumbnail item beside the primary picture */
+        {"avif_meta", 100, 62, 6, 0, 0, 0},
+        /* big-endian Exif with an offset, and a mime item that is not XMP */
+        {"avif_meta2", 100, 62, 6, 0, 0, 0},
         {"avif_alpha", 100, 62, 6, 0, 1, 0},
         /* the gamma curve bends the existing rounding, so allow a bit more */
         {"avif_icc", 100, 62, 8, 0, 0, 0},
@@ -107,7 +131,24 @@ test_real_samples(void)
          * broken box tree cannot crash the picinfo front end. */
         FILE *inf = tmpfile();
         if (inf) {
+            long sz;
             ops->info(inf, p);
+            fflush(inf);
+            sz = ftell(inf);
+            if (sz > 0 && strncmp(cases[i].name, "avif_meta", 9) == 0) {
+                char *txt = malloc((size_t)sz + 1);
+                rewind(inf);
+                if (!txt || fread(txt, 1, (size_t)sz, inf) != (size_t)sz) {
+                    rc = -1;
+                } else {
+                    txt[sz] = 0;
+                    if (check_metadata_report(cases[i].name, txt)) {
+                        printf("%s: metadata report is wrong\n", path);
+                        rc = -1;
+                    }
+                }
+                free(txt);
+            }
             fclose(inf);
         }
 
@@ -209,10 +250,68 @@ next:
     return rc;
 }
 
+/* A protected item cannot be decoded without its key; the loader must fall
+ * back to the container view and still report the protection. */
+static int
+test_protected(void)
+{
+    char path[512];
+    struct file_ops *ops;
+    struct pic *p;
+    FILE *inf;
+    long sz;
+    char *txt;
+    int rc = 0;
+
+    snprintf(path, sizeof(path), "%s/avif_prot.avif", TEST_DATA_DIR);
+    ops = file_probe(path);
+    if (!ops || strcmp(ops->name, "AVIF")) {
+        printf("%s: not detected as AVIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (!p) {
+        printf("%s: a protected item broke the load\n", path);
+        return -1;
+    }
+    if (p->width != 100 || p->height != 62) {
+        printf("%s: protected picture came out %dx%d\n", path, p->width,
+               p->height);
+        rc = -1;
+    }
+    inf = tmpfile();
+    if (!inf) {
+        file_free(ops, p);
+        return -1;
+    }
+    ops->info(inf, p);
+    fflush(inf);
+    sz = ftell(inf);
+    txt = malloc((size_t)(sz > 0 ? sz : 0) + 1);
+    rewind(inf);
+    if (txt && sz > 0 && fread(txt, 1, (size_t)sz, inf) == (size_t)sz) {
+        txt[sz] = 0;
+        if (!strstr(txt, "protection entries 1") ||
+            !strstr(txt, "item_protection_index=1")) {
+            printf("%s: protection was not reported\n", path);
+            rc = -1;
+        }
+    } else {
+        rc = -1;
+    }
+    free(txt);
+    fclose(inf);
+    file_free(ops, p);
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
     if (test_real_samples()) {
+        return -1;
+    }
+    if (test_protected()) {
         return -1;
     }
     return 0;

@@ -400,6 +400,12 @@ typedef struct {
     // struct mdat_box *mdat;
 
     struct avif_item *items;
+
+    /* metadata items tied to the primary picture */
+    uint32_t exif_id;
+    uint32_t xmp_id;
+    uint32_t thumb_id;
+    int exif_orientation;   /* Exif Orientation tag, 0 when absent */
 } AVIF;
 
 

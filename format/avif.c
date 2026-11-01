@@ -18,6 +18,7 @@ extern int vlog_av1;
 VLOG_REGISTER(avif, DEBUG)
 
 static void AVIF_free(struct pic *p);
+static int avif_item_protected(const AVIF *h, uint32_t item_id);
 
 static int
 AVIF_probe(FILE *f)
@@ -592,13 +593,16 @@ void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)
 {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
-    while (len > 0) {
-        int sample_len = p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
-        len -= 4;
-        p += 4;
-        // parse_nalu(p, sample_len, pixels);
-        len -= sample_len;
-        p += sample_len;
+    while (len >= 4) {
+        uint32_t sample_len = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+                              (uint32_t)p[2] << 8 | p[3];
+        /* the payloads reach this legacy path only when they could not be
+         * decoded, so the sample framing cannot be trusted */
+        if (sample_len > len - 4) {
+            break;
+        }
+        len -= 4 + sample_len;
+        p += 4 + sample_len;
     }
 }
 
@@ -652,6 +656,11 @@ static void decode_items(AVIF *h, FILE *f, uint64_t file_size,
 {
     for (int i = 0; i < h->meta.iloc.item_count; i++) {
         if (pre_read_item(h, f, i, file_size) < 0) {
+            continue;
+        }
+        if (avif_item_protected(h, h->items[i].item->item_id)) {
+            VDBG(avif, "item %u is protected, skipping",
+                 h->items[i].item->item_id);
             continue;
         }
         if (h->items[i].type == TYPE2UINT("mime")) {
@@ -1118,6 +1127,207 @@ avif_build_items(AVIF *h)
     }
 }
 
+static int
+avif_item_index(const AVIF *h, uint32_t item_id)
+{
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        if (h->items[i].item->item_id == item_id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static const struct infe_box *
+avif_item_info(const AVIF *h, uint32_t item_id)
+{
+    for (int i = 0; i < (int)h->meta.iinf.entry_count; i++) {
+        if (h->meta.iinf.item_infos[i].item_id == item_id) {
+            return &h->meta.iinf.item_infos[i];
+        }
+    }
+    return NULL;
+}
+
+static uint64_t
+avif_item_size(const AVIF *h, uint32_t item_id)
+{
+    int idx;
+    uint64_t total = 0;
+
+    if (!h->items) {
+        return 0;
+    }
+    idx = avif_item_index(h, item_id);
+    if (idx < 0) {
+        return 0;
+    }
+    for (int i = 0; i < h->items[idx].item->extent_count; i++) {
+        total += h->items[idx].item->extents[i].extent_length;
+    }
+    return total;
+}
+
+static int
+avif_item_protected(const AVIF *h, uint32_t item_id)
+{
+    const struct infe_box *infe = avif_item_info(h, item_id);
+
+    return infe && infe->item_protection_index != 0;
+}
+
+static int
+avif_ref_targets(const struct itemtype_ref_box *r, uint32_t item_id)
+{
+    for (int i = 0; i < r->ref_count; i++) {
+        if (r->to_item_ids[i] == item_id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint32_t
+avif_rd32(const uint8_t *p, int le)
+{
+    return le ? (uint32_t)p[0] | (uint32_t)p[1] << 8 |
+                (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24
+              : (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+                (uint32_t)p[2] << 8 | (uint32_t)p[3];
+}
+
+static uint16_t
+avif_rd16(const uint8_t *p, int le)
+{
+    return le ? (uint16_t)(p[0] | p[1] << 8) : (uint16_t)(p[0] << 8 | p[1]);
+}
+
+/* The Exif item is a 4 byte TIFF header offset followed by the TIFF stream.
+ * Only the Orientation tag of IFD0 is read. */
+static int
+avif_exif_orientation(const uint8_t *data, size_t len)
+{
+    const uint8_t *t;
+    size_t tlen;
+    uint32_t off, ifd;
+    int le;
+
+    if (!data || len < 8) {
+        return 0;
+    }
+    off = (uint32_t)data[0] << 24 | (uint32_t)data[1] << 16 |
+          (uint32_t)data[2] << 8 | data[3];
+    if (off > len - 4) {
+        return 0;
+    }
+    t = data + 4 + off;
+    tlen = len - 4 - off;
+    if (tlen < 8 || !((t[0] == 'I' && t[1] == 'I') ||
+                      (t[0] == 'M' && t[1] == 'M'))) {
+        return 0;
+    }
+    le = t[0] == 'I';
+    if (avif_rd16(t + 2, le) != 42) {
+        return 0;
+    }
+    ifd = avif_rd32(t + 4, le);
+    if (ifd > tlen - 2) {
+        return 0;
+    }
+    const uint8_t *p = t + ifd;
+    uint16_t n = avif_rd16(p, le);
+    p += 2;
+    for (int i = 0; i < n; i++, p += 12) {
+        if (p + 12 > t + tlen) {
+            return 0;
+        }
+        if (avif_rd16(p, le) == 0x0112 && avif_rd16(p + 2, le) == 3 &&
+            avif_rd32(p + 4, le) >= 1) {
+            return avif_rd16(p + 8, le);
+        }
+    }
+    return 0;
+}
+
+/* XMP is a mime item whose content type is the RDF/XML one; other mime
+ * items describe the picture differently. */
+static int
+avif_item_is_xmp(const AVIF *h, uint32_t item_id)
+{
+    const struct infe_box *infe = avif_item_info(h, item_id);
+
+    return infe && infe->content_type &&
+           strncmp(infe->content_type, "application/rdf+xml", 19) == 0;
+}
+
+/* Exif and XMP describe the primary item through cdsc, a thumbnail points
+ * at it through thmb. */
+static void
+avif_collect_metadata(AVIF *h, uint32_t primary, FILE *f, uint64_t file_size)
+{
+    if (!h->items) {
+        return;
+    }
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        int idx;
+        uint32_t type;
+
+        if ((r->type != TYPE2UINT("cdsc") && r->type != TYPE2UINT("thmb")) ||
+            !primary || !avif_ref_targets(r, primary)) {
+            continue;
+        }
+        idx = avif_item_index(h, r->from_item_id);
+        if (idx < 0) {
+            continue;
+        }
+        type = h->items[idx].type;
+        if (r->type == TYPE2UINT("thmb")) {
+            if (!h->thumb_id) {
+                h->thumb_id = r->from_item_id;
+            }
+        } else if (type == TYPE2UINT("Exif")) {
+            if (!h->exif_id) {
+                h->exif_id = r->from_item_id;
+            }
+        } else if (type == TYPE2UINT("mime")) {
+            if (!h->xmp_id && avif_item_is_xmp(h, r->from_item_id)) {
+                h->xmp_id = r->from_item_id;
+            }
+        }
+    }
+    /* tolerate writers that omit the cdsc reference */
+    if (!h->exif_id) {
+        for (int i = 0; i < h->meta.iloc.item_count; i++) {
+            if (h->items[i].type == TYPE2UINT("Exif")) {
+                h->exif_id = h->items[i].item->item_id;
+                break;
+            }
+        }
+    }
+    if (!h->xmp_id) {
+        for (int i = 0; i < h->meta.iloc.item_count; i++) {
+            uint32_t id = h->items[i].item->item_id;
+
+            if (h->items[i].type == TYPE2UINT("mime") &&
+                avif_item_is_xmp(h, id)) {
+                h->xmp_id = id;
+                break;
+            }
+        }
+    }
+    if (h->exif_id) {
+        int idx = avif_item_index(h, h->exif_id);
+
+        if (idx >= 0 && pre_read_item(h, f, idx, file_size) == 0) {
+            h->exif_orientation =
+                avif_exif_orientation(h->items[idx].data, h->items[idx].length);
+            free(h->items[idx].data);
+            h->items[idx].data = NULL;
+        }
+    }
+}
+
 static struct pic*
 AVIF_load(const char *filename, int skip_flag UNUSED)
 {
@@ -1142,10 +1352,25 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     }
     avif_build_items(h);
 
+    /* Metadata items hang off the primary picture; also record who they
+     * are so AVIF_info() can report them. */
+    uint32_t primary_id = h->meta.pitm.item_id;
+    int prim_idx = avif_find_image_item(h);
+    if (!primary_id && prim_idx >= 0) {
+        primary_id = h->items[prim_idx].item->item_id;
+    }
+    avif_collect_metadata(h, primary_id, f, (uint64_t)file_size);
+
     /* Decode the primary AV1 image item with the in-house spec-based
      * decoder.  The item payload is a low overhead bitstream. */
-    int av01_idx = avif_find_image_item(h);
-    if (av01_idx >= 0 &&
+    int av01_idx = prim_idx;
+    int protected_primary = av01_idx >= 0 &&
+        avif_item_protected(h, h->items[av01_idx].item->item_id);
+    if (protected_primary) {
+        VWARN(avif, "item %u is protected, not decoding",
+              h->items[av01_idx].item->item_id);
+    }
+    if (!protected_primary && av01_idx >= 0 &&
         pre_read_item(h, f, av01_idx, (uint64_t)file_size) == 0 &&
         h->items[av01_idx].length > 0) {
         uint32_t color_id = h->items[av01_idx].item->item_id;
@@ -1471,7 +1696,31 @@ AVIF_info(FILE *f, struct pic* p)
         }
         fprintf(f, "\n");
     }
-    
+
+    if (h->exif_id || h->xmp_id || h->thumb_id ||
+        h->meta.ipro.protection_count) {
+        fprintf(f, "\tmetadata:\n");
+        if (h->exif_id) {
+            fprintf(f, "\t\texif item %u, %" PRIu64
+                    " bytes, orientation %d\n", h->exif_id,
+                    avif_item_size(h, h->exif_id), h->exif_orientation);
+        }
+        if (h->xmp_id) {
+            const struct infe_box *infe = avif_item_info(h, h->xmp_id);
+            fprintf(f, "\t\txmp item %u, %" PRIu64 " bytes, type %s\n",
+                    h->xmp_id, avif_item_size(h, h->xmp_id),
+                    infe && infe->content_type ? infe->content_type : "?");
+        }
+        if (h->thumb_id) {
+            fprintf(f, "\t\tthumbnail item %u, %" PRIu64 " bytes\n",
+                    h->thumb_id, avif_item_size(h, h->thumb_id));
+        }
+        if (h->meta.ipro.protection_count) {
+            fprintf(f, "\t\tprotection entries %d\n",
+                    h->meta.ipro.protection_count);
+        }
+        fprintf(f, "\n");
+    }
 }
 
 

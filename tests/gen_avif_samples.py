@@ -491,6 +491,125 @@ def make_config_obus(src, name):
     return write_derived(name, ftyp, meta, rest)
 
 
+def make_exif(orientation):
+    """An Exif item payload: 4 byte TIFF offset, then a minimal TIFF."""
+    tiff = b"II" + struct.pack("<H", 42) + struct.pack("<I", 8)
+    tiff += struct.pack("<H", 1)
+    tiff += struct.pack("<HHI", 0x0112, 3, 1)
+    tiff += struct.pack("<H", orientation) + b"\x00\x00"
+    tiff += struct.pack("<I", 0)
+    return struct.pack(">I", 0) + tiff
+
+
+def make_exif_be(orientation, padding=6):
+    """Big-endian TIFF behind a non-zero tiff_header_offset."""
+    tiff = b"MM" + struct.pack(">H", 42) + struct.pack(">I", 8)
+    tiff += struct.pack(">H", 1)
+    tiff += struct.pack(">HHI", 0x0112, 3, 1)
+    tiff += struct.pack(">H", orientation) + b"\x00\x00"
+    tiff += struct.pack(">I", 0)
+    return struct.pack(">I", padding) + b"P" * padding + tiff
+
+
+def make_iinf_meta(items):
+    """infe entries for (item_id, type, content_type, protection_index)."""
+    body = struct.pack(">H", len(items))
+    for item_id, typ, ctype, prot in items:
+        extra = b"x\0"
+        if typ == b"mime":
+            extra += ctype.encode() + b"\0\0"
+        body += full_box(b"infe", 2, b"\0\0\0",
+                         struct.pack(">HH4s", item_id, prot, typ) + extra)
+    return full_box(b"iinf", 0, b"\0\0\0", body)
+
+
+def make_iref_multi(refs):
+    body = b""
+    for typ, frm, to in refs:
+        body += box(typ, struct.pack(">HHH", frm, 1, to))
+    return full_box(b"iref", 0, b"\0\0\0", body)
+
+
+def pack_items(ftyp, hdlr, boxes, payloads, name):
+    """Write items 1..n in payload order and build the enclosing meta."""
+    meta = b""
+    for _ in range(4):
+        data_off = len(ftyp) + len(meta) + 8
+        items = []
+        off = data_off
+        for i, payload in enumerate(payloads):
+            items.append((i + 1, [(off, len(payload))]))
+            off += len(payload)
+        meta = full_box(b"meta", 0, b"\0\0\0",
+                        hdlr + make_pitm(1) + make_iloc(items) +
+                        b"".join(boxes))
+        if data_off == len(ftyp) + len(meta) + 8:
+            break
+    return write_derived(name, ftyp, meta, b"".join(payloads))
+
+
+def make_metadata(src_color, src_thumb, name):
+    """Exif and XMP describe the primary item, a thumbnail hangs off it."""
+    color = open(src_color, "rb").read()
+    ftyp_size = struct.unpack_from(">I", color, 0)[0]
+    ftyp = color[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(color)
+    citems, _, _ = read_iloc(color, boxes[b"iloc"][0])
+    cpayload = item_payload(color, citems[0][1])
+
+    thumb = open(src_thumb, "rb").read()
+    _, _, tboxes, _ = parse_meta(thumb)
+    titems, _, _ = read_iloc(thumb, tboxes[b"iloc"][0])
+    tpayload = item_payload(thumb, titems[0][1])
+
+    items = [(1, b"av01", None, 0), (2, b"Exif", None, 0),
+             (3, b"mime", "application/rdf+xml", 0), (4, b"av01", None, 0)]
+    refs = [(b"cdsc", 2, 1), (b"cdsc", 3, 1), (b"thmb", 4, 1)]
+    xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"/>'
+    meta_boxes = [make_iinf_meta(items), make_iref_multi(refs)]
+    return pack_items(ftyp, hdlr, meta_boxes,
+                      [cpayload, make_exif(6), xmp, tpayload], name)
+
+
+def make_metadata2(src_color, name):
+    """Big-endian Exif with a non-zero TIFF offset, and a mime item that is
+    not XMP: it must not be reported as the picture's XMP."""
+    color = open(src_color, "rb").read()
+    ftyp_size = struct.unpack_from(">I", color, 0)[0]
+    ftyp = color[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(color)
+    citems, _, _ = read_iloc(color, boxes[b"iloc"][0])
+    cpayload = item_payload(color, citems[0][1])
+
+    items = [(1, b"av01", None, 0), (2, b"Exif", None, 0),
+             (3, b"mime", "application/octet-stream", 0)]
+    refs = [(b"cdsc", 2, 1), (b"cdsc", 3, 1)]
+    meta_boxes = [make_iinf_meta(items), make_iref_multi(refs)]
+    return pack_items(ftyp, hdlr, meta_boxes,
+                      [cpayload, make_exif_be(8), b"not xmp"], name)
+
+
+def make_protected(src_color, name):
+    """Mark the primary item protected; the payload must not be decoded."""
+    color = open(src_color, "rb").read()
+    ftyp_size = struct.unpack_from(">I", color, 0)[0]
+    ftyp = color[:ftyp_size]
+    _, _, boxes, hdlr = parse_meta(color)
+    citems, _, _ = read_iloc(color, boxes[b"iloc"][0])
+    cpayload = item_payload(color, citems[0][1])
+
+    ispe = full_box(b"ispe", 0, b"\0\0\0", struct.pack(">II", 100, 62))
+    ipco = box(b"ipco", ispe)
+    ipma = full_box(b"ipma", 0, b"\0\0\0",
+                    struct.pack(">IHB", 1, 1, 1) + b"\x01")
+    iprp = box(b"iprp", ipco + ipma)
+    # one protection_info entry; its scheme is irrelevant to the reader
+    ipro = full_box(b"ipro", 0, b"\0\0\0",
+                    struct.pack(">H", 1) + box(b"sinf", b""))
+    meta_boxes = [make_iinf_meta([(1, b"av01", None, 1)]), iprp, ipro]
+    return pack_items(ftyp, hdlr, meta_boxes, [cpayload], name)
+
+
 def make_alpha(src_color, src_alpha, name):
     """Colour item plus a monochrome alpha item referenced by auxl."""
     color = open(src_color, "rb").read()
@@ -744,9 +863,14 @@ def main():
             ("aux", make_aux_first(mixed, mono, "aux")),
             ("pitm32", make_pitm32(mixed, mono, "pitm32")),
             ("cfgobu", make_config_obus(mixed, "cfgobu")),
+            ("meta", make_metadata(mixed, mono, "meta")),
+            ("meta2", make_metadata2(mixed, "meta2")),
+            ("prot", make_protected(mixed, "prot")),
         ]
         for name, path in derived:
-            shutil.copyfile(mixed_ref, os.path.join(DATA, f"avif_{name}.ref"))
+            if name != "prot":      # the protected sample has no pixels to compare
+                shutil.copyfile(mixed_ref,
+                                os.path.join(DATA, f"avif_{name}.ref"))
             print(f"{name}: {os.path.getsize(path)} bytes (derived)")
 
         # A real alpha item: a lossless monochrome ramp encoded like the other

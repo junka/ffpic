@@ -7164,12 +7164,17 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                      struct bits_vec *v,
                                      struct hevc_param_set *hps,
                                      uint8_t *pixels, int buf_pitch,
-                                     int buf_height) {
+                                     int buf_height, int out_bits) {
     int ret;
     uint32_t SliceAddrRs;
     struct hevc_slice hslice = {
         .nalu = headr,
     };
+
+    /* bits per packed pixel: 0 means the 8 bit BGRA output */
+    if (out_bits == 0) {
+        out_bits = 32;
+    }
 
     hslice.slice = parse_slice_segment_header(v, headr, hps, &SliceAddrRs);
     if (!hslice.slice) {
@@ -7262,7 +7267,7 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
      * fits before the colour conversion writes into it */
     if (sps->chroma_format_idc == CHROMA_420) {
         hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
-        out_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
+        out_pitch = ((crop_w + 15) >> 4) * 16 * (out_bits >> 3);
         if (crop_x < 0 || crop_y < 0 || crop_w <= 0 || crop_h <= 0 ||
             (int64_t)crop_x + crop_w > width ||
             (int64_t)crop_y + crop_h > height ||
@@ -7274,7 +7279,7 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         }
     } else if (sps->chroma_format_idc == CHROMA_400) {
         hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
-        out_pitch = ((((crop_w + 15) >> 4) * 16 * 32 + 31) >> 5) << 2;
+        out_pitch = ((crop_w + 15) >> 4) * 16 * (out_bits >> 3);
         if (crop_x < 0 || crop_y < 0 || crop_w <= 0 || crop_h <= 0 ||
             (int64_t)crop_x + crop_w > width ||
             (int64_t)crop_y + crop_h > height ||
@@ -7304,9 +7309,15 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                   (crop_y / 2) * uv_stride + crop_x / 2;
         v_plane = p.pixel + p.size * 3 / 2 +
                   (crop_y / 2) * uv_stride + crop_x / 2;
-        YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane, v_plane,
-                y_stride, uv_stride, crop_w, crop_h, ctu,
-                full_range, matrix_coeffs);
+        if (out_bits > 32) {
+            YUV420_to_BGRA64(pixels, out_pitch, y_plane, u_plane, v_plane,
+                    y_stride, uv_stride, crop_w, crop_h, ctu, sps->BitDepthY,
+                    full_range, matrix_coeffs);
+        } else {
+            YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
+                    v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                    full_range, matrix_coeffs);
+        }
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
 
@@ -7315,9 +7326,15 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     } else if (sps->chroma_format_idc == CHROMA_400) {
         VDBG(hevc, "we got CHROMA_400");
-        YUV400_to_BGRA32_16bit(pixels, out_pitch,
-                               p.pixel + crop_y * y_stride + crop_x, y_stride,
-                               crop_w, crop_h, ctu);
+        if (out_bits > 32) {
+            YUV400_to_BGRA64(pixels, out_pitch,
+                             p.pixel + crop_y * y_stride + crop_x, y_stride,
+                             crop_w, crop_h, ctu, sps->BitDepthY);
+        } else {
+            YUV400_to_BGRA32_16bit(pixels, out_pitch,
+                                   p.pixel + crop_y * y_stride + crop_x,
+                                   y_stride, crop_w, crop_h, ctu);
+        }
     }
 
 out:
@@ -7345,7 +7362,8 @@ out:
 
 int
 parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
-           int dst_height, void **param_set, struct hevc_param_set *hps)
+           int dst_height, void **param_set, struct hevc_param_set *hps,
+           int out_bits)
 {
     struct hevc_nalu_header h;
     int ret = -EINVAL;
@@ -7398,7 +7416,7 @@ parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
             break;
         }
         if (parse_slice_segment_layer(&h, v, hps, pixels, dst_pitch,
-                                      dst_height) == 0) {
+                                      dst_height, out_bits) == 0) {
             ret = h.nal_unit_type;
         } else {
             VERR(hevc, "failed to decode slice nal");

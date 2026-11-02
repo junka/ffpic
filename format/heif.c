@@ -129,7 +129,7 @@ read_hvcc_box(FILE *f, struct box **bn)
             /* a bad parameter set leaves the slot empty; the slice header
              * then fails its lookup instead of the loader aborting */
             if (parse_nalu(nals[j].nal_units, nals[j].unit_length, NULL, 0, 0,
-                           slot, &b->hps) < 0) {
+                           slot, &b->hps, 0) < 0) {
                 VERR(heif, "failed to parse a parameter set");
             }
             free(nals[j].nal_units);
@@ -210,6 +210,75 @@ uint32_t get_primary_item_id(HEIF *h)
     return h->meta.pitm.item_id;
 }
 
+static struct infe_box *
+heif_item_info(HEIF *h, uint32_t id)
+{
+    for (uint32_t i = 0; i < h->meta.iinf.entry_count; i++) {
+        if (h->meta.iinf.item_infos[i].item_id == id) {
+            return &h->meta.iinf.item_infos[i];
+        }
+    }
+    return NULL;
+}
+
+/* An item carrying a protection index is encrypted; the payload cannot be
+ * decoded without the key, so the decoder must lay off it. */
+static bool
+heif_item_protected(HEIF *h, uint32_t id)
+{
+    struct infe_box *infe = heif_item_info(h, id);
+
+    return infe && infe->item_protection_index != 0;
+}
+
+static int
+heif_item_index(HEIF *h, uint32_t id)
+{
+    for (int i = 0; i < h->meta.iloc.item_count; i++) {
+        if (h->items[i].item->item_id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int
+heif_ref_targets(const struct itemtype_ref_box *r, uint32_t id)
+{
+    for (int i = 0; i < r->ref_count; i++) {
+        if (r->to_item_ids[i] == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint64_t
+heif_item_size(HEIF *h, uint32_t id)
+{
+    int idx = heif_item_index(h, id);
+    uint64_t total = 0;
+
+    if (idx < 0) {
+        return 0;
+    }
+    for (int i = 0; i < h->items[idx].item->extent_count; i++) {
+        total += h->items[idx].item->extents[i].extent_length;
+    }
+    return total;
+}
+
+/* XMP is a mime item whose content type is the RDF/XML one; other mime
+ * items describe the picture differently. */
+static bool
+heif_is_xmp(HEIF *h, uint32_t id)
+{
+    struct infe_box *infe = heif_item_info(h, id);
+
+    return infe && infe->content_type &&
+           strncmp(infe->content_type, "application/rdf+xml", 19) == 0;
+}
+
 struct ispe_box *
 get_ispe_by_item_id(HEIF *h, uint32_t id)
 {
@@ -233,39 +302,75 @@ get_ispe_by_item_id(HEIF *h, uint32_t id)
     return NULL;
 }
 
+/* Concatenate every extent into one item payload.  Extents are stored back
+ * to back in the file (method 0) or in the meta idat box (method 1); method
+ * 2 addresses other items, which cannot be resolved into a byte range. */
 static void
 pre_read_item(HEIF * h, FILE *f, uint32_t idx)
 {
-    // for now make sure, extent_count = 1 work
-    if (h->items[idx].item->extent_count == 1) {
-        h->items[idx].length = h->items[idx].item->extents[0].extent_length;
-        h->items[idx].data = malloc(h->items[idx].length);
-        VDBG(heif, "read item %d, length %" PRIu64 ", method %d", idx,
-             h->items[idx].length, h->items[idx].item->construct_method);
-        if (h->items[idx].item->construct_method == 0) {//file offset
-            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, SEEK_SET);
-            FFREAD_IGNORE(h->items[idx].data, h->items[idx].length, 1, f);
-        } else if (h->items[idx].item->construct_method == 1) {//idat offset
-            memcpy(h->items[idx].data, h->meta.idat.data + h->items[idx].item->base_offset + h->items[idx].item->extents[0].extent_offset, h->items[idx].length);
-            // hexdump(stdout, "idat", "", h->items[idx].data, h->items[idx].length);
-        } else if (h->items[idx].item->construct_method == 2) { // item offset
+    const struct item_location *loc = h->items[idx].item;
+    uint64_t total = 0, off = 0;
 
-        }
-    } else {
-        h->items[idx].data = malloc(1);
-        uint64_t total = 0;
-        for (int i = 0; i < h->items[idx].item->extent_count; i ++) {
-            h->items[idx].data = realloc(h->items[idx].data, h->items[idx].item->extents[i].extent_length);
-            fseek(f, h->items[idx].item->base_offset + h->items[idx].item->extents[i].extent_offset, SEEK_SET);
-            FFREAD_IGNORE(h->items[idx].data, h->items[idx].item->extents[i].extent_length, 1, f);
-            total += h->items[idx].item->extents[i].extent_length;
-        }
-        h->items[idx].length = total;
+    h->items[idx].data = NULL;
+    h->items[idx].length = 0;
+    if (loc->extent_count <= 0) {
+        return;
     }
+    for (int i = 0; i < loc->extent_count; i++) {
+        total += loc->extents[i].extent_length;
+    }
+    h->items[idx].data = malloc(total ? (size_t)total : 1);
+    if (!h->items[idx].data) {
+        VERR(heif, "cannot allocate %" PRIu64 " bytes for item %u", total,
+             loc->item_id);
+        return;
+    }
+    for (int i = 0; i < loc->extent_count; i++) {
+        const struct item_extent *e = &loc->extents[i];
+        uint64_t at = loc->base_offset + e->extent_offset;
+
+        if (e->extent_length == 0) {
+            continue;
+        }
+        if (loc->construct_method == 0) {
+            if (fseek(f, (long)at, SEEK_SET) != 0 ||
+                fread(h->items[idx].data + off, 1,
+                      (size_t)e->extent_length, f) !=
+                    (size_t)e->extent_length) {
+                VERR(heif, "cannot read item %u extent %d", loc->item_id, i);
+                goto fail;
+            }
+        } else if (loc->construct_method == 1) {
+            uint64_t idat_len =
+                h->meta.idat.data ? (uint64_t)h->meta.idat.size - 8 : 0;
+
+            if (at > idat_len || e->extent_length > idat_len - at) {
+                VERR(heif, "item %u extent %d runs past the idat box",
+                     loc->item_id, i);
+                goto fail;
+            }
+            memcpy(h->items[idx].data + off, h->meta.idat.data + at,
+                   (size_t)e->extent_length);
+        } else {
+            VWARN(heif, "item %u uses construction method %u, not supported",
+                  loc->item_id, (unsigned)loc->construct_method);
+            goto fail;
+        }
+        off += e->extent_length;
+    }
+    h->items[idx].length = off;
+    VDBG(heif, "read item %u, length %" PRIu64 ", method %u, extents %d",
+         loc->item_id, h->items[idx].length, (unsigned)loc->construct_method,
+         loc->extent_count);
+    return;
+fail:
+    free(h->items[idx].data);
+    h->items[idx].data = NULL;
+    h->items[idx].length = 0;
 }
 
 int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
-                int height, struct hevc_param_set *hps) {
+                int height, struct hevc_param_set *hps, int out_bits) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     while (len >= 4) {
@@ -276,7 +381,8 @@ int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
             VERR(heif, "sample length %u runs past the item", sample_len);
             return -EINVAL;
         }
-        if (parse_nalu(p, (int)sample_len, pixels, pitch, height, NULL, hps) < 0) {
+        if (parse_nalu(p, (int)sample_len, pixels, pitch, height, NULL, hps,
+                       out_bits) < 0) {
             VERR(heif, "failed to parse nal unit");
             return -EINVAL;
         }
@@ -290,6 +396,79 @@ int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
     return 0;
 }
 
+/* Exif and XMP describe the primary item through cdsc; a thumbnail points
+ * at it through thmb. */
+static void
+heif_collect_metadata(HEIF *h, uint32_t primary, FILE *f)
+{
+    if (!h->items) {
+        return;
+    }
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        int idx;
+        uint32_t type;
+
+        if ((r->type != TYPE2UINT("cdsc") &&
+             r->type != TYPE2UINT("thmb")) ||
+            !primary || !heif_ref_targets(r, primary)) {
+            continue;
+        }
+        idx = heif_item_index(h, r->from_item_id);
+        if (idx < 0) {
+            continue;
+        }
+        type = h->items[idx].type;
+        if (r->type == TYPE2UINT("thmb")) {
+            if (!h->thumb_id) {
+                h->thumb_id = r->from_item_id;
+            }
+        } else if (type == TYPE2UINT("Exif")) {
+            if (!h->exif_id) {
+                h->exif_id = r->from_item_id;
+            }
+        } else if (type == TYPE2UINT("mime")) {
+            if (!h->xmp_id && heif_is_xmp(h, r->from_item_id)) {
+                h->xmp_id = r->from_item_id;
+            }
+        }
+    }
+    /* tolerate writers that omit the cdsc reference */
+    if (!h->exif_id) {
+        for (int i = 0; i < h->meta.iloc.item_count; i++) {
+            if (h->items[i].type == TYPE2UINT("Exif")) {
+                h->exif_id = h->items[i].item->item_id;
+                break;
+            }
+        }
+    }
+    if (!h->xmp_id) {
+        for (int i = 0; i < h->meta.iloc.item_count; i++) {
+            uint32_t id = h->items[i].item->item_id;
+
+            if (h->items[i].type == TYPE2UINT("mime") &&
+                heif_is_xmp(h, id)) {
+                h->xmp_id = id;
+                break;
+            }
+        }
+    }
+    if (h->exif_id) {
+        int idx = heif_item_index(h, h->exif_id);
+
+        if (idx >= 0) {
+            pre_read_item(h, f, idx);
+            if (h->items[idx].data && h->items[idx].length) {
+                h->exif_orientation =
+                    media_exif_orientation(h->items[idx].data,
+                                           h->items[idx].length);
+            }
+            free(h->items[idx].data);
+            h->items[idx].data = NULL;
+        }
+    }
+}
+
 static void
 heif_pic_free(struct pic *p)
 {
@@ -297,8 +476,16 @@ heif_pic_free(struct pic *p)
     pic_free(p);
 }
 
+/* hvcC carries the sequence bit depth; anything above 8 keeps the precision
+ * in 16 bit channels. */
+static int
+heif_output_bits(const struct hvcC_box *conf)
+{
+    return conf && conf->bit_depth_luma_minus8 > 0 ? 64 : 32;
+}
+
 static struct pic *
-heif_pic_alloc(int width, int height)
+heif_pic_alloc(int width, int height, int bits)
 {
     if (width <= 0 || height <= 0) {
         VERR(heif, "item has no usable size: %dx%d", width, height);
@@ -307,10 +494,10 @@ heif_pic_alloc(int width, int height)
     struct pic *p = pic_alloc(sizeof(HEIF));
     p->width = ((width + 3) >> 2) << 2;
     p->height = height;
-    p->depth = 32;
-    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    p->depth = bits;
+    p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
     p->pixels = malloc((size_t)p->pitch * p->height);
-    p->format = CS_PIXELFORMAT_RGBA8888;
+    p->format = bits > 32 ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGBA8888;
     if (!p->pixels) {
         pic_free(p);
         return NULL;
@@ -319,12 +506,13 @@ heif_pic_alloc(int width, int height)
 }
 
 static struct pic *
-HEIF_load_one(int width, int height, uint8_t *data, int length, struct hevc_param_set *hps) {
-    struct pic *p = heif_pic_alloc(width, height);
+HEIF_load_one(int width, int height, uint8_t *data, int length,
+              struct hevc_param_set *hps, int bits) {
+    struct pic *p = heif_pic_alloc(width, height, bits);
     if (!p) {
         return NULL;
     }
-    if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps) < 0) {
+    if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps, bits) < 0) {
         VERR(heif, "failed to decode a %dx%d item", p->width, p->height);
         heif_pic_free(p);
         return NULL;
@@ -402,14 +590,16 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
                 get_hvcc_from_item_id(h, ref->to_item_ids[j]);
             struct ispe_box *ispe =
                 get_ispe_by_item_id(h, ref->to_item_ids[j]);
-            if (!item || item->type != TYPE2UINT("hvc1") || !conf || !ispe) {
+            if (!item || item->type != TYPE2UINT("hvc1") || !conf || !ispe ||
+                !item->data || item->length == 0) {
                 VERR(heif, "grid tile %d is not a decodable hvc1 item", j);
                 continue;
             }
             struct pic *tile = HEIF_load_one((int)ispe->image_width,
                                              (int)ispe->image_height,
                                              item->data, item->length,
-                                             &conf->hps);
+                                             &conf->hps,
+                                             heif_output_bits(conf));
             if (!tile) {
                 VERR(heif, "failed to decode grid tile %d", j);
                 continue;
@@ -471,6 +661,14 @@ decode_primary_item(HEIF *h, struct pic *p)
         return 0;
     }
     struct heif_item *pri_item = &h->items[pri_index];
+    if (heif_item_protected(h, primary_id)) {
+        VWARN(heif, "item %u is protected, not decoding", primary_id);
+        return 0;
+    }
+    if (!pri_item->data || pri_item->length == 0) {
+        VERR(heif, "primary item %u has no payload", primary_id);
+        return 0;
+    }
     if (pri_item->type == TYPE2UINT("grid")) {
         // grid must have iref and decode the refered data
         num += decode_grid_items(h, pri_item, p);
@@ -482,7 +680,7 @@ decode_primary_item(HEIF *h, struct pic *p)
             return 0;
         }
         if (decode_hvc1(pri_item->data, pri_item->length, p->pixels, p->pitch,
-                        p->height, &conf->hps) < 0) {
+                        p->height, &conf->hps, p->depth) < 0) {
             VERR(heif, "failed to decode the primary item");
             return 0;
         }
@@ -491,8 +689,159 @@ decode_primary_item(HEIF *h, struct pic *p)
     return num;
 }
 
+/* Auxiliary types from ISO/IEC 23008-12 and the CICP systems URNs: auxid 1
+ * carries alpha, auxid 2 carries depth. */
+static bool
+heif_aux_is_alpha(const char *aux_type)
+{
+    return strcmp(aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0 ||
+           strcmp(aux_type, "urn:mpeg:avc:2015:auxid:1") == 0 ||
+           strcmp(aux_type, "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha") == 0;
+}
+
+static bool
+heif_aux_is_depth(const char *aux_type)
+{
+    return strcmp(aux_type, "urn:mpeg:hevc:2015:auxid:2") == 0 ||
+           strcmp(aux_type, "urn:mpeg:avc:2015:auxid:2") == 0 ||
+           strcmp(aux_type, "urn:mpeg:mpegB:cicp:systems:auxiliary:depth") == 0;
+}
+
+/* A prem reference from the colour item to its alpha item says the stored
+ * colour samples are already multiplied by alpha. */
+static bool
+heif_alpha_is_premultiplied(const HEIF *h, uint32_t color_id,
+                            uint32_t alpha_id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        if (r->type != FOURCC2UINT('p', 'r', 'e', 'm') ||
+            r->from_item_id != color_id) {
+            continue;
+        }
+        for (int j = 0; j < r->ref_count; j++) {
+            if (r->to_item_ids[j] == alpha_id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Only the alpha channel comes from the auxiliary plane.  The packed output
+ * carries straight alpha, so a premultiplied colour item gets its samples
+ * divided back by alpha. */
+static void
+heif_apply_alpha(struct pic *p, const struct pic *alpha, bool premultiplied)
+{
+    int w = p->width < alpha->width ? p->width : alpha->width;
+    int h = p->height < alpha->height ? p->height : alpha->height;
+    int wide = p->depth > 32;
+    int amax = wide ? 65535 : 255;
+
+    if (w != p->width || h != p->height) {
+        VWARN(heif, "alpha plane %dx%d does not match the colour item %dx%d",
+              alpha->width, alpha->height, p->width, p->height);
+    }
+    for (int y = 0; y < h; y++) {
+        const uint8_t *src = (const uint8_t *)alpha->pixels +
+                             (size_t)y * alpha->pitch;
+        uint8_t *dst = (uint8_t *)p->pixels + (size_t)y * p->pitch;
+        for (int x = 0; x < w; x++) {
+            int a;
+            uint8_t *px = dst + (size_t)x * (p->depth >> 3);
+
+            if (wide) {
+                a = ((const uint16_t *)src)[x * 4 + 3];
+                ((uint16_t *)px)[3] = (uint16_t)a;
+            } else {
+                a = src[x * 4 + 3];
+                px[3] = (uint8_t)a;
+            }
+            if (!premultiplied) {
+                continue;
+            }
+            for (int c = 0; c < 3; c++) {
+                int v = a ? (wide ? ((uint16_t *)px)[c] : px[c]) : 0;
+
+                if (a) {
+                    v = (v * amax + a / 2) / a;
+                    if (v > amax) {
+                        v = amax;
+                    }
+                }
+                if (wide) {
+                    ((uint16_t *)px)[c] = (uint16_t)v;
+                } else {
+                    px[c] = (uint8_t)v;
+                }
+            }
+        }
+    }
+}
+
+/* Container colour information wins over the CICP codes in the HEVC VUI. */
+static struct cs_profile *
+heif_color_profile(HEIF *h, uint32_t item_id)
+{
+    struct colr_box *colr = (struct colr_box *)get_ipma_item_from_item_id(
+        h, item_id, FOURCC2UINT('c', 'o', 'l', 'r'));
+
+    if (colr) {
+        if (colr->icc_data && colr->icc_len) {
+            struct cs_profile *cp =
+                cs_profile_from_icc(colr->icc_data, colr->icc_len);
+            if (cp) {
+                return cp;
+            }
+            VWARN(heif, "the embedded ICC profile is not supported");
+        }
+        if (colr->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
+            struct cs_profile *cp =
+                cs_profile_from_cicp(colr->color_primaries,
+                                     colr->transfer_characteristics);
+            if (cp) {
+                return cp;
+            }
+        }
+    }
+    struct hvcC_box *conf = get_hvcc_from_item_id(h, item_id);
+    if (!conf) {
+        return NULL;
+    }
+    for (int i = 0; i < 16; i++) {
+        struct sps *sps = conf->hps.sps[i];
+        if (sps && sps->vui && sps->vui->colour_description_present_flag) {
+            return cs_profile_from_cicp(sps->vui->colour_primaries,
+                                        sps->vui->transfer_characteristics);
+        }
+    }
+    return NULL;
+}
+
+/* Applied to the colour samples before the alpha plane is merged, so the
+ * alpha channel is never touched by the colour transform. */
+static void
+heif_apply_color(HEIF *h, uint32_t item_id, struct pic *p)
+{
+    struct cs_profile *cp = heif_color_profile(h, item_id);
+    if (!cp) {
+        return;
+    }
+    if (!cs_profile_is_identity(cp)) {
+        if (p->depth > 32) {
+            cs_profile_apply_bgra16(cp, (uint8_t *)p->pixels, p->width,
+                                    p->height, p->pitch);
+        } else {
+            cs_profile_apply_bgra(cp, (uint8_t *)p->pixels, p->width,
+                                  p->height, p->pitch);
+        }
+    }
+    cs_profile_free(cp);
+}
+
 static int
-decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p UNUSED)
+decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p)
 {
     struct itemtype_ref_box *ref;
     for (int i = 0; i < h->meta.iref.refs_count; i++) {
@@ -509,26 +858,43 @@ decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p U
                 if (r->type == TYPE2UINT("hvc1") && ref->type == TYPE2UINT("auxl")) {
                     struct hvcC_box *conf = get_hvcc_from_item_id(h, r->item->item_id);
                     struct auxC_box *auxc = get_auxc_from_item_id(h, r->item->item_id);
-                    if (!conf || !auxc) {
+                    if (!conf || !auxc || !auxc->aux_type) {
                         continue;
                     }
-                    if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
-                        (strcmp(auxc->aux_type, "urn:mpeg:avc:2015:auxid:1") == 0) ||
-                        (strcmp(auxc->aux_type, "urn:mpeg:mpegB:cicp:systems:auxiliary:alpha"))) {
-                        // alpha channel
-                        VDBG(heif, "decoding auxl image: alpha plane");
-                        struct pic *p1 = HEIF_load_one(p->width, p->height, r->data, r->length, &conf->hps);
-                        if (!p1) {
+                    if (heif_aux_is_alpha(auxc->aux_type)) {
+                        if (heif_item_protected(h, r->item->item_id)) {
+                            VWARN(heif, "alpha item %u is protected, skipping",
+                                  r->item->item_id);
                             continue;
                         }
-                        blend_BGRA32_8bit_alpha((uint8_t*)(p->pixels), (uint8_t*)p1->pixels, p->pitch, p->height);
+                        if (!r->data || r->length == 0) {
+                            VWARN(heif, "alpha item %u has no payload",
+                                  r->item->item_id);
+                            continue;
+                        }
+                        bool prem = heif_alpha_is_premultiplied(
+                            h, primary_id, r->item->item_id);
+                        struct ispe_box *ispe =
+                            get_ispe_by_item_id(h, r->item->item_id);
+                        int aw = ispe ? (int)ispe->image_width : p->width;
+                        int ah = ispe ? (int)ispe->image_height : p->height;
+                        VDBG(heif, "decoding auxl image: alpha plane%s",
+                             prem ? " (premultiplied)" : "");
+                        struct pic *p1 = HEIF_load_one(aw, ah, r->data,
+                                                       r->length, &conf->hps,
+                                                       p->depth);
+                        if (!p1) {
+                            VWARN(heif, "cannot decode the alpha item");
+                            continue;
+                        }
+                        heif_apply_alpha(p, p1, prem);
                         pic_free(p1);
-                    } else if ((strcmp(auxc->aux_type, "urn:mpeg:hevc:2015:auxid:1") == 0) ||
-                        (strcmp(auxc->aux_type, "urn:mpeg:avc:2015:auxid:1") == 0)) {
-                        //depth channel
-                        VDBG(heif, "decoding auxl image: depth plane");
+                    } else if (heif_aux_is_depth(auxc->aux_type)) {
+                        VDBG(heif, "skipping auxl image: depth plane");
+                    } else {
+                        VDBG(heif, "skipping auxl image of type %s",
+                             auxc->aux_type);
                     }
-                    
                 } else if (r->type == TYPE2UINT("Exif") && ref->type == TYPE2UINT("cdsc")) {
                     VDBG(heif, "exif %" PRIu64 "", r->length);
                     // the exif payload starts after the 4-byte tiff header offset
@@ -561,6 +927,79 @@ is_grid_tile(HEIF *h, uint32_t id)
     return false;
 }
 
+/* An auxiliary item is the source of an auxl reference; it is a plane of
+ * another picture, never a picture to show on its own. */
+static bool
+is_aux_item(HEIF *h, uint32_t id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+        if (ref->type == TYPE2UINT("auxl") && ref->from_item_id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* irot, imir and clap rewrite the packed picture after the alpha plane has
+ * been merged, in the order the properties are associated in ipma. */
+static void
+heif_apply_transforms(HEIF *h, uint32_t item_id, struct pic *p)
+{
+    struct packed_frame frame = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+
+    if (packed_apply_transforms(&h->meta.iprp, item_id, &frame) < 0) {
+        return;
+    }
+    p->pixels = frame.pixels;
+    p->width = frame.width;
+    p->height = frame.height;
+    p->pitch = frame.pitch;
+}
+
+/* A thumbnail is referenced by the picture it depicts, not a picture of its
+ * own to show. */
+static bool
+is_thumbnail(HEIF *h, uint32_t id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+        if (ref->type == TYPE2UINT("thmb") && ref->from_item_id == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A grid is composed of tiles; the first tile's hvcC tells the output
+ * depth of the composed picture. */
+static int
+heif_grid_output_bits(HEIF *h, uint32_t grid_id)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+
+        if (ref->type != TYPE2UINT("dimg") ||
+            ref->from_item_id != grid_id) {
+            continue;
+        }
+        for (int j = 0; j < ref->ref_count; j++) {
+            struct hvcC_box *conf =
+                get_hvcc_from_item_id(h, ref->to_item_ids[j]);
+            if (conf) {
+                return heif_output_bits(conf);
+            }
+        }
+    }
+    return 32;
+}
+
 static int
 decode_items(HEIF *h, FILE *f, struct pic *p)
 {
@@ -570,8 +1009,15 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     }
 
     if (has_primary_item(h)) {
+        uint32_t primary_id = get_primary_item_id(h);
+
         num = decode_primary_item(h, p);
-        num += decode_reference_items_for_primary(h, get_primary_item_id(h), p);
+        if (!num) {
+            return 0;
+        }
+        heif_apply_color(h, primary_id, p);
+        num += decode_reference_items_for_primary(h, primary_id, p);
+        heif_apply_transforms(h, primary_id, p);
         return num;
     }
     // we may have no primary id
@@ -584,35 +1030,50 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             // hexdump(stdout, "exif:", "", h->items[i].data, h->items[i].length);
             VDBG(heif, "mime %" PRIu64, h->items[i].length);
         } else if (h->items[i].type == TYPE2UINT("hvc1")) {
-            if (is_grid_tile(h, h->items[i].item->item_id)) {
+            if (is_grid_tile(h, h->items[i].item->item_id) ||
+                is_aux_item(h, h->items[i].item->item_id) ||
+                is_thumbnail(h, h->items[i].item->item_id) ||
+                heif_item_protected(h, h->items[i].item->item_id)) {
                 continue;
             }
             //take it as real coded data
             VINFO(heif, "decoding id 0x%p len %" PRIu64, (void*)h->items[i].data, h->items[i].length);
             struct hvcC_box *conf = get_hvcc_from_item_id(h, h->items[i].item->item_id);
             struct ispe_box *ispe = get_ispe_by_item_id(h, h->items[i].item->item_id);
-            if (!conf || !ispe) {
+            if (!conf || !ispe || !h->items[i].data ||
+                h->items[i].length == 0) {
                 continue;
             }
             VINFO(heif, "decoding sub items, width %u, height %u", ispe->image_width, ispe->image_height);
             struct pic *p1 = HEIF_load_one((int)ispe->image_width, (int)ispe->image_height,
-                                           h->items[i].data, h->items[i].length, &conf->hps);
+                                           h->items[i].data, h->items[i].length,
+                                           &conf->hps, heif_output_bits(conf));
             if (!p1) {
                 continue;
             }
+            heif_apply_color(h, h->items[i].item->item_id, p1);
+            heif_apply_transforms(h, h->items[i].item->item_id, p1);
             file_enqueue_pic(p1);
             num++;
         } else if (h->items[i].type == TYPE2UINT("grid")) {
+            if (is_thumbnail(h, h->items[i].item->item_id) ||
+                heif_item_protected(h, h->items[i].item->item_id)) {
+                continue;
+            }
             struct grid ig;
             if (read_grid_header(h->items + i, &ig) < 0) {
                 continue;
             }
             struct pic *p1 = heif_pic_alloc((int)ig.output_width,
-                                            (int)ig.output_height);
+                                            (int)ig.output_height,
+                                            heif_grid_output_bits(
+                                                h, h->items[i].item->item_id));
             if (!p1) {
                 continue;
             }
             if (decode_grid_items(h, h->items + i, p1)) {
+                heif_apply_color(h, h->items[i].item->item_id, p1);
+                heif_apply_transforms(h, h->items[i].item->item_id, p1);
                 file_enqueue_pic(p1);
                 num++;
             } else {
@@ -659,7 +1120,8 @@ decode_moov(FILE *f, struct moov_box *b)
                 uint8_t *data = malloc(size);
                 FFREAD_IGNORE(data, size, 1, f);
                 // printf("load one for %d, length %d\n", k, size);
-                struct pic *p1 = HEIF_load_one(width, height, data, size, NULL);
+                struct pic *p1 = HEIF_load_one(width, height, data, size, NULL,
+                                               32);
                 if (p1) {
                     file_enqueue_pic(p1);
                 }
@@ -753,9 +1215,18 @@ HEIF_load(const char *filename, int skip_flag)
 
     p->width = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
-    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    if (has_primary_item(h)) {
+        uint32_t pid = get_primary_item_id(h);
+        struct hvcC_box *conf = get_hvcc_from_item_id(h, pid);
+
+        p->depth = conf ? heif_output_bits(conf)
+                        : heif_grid_output_bits(h, pid);
+    }
+    p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
     p->pixels = malloc((size_t)p->pitch * p->height);
-    p->format = CS_PIXELFORMAT_RGB888;
+    p->format = p->depth > 32 ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGB888;
+    heif_collect_metadata(h, has_primary_item(h) ? get_primary_item_id(h) : 0,
+                          f);
     int n = 0;
     if (!skip_flag) {
         n = decode_items(h, f, p);
@@ -777,6 +1248,16 @@ HEIF_load(const char *filename, int skip_flag)
         if (n > 1) {
             file_enqueue_pic(p);
             return NULL;
+        }
+        /* A protected primary cannot be decrypted, so the container view
+         * (zeroed pixels at the ispe size) is all that can be returned. */
+        if (heif_item_protected(h, get_primary_item_id(h))) {
+            VWARN(heif, "no decodable primary item, using the ispe size %dx%d",
+                  p->width, p->height);
+            if (p->pixels) {
+                memset(p->pixels, 0, (size_t)p->pitch * p->height);
+            }
+            return p;
         }
     }
     HEIF_free(p);
@@ -959,6 +1440,30 @@ HEIF_info(FILE *f, struct pic* p)
             h->meta.iref.refs[i].ref_count);
         for (int j = 0; j < h->meta.iref.refs[i].ref_count; j ++) {
             fprintf(f, ",to_item=%d",  h->meta.iref.refs[i].to_item_ids[j]);
+        }
+        fprintf(f, "\n");
+    }
+    if (h->exif_id || h->xmp_id || h->thumb_id ||
+        h->meta.ipro.protection_count) {
+        fprintf(f, "\tmetadata:\n");
+        if (h->exif_id) {
+            fprintf(f, "\t\texif item %u, %" PRIu64
+                    " bytes, orientation %d\n", h->exif_id,
+                    heif_item_size(h, h->exif_id), h->exif_orientation);
+        }
+        if (h->xmp_id) {
+            struct infe_box *infe = heif_item_info(h, h->xmp_id);
+            fprintf(f, "\t\txmp item %u, %" PRIu64 " bytes, type %s\n",
+                    h->xmp_id, heif_item_size(h, h->xmp_id),
+                    infe && infe->content_type ? infe->content_type : "?");
+        }
+        if (h->thumb_id) {
+            fprintf(f, "\t\tthumbnail item %u, %" PRIu64 " bytes\n",
+                    h->thumb_id, heif_item_size(h, h->thumb_id));
+        }
+        if (h->meta.ipro.protection_count) {
+            fprintf(f, "\t\tprotection entries %d\n",
+                    h->meta.ipro.protection_count);
         }
         fprintf(f, "\n");
     }

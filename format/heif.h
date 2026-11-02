@@ -125,6 +125,12 @@ typedef struct {
 
     int item_num;
     struct heif_item *items;
+
+    /* metadata items tied to the primary picture */
+    uint32_t exif_id;
+    uint32_t xmp_id;
+    uint32_t thumb_id;
+    int exif_orientation;   /* Exif Orientation tag, 0 when absent */
 } HEIF;
 
 void HEIF_init(void);

@@ -86,7 +86,7 @@ test_sei_nal(void)
     nal[0] = (uint8_t)(PREFIX_SEI_NUT << 1);
     nal[1] = 1;
 
-    type = parse_nalu(nal, LEN, pixels, 0, 0, NULL, NULL);
+    type = parse_nalu(nal, LEN, pixels, 0, 0, NULL, NULL, 0);
     free(nal);
     if (type != PREFIX_SEI_NUT || pixels != NULL) {
         printf("sei nal parsed as type %u\n", (unsigned)type);
@@ -105,9 +105,9 @@ test_bad_nal(void)
     uint8_t slice[2] = {(uint8_t)(IDR_W_RADL << 1), 1};
     uint8_t *pixels = NULL;
 
-    if (parse_nalu(short_nal, sizeof(short_nal), pixels, 0, 0, NULL, NULL) != -EINVAL ||
-        parse_nalu(forbidden_bit, sizeof(forbidden_bit), pixels, 0, 0, NULL, NULL) != -EINVAL ||
-        parse_nalu(slice, sizeof(slice), pixels, 0, 0, NULL, NULL) != -EINVAL) {
+    if (parse_nalu(short_nal, sizeof(short_nal), pixels, 0, 0, NULL, NULL, 0) != -EINVAL ||
+        parse_nalu(forbidden_bit, sizeof(forbidden_bit), pixels, 0, 0, NULL, NULL, 0) != -EINVAL ||
+        parse_nalu(slice, sizeof(slice), pixels, 0, 0, NULL, NULL, 0) != -EINVAL) {
         printf("a malformed nal unit was not rejected\n");
         return -1;
     }
@@ -239,6 +239,19 @@ test_dst_scalar(void)
     return 0;
 }
 
+/* The metadata items hang off the primary picture and the report walks
+ * them; the identifiers pin the item numbering the fixture uses. */
+static int
+check_metadata_report(const char *txt)
+{
+    if (!strstr(txt, "exif item 2") || !strstr(txt, "orientation 6") ||
+        !strstr(txt, "application/rdf+xml") ||
+        !strstr(txt, "thumbnail item 4")) {
+        return -1;
+    }
+    return 0;
+}
+
 /* Real x265 still images wrapped in a minimal heif container, each paired
  * with the bgra frame ffmpeg's own hevc decoder produces.  Both files come
  * from tests/gen_hevc_samples.py.  The samples cover sao on and off, tiles,
@@ -253,21 +266,38 @@ test_real_samples(void)
         const char *name;
         int w, h, tol;
         int mono;
+        int alpha;
+        int wide;
     } cases[] = {
-        {"hevc_gradient", 96, 96, 16, 0},
-        {"hevc_noise", 96, 96, 16, 0},
-        {"hevc_odd", 100, 62, 16, 0},
-        {"hevc_ctb16", 96, 96, 16, 0},
-        {"hevc_tiles", 128, 96, 16, 0},
-        {"hevc_wpp", 128, 96, 16, 0},
-        {"hevc_nosao", 96, 96, 16, 0},
-        {"hevc_highqp", 96, 96, 16, 0},
-        {"hevc_lossless", 64, 64, 4, 0},
-        {"hevc_mono", 96, 96, 8, 1},
+        {"hevc_gradient", 96, 96, 16, 0, 0, 0},
+        {"hevc_noise", 96, 96, 16, 0, 0, 0},
+        {"hevc_odd", 100, 62, 16, 0, 0, 0},
+        {"hevc_ctb16", 96, 96, 16, 0, 0, 0},
+        {"hevc_tiles", 128, 96, 16, 0, 0, 0},
+        {"hevc_wpp", 128, 96, 16, 0, 0, 0},
+        {"hevc_nosao", 96, 96, 16, 0, 0, 0},
+        {"hevc_highqp", 96, 96, 16, 0, 0, 0},
+        {"hevc_lossless", 64, 64, 4, 0, 0, 0},
+        {"hevc_mono", 96, 96, 8, 1, 0, 0},
+        {"hevc_alpha", 96, 96, 8, 0, 1, 0},
+        {"hevc_alpha_prem", 96, 96, 24, 0, 1, 0},
+        {"hevc_colr", 96, 96, 24, 0, 0, 0},
+        {"hevc_vui", 96, 96, 24, 0, 0, 0},
+        {"hevc_irot90", 96, 96, 8, 0, 0, 0},
+        {"hevc_imir0", 96, 96, 8, 0, 0, 0},
+        {"hevc_clap", 60, 40, 8, 0, 0, 0},
+        {"hevc_rotimir", 96, 96, 8, 0, 0, 0},
+        {"hevc_protected", 96, 96, 0, 0, 1, 0},
+        {"hevc_meta", 96, 96, 8, 0, 0, 0},
+        {"hevc_extents", 96, 96, 8, 0, 0, 0},
+        {"hevc_idat", 96, 96, 8, 0, 0, 0},
+        /* 16 bit output, the tolerance is in 16 bit units; the colour
+         * samples carry swscale's 4:2:0 chroma upsampling difference */
+        {"hevc_tenbit", 96, 96, 1024, 0, 0, 1},
+        {"hevc_twelvebit", 96, 96, 1024, 0, 0, 1},
+        {"hevc_tenbit_mono", 96, 96, 512, 1, 0, 1},
     };
     int rc = 0;
-
-    file_ops_init();
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         char path[512], refpath[512];
@@ -295,13 +325,40 @@ test_real_samples(void)
             goto next;
         }
 
+        if (strcmp(cases[i].name, "hevc_meta") == 0) {
+            FILE *inf = tmpfile();
+            if (inf) {
+                long sz;
+                ops->info(inf, p);
+                fflush(inf);
+                sz = ftell(inf);
+                if (sz > 0) {
+                    char *txt = malloc((size_t)sz + 1);
+                    rewind(inf);
+                    if (!txt ||
+                        fread(txt, 1, (size_t)sz, inf) != (size_t)sz) {
+                        rc = -1;
+                    } else {
+                        txt[sz] = 0;
+                        if (check_metadata_report(txt)) {
+                            printf("%s: metadata report is wrong\n", path);
+                            rc = -1;
+                        }
+                    }
+                    free(txt);
+                }
+                fclose(inf);
+            }
+        }
+
         FILE *f = fopen(refpath, "rb");
         if (!f) {
             printf("%s: cannot open the reference\n", refpath);
             rc = -1;
             goto next;
         }
-        size_t ref_size = (size_t)cases[i].w * cases[i].h * 4;
+        size_t bpp = cases[i].wide ? 8 : 4;
+        size_t ref_size = (size_t)cases[i].w * cases[i].h * bpp;
         uint8_t *ref = malloc(ref_size);
         if (!ref || fread(ref, 1, ref_size, f) != ref_size) {
             printf("%s: could not read the reference\n", refpath);
@@ -316,36 +373,58 @@ test_real_samples(void)
         int bad = 0;
         for (int y = 0; y < cases[i].h && !bad; y++) {
             uint8_t *row = (uint8_t *)p->pixels + (size_t)y * p->pitch;
-            const uint8_t *rrow = ref + (size_t)y * cases[i].w * 4;
+            const uint8_t *rrow = ref + (size_t)y * cases[i].w * bpp;
             for (int x = 0; x < cases[i].w && !bad; x++) {
-                for (int c = 0; c < 3; c++) {
-                    int d = abs(row[x * 4 + c] - rrow[x * 4 + c]);
+                int channels = cases[i].alpha ? 4 : 3;
+                for (int c = 0; c < channels; c++) {
+                    int tol = c == 3 ? 2 : cases[i].tol;
+                    int value, refv, d;
+
+                    if (cases[i].wide) {
+                        value = ((uint16_t *)row)[x * 4 + c];
+                        refv = ((const uint16_t *)rrow)[x * 4 + c];
+                    } else {
+                        value = row[x * 4 + c];
+                        refv = rrow[x * 4 + c];
+                    }
+                    d = abs(value - refv);
                     if (d > maxdiff) {
                         maxdiff = d;
                     }
-                    if (d > cases[i].tol) {
+                    if (d > tol) {
                         printf("%s: (%d,%d) channel %d is %d, reference %d, "
                                "max diff %d exceeds %d\n", path, x, y, c,
-                               row[x * 4 + c], rrow[x * 4 + c], d,
-                               cases[i].tol);
+                               value, refv, d, tol);
                         bad = 1;
                         rc = -1;
                         break;
                     }
                 }
                 if (cases[i].mono) {
-                    if (row[x * 4] != row[x * 4 + 1] ||
-                        row[x * 4 + 1] != row[x * 4 + 2]) {
+                    int vb, vg, vr;
+
+                    if (cases[i].wide) {
+                        vb = ((uint16_t *)row)[x * 4];
+                        vg = ((uint16_t *)row)[x * 4 + 1];
+                        vr = ((uint16_t *)row)[x * 4 + 2];
+                    } else {
+                        vb = row[x * 4];
+                        vg = row[x * 4 + 1];
+                        vr = row[x * 4 + 2];
+                    }
+                    if (vb != vg || vg != vr) {
                         printf("%s: (%d,%d) grey came out %d %d %d\n", path, x,
-                               y, row[x * 4], row[x * 4 + 1],
-                               row[x * 4 + 2]);
+                               y, vb, vg, vr);
                         bad = 1;
                         rc = -1;
                         break;
                     }
-                } else if (row[x * 4 + 3] != 0xFF) {
-                    printf("%s: (%d,%d) alpha %d, expected 255\n", path, x, y,
-                           row[x * 4 + 3]);
+                } else if (!cases[i].alpha &&
+                           ((cases[i].wide
+                                 ? ((uint16_t *)row)[x * 4 + 3]
+                                 : row[x * 4 + 3]) !=
+                            (cases[i].wide ? 0xFFFF : 0xFF))) {
+                    printf("%s: (%d,%d) alpha is not opaque\n", path, x, y);
                     bad = 1;
                     rc = -1;
                     break;
@@ -362,10 +441,72 @@ next:
     return rc;
 }
 
+/* Without pitm the loader decodes every top level picture; a thumbnail is a
+ * picture only through thmb, so it must not be handed out as one. */
+static int
+test_no_primary_thumbnail(void)
+{
+    char path[512];
+    int rc = 0;
+
+    snprintf(path, sizeof(path), "%s/hevc_meta_nopitm.heic", TEST_DATA_DIR);
+    struct file_ops *ops = file_probe(path);
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    struct pic *p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: returned a picture without a primary item\n", path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    struct pic *q = file_dequeue_pic();
+    if (!q) {
+        printf("%s: no picture was queued\n", path);
+        return -1;
+    }
+    if (q->width != 96 || q->height != 96) {
+        printf("%s: queued picture is %dx%d\n", path, q->width, q->height);
+        rc = -1;
+    }
+    struct pic *extra = file_dequeue_pic();
+    if (extra) {
+        printf("%s: the thumbnail was queued as a picture\n", path);
+        file_free(ops, extra);
+        rc = -1;
+    }
+    file_free(ops, q);
+    return rc;
+}
+
+/* Construction method 2 points at other items instead of bytes in the file;
+ * the loader must refuse to hand back a picture for it. */
+static int
+test_unsupported_method(void)
+{
+    char path[512];
+
+    snprintf(path, sizeof(path), "%s/hevc_method2.heic", TEST_DATA_DIR);
+    struct file_ops *ops = file_probe(path);
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    struct pic *p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: decoded an unsupported construction method\n", path);
+        file_free(ops, p);
+        return -1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     vlog_init();
     vlog_set_global_level(VLOG_DEBUG);
+    file_ops_init();
     if (test_crop()) {
         return -1;
     }
@@ -385,6 +526,12 @@ int main(void)
         return -1;
     }
     if (test_real_samples()) {
+        return -1;
+    }
+    if (test_no_primary_thumbnail()) {
+        return -1;
+    }
+    if (test_unsupported_method()) {
         return -1;
     }
     return 0;

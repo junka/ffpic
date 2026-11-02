@@ -759,6 +759,35 @@ void free_moov_box(struct moov_box *b);
 
 int read_VisualSampleEntry(FILE *f, struct VisualSampleEntry *e);
 
+/* A packed RGBA picture that transformative properties rewrite in place. */
+struct packed_frame {
+    uint8_t *pixels;
+    int width, height, pitch, bpp;
+};
+
+enum {
+    PACKED_ROT90,
+    PACKED_ROT180,
+    PACKED_ROT270,
+    PACKED_VFLIP,
+    PACKED_HFLIP,
+    PACKED_CROP,
+};
+
+int packed_frame_transform(struct packed_frame *im, int kind, int nw, int nh,
+                           int ox, int oy);
+
+/* ISO/IEC 14496-12 12.1.4.1 clean aperture rectangle. */
+int packed_clap_rect(const struct clap_box *c, int w, int h,
+                     int *ox, int *oy, int *cw, int *ch);
+
+/* Apply the irot, imir and clap properties of item_id in ipma order. */
+int packed_apply_transforms(const struct iprp_box *iprp, uint32_t item_id,
+                            struct packed_frame *im);
+
+/* Orientation tag of the Exif item payload; 0 when absent. */
+int media_exif_orientation(const uint8_t *data, size_t len);
+
 uint8_t read_u8(FILE *f);
 uint16_t read_u16(FILE *f);
 uint32_t read_u32(FILE *f);

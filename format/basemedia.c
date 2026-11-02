@@ -1519,3 +1519,217 @@ void free_moov_box(struct moov_box *b)
         free(b->udta);
     }
 }
+
+/* Transformative properties (irot, imir, clap) act on the reconstructed
+ * picture in the order they are associated in ipma.  The alpha plane has
+ * already been merged into the packed samples, so it follows every
+ * transform. */
+int
+packed_frame_transform(struct packed_frame *im, int kind, int nw, int nh,
+                       int ox, int oy)
+{
+    uint8_t *dst = malloc((size_t)nw * nh * im->bpp);
+
+    if (!dst) {
+        return -1;
+    }
+    for (int y = 0; y < nh; y++) {
+        uint8_t *drow = dst + (size_t)y * nw * im->bpp;
+        for (int x = 0; x < nw; x++) {
+            int sx, sy;
+
+            switch (kind) {
+            case PACKED_ROT90:
+                sx = im->width - 1 - y;
+                sy = x;
+                break;
+            case PACKED_ROT180:
+                sx = im->width - 1 - x;
+                sy = im->height - 1 - y;
+                break;
+            case PACKED_ROT270:
+                sx = y;
+                sy = im->height - 1 - x;
+                break;
+            case PACKED_VFLIP:
+                sx = x;
+                sy = im->height - 1 - y;
+                break;
+            case PACKED_HFLIP:
+                sx = im->width - 1 - x;
+                sy = y;
+                break;
+            default: /* PACKED_CROP */
+                sx = x + ox;
+                sy = y + oy;
+                break;
+            }
+            memcpy(drow + (size_t)x * im->bpp,
+                   im->pixels + (size_t)sy * im->pitch +
+                       (size_t)sx * im->bpp, im->bpp);
+        }
+    }
+    free(im->pixels);
+    im->pixels = dst;
+    im->width = nw;
+    im->height = nh;
+    im->pitch = nw * im->bpp;
+    return 0;
+}
+
+/* The clean aperture is centred on the image centre displaced by the
+ * offsets, both given as fractions. */
+int
+packed_clap_rect(const struct clap_box *c, int w, int h,
+                 int *ox, int *oy, int *cw, int *ch)
+{
+    int64_t cwn = c->cleanApertureWidthN, cwd = c->cleanApertureWidthD;
+    int64_t chn = c->cleanApertureHeightN, chd = c->cleanApertureHeightD;
+    int64_t xn, xd, yn, yd, cwid, chgt;
+
+    if (cwd <= 0 || chd <= 0 || c->horizOffD <= 0 || c->vertOffD <= 0 ||
+        cwn < 0 || chn < 0 || cwn % cwd || chn % chd) {
+        return -1;
+    }
+    cwid = cwn / cwd;
+    chgt = chn / chd;
+    if (cwid <= 0 || chgt <= 0) {
+        return -1;
+    }
+    xn = ((int64_t)w - cwid) * c->horizOffD + 2 * (int64_t)c->horizOffN;
+    xd = 2 * (int64_t)c->horizOffD;
+    yn = ((int64_t)h - chgt) * c->vertOffD + 2 * (int64_t)c->vertOffN;
+    yd = 2 * (int64_t)c->vertOffD;
+    if (xn % xd || yn % yd) {
+        return -1;
+    }
+    xn /= xd;
+    yn /= yd;
+    if (xn < 0 || yn < 0 || xn + cwid > w || yn + chgt > h) {
+        return -1;
+    }
+    *ox = (int)xn;
+    *oy = (int)yn;
+    *cw = (int)cwid;
+    *ch = (int)chgt;
+    return 0;
+}
+
+int
+packed_apply_transforms(const struct iprp_box *iprp, uint32_t item_id,
+                        struct packed_frame *im)
+{
+    const struct ipma_box *ipma = &iprp->ipma;
+
+    for (uint32_t i = 0; i < ipma->entry_count; i++) {
+        if (ipma->entries[i].item_id != item_id) {
+            continue;
+        }
+        for (int j = 0; j < ipma->entries[i].association_count; j++) {
+            int idx = ipma->entries[i].property_index[j] & 0x7fff;
+            struct box *prop;
+            int nw, nh, ox = 0, oy = 0, kind;
+
+            if (idx < 1 || idx > iprp->ipco.n_property) {
+                continue;
+            }
+            prop = iprp->ipco.property[idx - 1];
+            if (!prop) {
+                continue;
+            }
+            if (prop->type == TYPE2UINT("irot")) {
+                int angle = ((struct irot_box *)prop)->angle & 0x3;
+
+                if (angle == 0) {
+                    continue;
+                }
+                kind = angle == 1 ? PACKED_ROT90
+                     : angle == 2 ? PACKED_ROT180 : PACKED_ROT270;
+                nw = angle == 2 ? im->width : im->height;
+                nh = angle == 2 ? im->height : im->width;
+            } else if (prop->type == TYPE2UINT("imir")) {
+                kind = ((struct imir_box *)prop)->axis ? PACKED_HFLIP
+                                                       : PACKED_VFLIP;
+                nw = im->width;
+                nh = im->height;
+            } else if (prop->type == TYPE2UINT("clap")) {
+                if (packed_clap_rect((struct clap_box *)prop, im->width,
+                                     im->height, &ox, &oy, &nw, &nh)) {
+                    VWARN(basemedia, "ignoring a clean aperture that does "
+                          "not fit the picture");
+                    continue;
+                }
+                kind = PACKED_CROP;
+            } else {
+                /* pasp and the descriptive properties do not move pixels */
+                continue;
+            }
+            if (packed_frame_transform(im, kind, nw, nh, ox, oy)) {
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static uint32_t
+media_rd32(const uint8_t *p, int le)
+{
+    return le ? (uint32_t)p[0] | (uint32_t)p[1] << 8 |
+                (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24
+              : (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
+                (uint32_t)p[2] << 8 | (uint32_t)p[3];
+}
+
+static uint16_t
+media_rd16(const uint8_t *p, int le)
+{
+    return le ? (uint16_t)(p[0] | p[1] << 8) : (uint16_t)(p[0] << 8 | p[1]);
+}
+
+/* The Exif item is a 4 byte TIFF header offset followed by the TIFF stream.
+ * Only the Orientation tag of IFD0 is read; 0 means absent or unparsable. */
+int
+media_exif_orientation(const uint8_t *data, size_t len)
+{
+    const uint8_t *t;
+    size_t tlen;
+    uint32_t off, ifd;
+    int le;
+
+    if (!data || len < 8) {
+        return 0;
+    }
+    off = (uint32_t)data[0] << 24 | (uint32_t)data[1] << 16 |
+          (uint32_t)data[2] << 8 | data[3];
+    if (off > len - 4) {
+        return 0;
+    }
+    t = data + 4 + off;
+    tlen = len - 4 - off;
+    if (tlen < 8 || !((t[0] == 'I' && t[1] == 'I') ||
+                      (t[0] == 'M' && t[1] == 'M'))) {
+        return 0;
+    }
+    le = t[0] == 'I';
+    if (media_rd16(t + 2, le) != 42) {
+        return 0;
+    }
+    ifd = media_rd32(t + 4, le);
+    if (ifd > tlen - 2) {
+        return 0;
+    }
+    const uint8_t *p = t + ifd;
+    uint16_t n = media_rd16(p, le);
+    p += 2;
+    for (int i = 0; i < n; i++, p += 12) {
+        if (p + 12 > t + tlen) {
+            return 0;
+        }
+        if (media_rd16(p, le) == 0x0112 && media_rd16(p + 2, le) == 3 &&
+            media_rd32(p + 4, le) >= 1) {
+            return media_rd16(p + 8, le);
+        }
+    }
+    return 0;
+}

@@ -28,6 +28,15 @@ void YUV400_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
 void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                             int y_stride, int width, int height, int ctbsize);
 
+/* 16 bit packed BGRA output for high bit depth streams */
+void YUV420_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize, int bitdepth, int full_range,
+                      int matrix_coeffs);
+
+void YUV400_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int y_stride,
+                      int width, int height, int ctbsize, int bitdepth);
+
 struct cs_ops {
     void (*YUV_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V, int vertical, int horizontal);
 

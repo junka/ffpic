@@ -98,6 +98,7 @@ struct vk_buff {
 struct vk_priv {
     void *lib;
     VkInstance instance;
+    VkDebugUtilsMessengerEXT messenger;
     VkDevice device;
     VkQueue computeQueue;
     VkCommandPool pool;
@@ -115,6 +116,23 @@ struct vk_priv {
 };
 
 static struct vk_priv priv;
+
+/* Validation and performance messages only exist when the debug utils
+ * extension is enabled; the callback forwards them to stderr so a broken
+ * pipeline shows up in the same place as the loader's own output. */
+static VKAPI_ATTR VkBool32 VKAPI_CALL
+vulkan_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                      VkDebugUtilsMessageTypeFlagsEXT types,
+                      const VkDebugUtilsMessengerCallbackDataEXT *data,
+                      void *user_data)
+{
+    (void)types;
+    (void)user_data;
+    if (severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT && data && data->pMessage) {
+        fprintf(stderr, "vulkan: %s\n", data->pMessage);
+    }
+    return VK_FALSE;
+}
 
 
 static struct vk_buff createbuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkPhysicalDevice phydev, uint32_t qid, VkMemoryPropertyFlags requireProperties) {
@@ -208,22 +226,42 @@ struct accl_ops vulkan_accl = {
 };
 
 void vulkan_uninit(void) {
-    priv.vkFreeCommandBuffers(priv.device, priv.pool, 1, &priv.cmdbuffer);
-    priv.vkDestroyBuffer(priv.device, priv.b[0].buffer, NULL);
-    priv.vkDestroyBuffer(priv.device, priv.b[1].buffer, NULL);
-    priv.vkDestroyBuffer(priv.device, priv.b[2].buffer, NULL);
-    priv.vkFreeMemory(priv.device, priv.b[0].memory, NULL);
-    priv.vkFreeMemory(priv.device, priv.b[1].memory, NULL);
-    priv.vkFreeMemory(priv.device, priv.b[2].memory, NULL);
-    priv.vkFreeDescriptorSets(priv.device, priv.descriptorPool, 1, &priv.descriptorSet);
-    priv.vkDestroyDescriptorPool(priv.device, priv.descriptorPool, NULL);
-    priv.vkDestroyPipeline(priv.device, priv.pipeline, NULL);
-    priv.vkDestroyPipelineLayout(priv.device, priv.pipelineLayout, NULL);
-    priv.vkDestroyDescriptorSetLayout(priv.device, priv.descriptorSetLayout, NULL);
-    priv.vkDestroyCommandPool(priv.device, priv.pool, NULL);
-    priv.vkDestroyDevice(priv.device, NULL);
-    priv.vkDestroyInstance(priv.instance, NULL);
-    dlclose(priv.lib);
+    /* the device has to go before the instance it was created from, and the
+     * messenger entry point is only present together with the extension */
+    if (priv.device != VK_NULL_HANDLE) {
+        priv.vkFreeCommandBuffers(priv.device, priv.pool, 1, &priv.cmdbuffer);
+        priv.vkDestroyBuffer(priv.device, priv.b[0].buffer, NULL);
+        priv.vkDestroyBuffer(priv.device, priv.b[1].buffer, NULL);
+        priv.vkDestroyBuffer(priv.device, priv.b[2].buffer, NULL);
+        priv.vkFreeMemory(priv.device, priv.b[0].memory, NULL);
+        priv.vkFreeMemory(priv.device, priv.b[1].memory, NULL);
+        priv.vkFreeMemory(priv.device, priv.b[2].memory, NULL);
+        priv.vkFreeDescriptorSets(priv.device, priv.descriptorPool, 1, &priv.descriptorSet);
+        priv.vkDestroyDescriptorPool(priv.device, priv.descriptorPool, NULL);
+        priv.vkDestroyPipeline(priv.device, priv.pipeline, NULL);
+        priv.vkDestroyPipelineLayout(priv.device, priv.pipelineLayout, NULL);
+        priv.vkDestroyDescriptorSetLayout(priv.device, priv.descriptorSetLayout, NULL);
+        priv.vkDestroyCommandPool(priv.device, priv.pool, NULL);
+        priv.vkDestroyDevice(priv.device, NULL);
+        priv.device = VK_NULL_HANDLE;
+    }
+    if (priv.instance != VK_NULL_HANDLE) {
+        if (priv.messenger != VK_NULL_HANDLE) {
+            PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger =
+                (PFN_vkDestroyDebugUtilsMessengerEXT)priv.vkGetInstanceProcAddr(
+                    priv.instance, "vkDestroyDebugUtilsMessengerEXT");
+            if (destroy_messenger != NULL) {
+                destroy_messenger(priv.instance, priv.messenger, NULL);
+            }
+            priv.messenger = VK_NULL_HANDLE;
+        }
+        priv.vkDestroyInstance(priv.instance, NULL);
+        priv.instance = VK_NULL_HANDLE;
+    }
+    if (priv.lib) {
+        dlclose(priv.lib);
+        priv.lib = NULL;
+    }
 }
 
 void vulkan_init(void)
@@ -248,6 +286,30 @@ void vulkan_init(void)
     VK_FUNCTION_LIST
 #undef PFN
 
+    /* Debug utils are part of the loader, not of the API version, so the
+     * entry points are fetched explicitly and only when the extension is
+     * really present.  VK_EXT_debug_utils is a preprocessor macro in the
+     * headers and cannot be switched on from a runtime check. */
+    PFN_vkCreateDebugUtilsMessengerEXT create_messenger = NULL;
+    PFN_vkDestroyDebugUtilsMessengerEXT destroy_messenger = NULL;
+    int have_debug_utils = 0;
+    uint32_t ext_count = 0;
+    if (priv.vkEnumerateInstanceExtensionProperties != NULL &&
+        priv.vkEnumerateInstanceExtensionProperties(NULL, &ext_count, NULL) == VK_SUCCESS &&
+        ext_count > 0) {
+        VkExtensionProperties *exts = calloc(ext_count, sizeof(VkExtensionProperties));
+        if (exts != NULL) {
+            priv.vkEnumerateInstanceExtensionProperties(NULL, &ext_count, exts);
+            for (uint32_t i = 0; i < ext_count; i++) {
+                if (strcmp(exts[i].extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+                    have_debug_utils = 1;
+                    break;
+                }
+            }
+            free(exts);
+        }
+    }
+
     uint32_t version = VK_API_VERSION_1_0;
     priv.vkEnumerateInstanceVersion(&version);
 
@@ -266,18 +328,18 @@ void vulkan_init(void)
         .pApplicationInfo = &appInfo,
     };
 
-    const char *extensions[] = {
-#if VK_EXT_debug_utils
-        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-#endif
+    const char *extensions[2];
+    uint32_t next_ext = 0;
+    if (have_debug_utils) {
+        extensions[next_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    }
 #ifdef VK_KHR_portability_enumeration
-        VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
+    extensions[next_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
 #endif
-    };
 #if VK_KHR_portability_enumeration
     createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
-    createInfo.enabledExtensionCount = sizeof(extensions)/sizeof(char *);
+    createInfo.enabledExtensionCount = next_ext;
     createInfo.ppEnabledExtensionNames = extensions;
 
     uint32_t layerCount;
@@ -303,6 +365,27 @@ void vulkan_init(void)
     if (priv.vkCreateInstance(&createInfo, NULL, &priv.instance) != VK_SUCCESS) {
         printf("fail to create vulkan instance\n");
         return;
+    }
+
+    if (have_debug_utils) {
+        /* the entry points come from the instance, so they are fetched only
+         * after vkCreateInstance */
+        create_messenger = (PFN_vkCreateDebugUtilsMessengerEXT)priv.vkGetInstanceProcAddr(priv.instance, "vkCreateDebugUtilsMessengerEXT");
+        destroy_messenger = (PFN_vkDestroyDebugUtilsMessengerEXT)priv.vkGetInstanceProcAddr(priv.instance, "vkDestroyDebugUtilsMessengerEXT");
+    }
+    if (create_messenger != NULL && destroy_messenger != NULL) {
+        VkDebugUtilsMessengerCreateInfoEXT msgr = {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
+                               VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT,
+            .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                           VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+            .pfnUserCallback = vulkan_debug_callback,
+        };
+        if (create_messenger(priv.instance, &msgr, NULL, &priv.messenger) != VK_SUCCESS) {
+            priv.messenger = VK_NULL_HANDLE;
+        }
     }
 
     uint32_t count;
@@ -340,8 +423,17 @@ void vulkan_init(void)
     VkPhysicalDeviceFeatures deviceFeatures;
     priv.vkGetPhysicalDeviceFeatures(phydev, &deviceFeatures);
 
+    /* The IDCT stage declares the 16 bit storage capabilities, so the device
+     * has to enable the matching 16 bit storage features.  Without them the
+     * pipeline the stage builds is invalid and the validation layers report
+     * VUID-VkShaderModuleCreateInfo-pCode-08740 and
+     * VUID-RuntimeSpirv-uniformAndStorageBuffer16BitAccess-06332. */
+    VkPhysicalDevice16BitStorageFeatures device16BitStorage = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+    };
     VkPhysicalDeviceShaderFloat16Int8Features devicefloat16Int8Features = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR,
+        .pNext = &device16BitStorage,
     };
     VkPhysicalDeviceFeatures2 features2 = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
@@ -349,16 +441,33 @@ void vulkan_init(void)
     };
     priv.vkGetPhysicalDeviceFeatures2(phydev, &features2);
 
+    if (!deviceFeatures.shaderInt16 ||
+        !device16BitStorage.storageBuffer16BitAccess ||
+        !device16BitStorage.uniformAndStorageBuffer16BitAccess) {
+        /* Register no backend, so the callers fall back to the software IDCT
+         * instead of building a pipeline the device cannot run. */
+        fprintf(stderr, "the device has no 16 bit storage, no vulkan backend\n");
+        return;
+    }
+
     VkPhysicalDeviceFeatures features = {
         .shaderInt16 = deviceFeatures.shaderInt16,
     };
-    
+
+    /* the pNext chain of the features handed to vkCreateDevice must list the
+     * 16 bit storage features before the float16 ones that point at them */
+    VkPhysicalDevice16BitStorageFeatures storage16BitFeatures = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_16BIT_STORAGE_FEATURES,
+        .storageBuffer16BitAccess = device16BitStorage.storageBuffer16BitAccess,
+        .uniformAndStorageBuffer16BitAccess =
+            device16BitStorage.uniformAndStorageBuffer16BitAccess,
+    };
     VkPhysicalDeviceFloat16Int8FeaturesKHR float16Int8Features = {
-        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT16_INT8_FEATURES_KHR,
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES_KHR,
+        .pNext = &storage16BitFeatures,
         .shaderFloat16 = devicefloat16Int8Features.shaderFloat16,
     };
 
-    
     float queuePriority = 1.0f;
     VkDeviceQueueCreateInfo queueCreateInfo = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,

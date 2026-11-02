@@ -178,7 +178,7 @@ if (Vulkan_FOUND)
 
     add_custom_command(
         OUTPUT ${SPIRV_FILE}
-        COMMAND glslc -c ${SHADER} -fshader-stage=compute -g -o ${SPIRV_FILE}
+        COMMAND glslc -c ${SHADER} -fshader-stage=compute -o ${SPIRV_FILE}
         DEPENDS ${SHADER}
         COMMENT "Compiling ${SHADER_NAME} to SPIR-V"
     )

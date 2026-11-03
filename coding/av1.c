@@ -236,12 +236,6 @@ av1_cdf_init_coeff(struct av1_cdfs *c, int base_q_idx)
 /* ------------------------------------------------------------------ */
 
 static inline int
-round2(int x, int n)
-{
-    return (x + (1 << (n - 1))) >> n;
-}
-
-static inline int
 tile_log2(int blk_size, int target)
 {
     int k = 0;

@@ -27,6 +27,7 @@ struct opcl_priv {
     cl_command_queue queue; // command queue
     cl_program program;     // program
     cl_kernel kernel4;      // kernel
+    int ready;              // the objects above are valid
 };
 
 static struct opcl_priv priv;
@@ -97,6 +98,10 @@ struct accl_ops opcl_accl = {
 };
 
 void opcl_amd_uninit(void) {
+    if (!priv.ready) {
+        return;
+    }
+    priv.ready = 0;
     clReleaseKernel(priv.kernel4);
     clReleaseProgram(priv.program);
     clReleaseCommandQueue(priv.queue);
@@ -105,7 +110,12 @@ void opcl_amd_uninit(void) {
 
 // on Macos we would have AMD Radeon Pro 560X 4 GB
 void opcl_amd_init(void) {
-    const char *prog_src = (char *)&srcstr[0];
+    /* the xxd style array is not NUL terminated, but some runtimes still call
+     * strlen on the source even when a length is supplied */
+    static char src_buf[sizeof(srcstr) + 1];
+    const char *prog_src = src_buf;
+    memcpy(src_buf, srcstr, sizeof(srcstr));
+    src_buf[sizeof(srcstr)] = '\0';
     cl_platform_id platform_ids[8];  // OpenCL platform
     cl_uint num_platforms;
     cl_device_id did = NULL;
@@ -182,7 +192,7 @@ void opcl_amd_init(void) {
         return;
     }
     size_t len = srcstr_len;
-    VINFO(opcl, "source code %d: %s", srcstr_len, prog_src);
+    VINFO(opcl, "source code %u: %.*s", srcstr_len, (int)srcstr_len, prog_src);
     priv.program = clCreateProgramWithSource(priv.context, 1, &prog_src,
                                              (const size_t *)&len, &ret);
     if (ret != CL_SUCCESS) {
@@ -218,6 +228,7 @@ void opcl_amd_init(void) {
         return;
     }
 
+    priv.ready = 1;
     accl_ops_register(&opcl_accl);
 }
 

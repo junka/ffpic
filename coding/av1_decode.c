@@ -150,6 +150,8 @@ sym(struct av1_dec *d, uint16_t *cdf, int n)
     int v = av1_range_symbol(&d->rd, cdf, n, !d->f.disable_cdf_update);
     if (d->rd.bits.error && !d->error) {
         ptrdiff_t off = (uint16_t *)cdf - (uint16_t *)&d->cdf;
+        /* VERR compiles out in release builds, keep the variable used */
+        (void)off;
         VERR(av1, "range error n=%d off=%td cdf=%u,%u,%u,%u val=%u range=%u",
              n, off, cdf[0], cdf[1], cdf[2], cdf[3],
              d->rd.value, d->rd.range);

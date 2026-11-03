@@ -97,6 +97,7 @@ struct vk_buff {
 
 struct vk_priv {
     void *lib;
+    int ready;              // everything below is valid, the device can be destroyed
     VkInstance instance;
     VkDebugUtilsMessengerEXT messenger;
     VkDevice device;
@@ -226,6 +227,10 @@ struct accl_ops vulkan_accl = {
 };
 
 void vulkan_uninit(void) {
+    if (!priv.ready) {
+        return;
+    }
+    priv.ready = 0;
     /* the device has to go before the instance it was created from, and the
      * messenger entry point is only present together with the extension */
     if (priv.device != VK_NULL_HANDLE) {
@@ -280,6 +285,10 @@ void vulkan_init(void)
     if (!lib)
         lib = dlopen("libvulkan.so", RTLD_LAZY | RTLD_LOCAL);
 #endif
+    if (!lib) {
+        printf("fail to load the vulkan library\n");
+        return;
+    }
     priv.lib = lib;
 
 #define PFN(name) priv.name = (PFN_##name)(uintptr_t)(dlsym(lib, #name));
@@ -389,7 +398,8 @@ void vulkan_init(void)
     }
 
     uint32_t count;
-    if (priv.vkEnumeratePhysicalDevices(priv.instance, &count, NULL) != VK_SUCCESS) {
+    if (priv.vkEnumeratePhysicalDevices(priv.instance, &count, NULL) != VK_SUCCESS ||
+        count == 0) {
         printf("fail to enumrate physocal devices\n");
         return;
     }
@@ -627,5 +637,6 @@ void vulkan_init(void)
         printf("Failed to allocate command buffer\n");
     }
 
+    priv.ready = 1;
     accl_ops_register(&vulkan_accl);
 }

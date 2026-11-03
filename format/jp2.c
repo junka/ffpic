@@ -398,10 +398,25 @@ read_cod(JP2 *j, FILE *f)
     FFREAD_IGNORE(&j->main_h.cod.p, 5, 1, f);
     l += 5;
 
-    if (j->main_h.cod.entropy) {
-        j->main_h.cod.p.precinct_size = malloc(j->main_h.cod.p.decomp_level_num+1);
-        FFREAD_IGNORE(j->main_h.cod.p.precinct_size, j->main_h.cod.p.decomp_level_num+1, 1, f);
-        l += (j->main_h.cod.p.decomp_level_num + 1);
+    /* Lcod counts the 2 byte length field plus the 10 fixed bytes, so any
+     * thing left over is the one byte per resolution precinct size list */
+    int nprc = (int)j->main_h.cod.length - 12;
+    if (nprc > 0) {
+        int nlev = (int)j->main_h.cod.p.decomp_level_num + 1;
+        if (nlev > 0 && nlev <= 256) {
+            j->main_h.cod.p.precinct_size = calloc((size_t)nlev, 1);
+        }
+        if (j->main_h.cod.p.precinct_size) {
+            int n = nprc < nlev ? nprc : nlev;
+            memset(j->main_h.cod.p.precinct_size, 0xFF, (size_t)nlev);
+            FFREAD_IGNORE(j->main_h.cod.p.precinct_size, 1, n, f);
+            if (nprc > n) {
+                fseek(f, nprc - n, SEEK_CUR);
+            }
+        } else {
+            fseek(f, nprc, SEEK_CUR);
+        }
+        l += nprc;
     }
     return l;
 }
@@ -535,6 +550,12 @@ read_sod(JP2 *j, FILE *f) {
     if (len < 0) {
         len = 0;
     }
+    if (len > INT32_MAX) {
+        return -EINVAL;
+    }
+    /* SOD marker is consumed, the following bytes are the tile-part data */
+    t->data_start = (uint32_t)start;
+    t->data_size = (uint32_t)len;
     VDBG(jp2, "tile id %d, tile data len %ld", t->sot.tile_id, len);
     if (len > 0 && fseek(f, len, SEEK_CUR) != 0) {
         return -EINVAL;
@@ -863,6 +884,9 @@ JP2_load(const char *filename, int skip_flag UNUSED)
             break;
         }
     }
+    /* decode the codestream while the handle is still open; a refused or
+     * corrupt stream leaves the header only pic untouched */
+    jp2_decode(p, j, f);
     fclose(f);
 
     return p;
@@ -928,6 +952,9 @@ JP2_free(struct pic *p)
     if (j->main_h.cme.str) {
         free(j->main_h.cme.str);
     }
+    /* pic_free only releases p->pic and p itself */
+    free(p->pixels);
+    p->pixels = NULL;
     pic_free(p);
 }
 

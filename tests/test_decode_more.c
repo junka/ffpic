@@ -339,12 +339,180 @@ check_jp2(const char *path, int width, int height, int comps, int tiles,
                j->main_h.qcd.guard_num);
         rc = -1;
     }
+    /* the reversible transform decodes to pixels; the irreversible 9-7
+     * path is outside this decoder and must stay header only */
+    if (transform == 1 && p->pixels == NULL) {
+        printf("%s: reversible codestream produced no pixels\n", path);
+        rc = -1;
+    }
+    if (transform == 0 && p->pixels != NULL) {
+        printf("%s: unsupported transform decoded to pixels\n", path);
+        rc = -1;
+    }
 
     file_info(ops, p);
     file_free(ops, p);
     if (!rc) {
         printf("%s: ok\n", path);
     }
+    return rc;
+}
+
+/* one whitespace or comment separated Netpbm header token */
+static int
+pnm_token(const uint8_t *d, size_t n, size_t *pos, char *out, size_t cap)
+{
+    size_t k = 0;
+
+    while (*pos < n) {
+        uint8_t c = d[*pos];
+
+        if (c == '#') {
+            while (*pos < n && d[*pos] != '\n') {
+                (*pos)++;
+            }
+        } else if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            (*pos)++;
+        } else {
+            break;
+        }
+    }
+    while (*pos < n) {
+        uint8_t c = d[*pos];
+
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '#') {
+            break;
+        }
+        if (k + 1 >= cap) {
+            return -1;
+        }
+        out[k++] = (char)c;
+        (*pos)++;
+    }
+    out[k] = '\0';
+    return k ? 0 : -1;
+}
+
+/* exact pixel comparison against a reference PGM/PPM written by an
+ * independent decoder */
+static int
+check_jp2_pixels(const char *jp2, const char *ref)
+{
+    struct file_ops *ops = file_probe(jp2);
+    struct pic *p = NULL;
+    uint8_t *data = NULL;
+    size_t pos = 0, want;
+    long sz;
+    int w, h, ch, mism = 0, shown = 0, rc = -1;
+    char tok[64];
+    FILE *f = fopen(ref, "rb");
+
+    if (!ops || strcmp(ops->name, "JP2")) {
+        printf("%s: no JP2 parser claimed it\n", jp2);
+        return -1;
+    }
+    if (f == NULL) {
+        printf("%s: cannot open reference %s\n", jp2, ref);
+        return -1;
+    }
+    fseek(f, 0, SEEK_END);
+    sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > (1 << 20)) {
+        printf("%s: bad reference size %ld\n", ref, sz);
+        fclose(f);
+        return -1;
+    }
+    data = malloc((size_t)sz);
+    if (data == NULL || fread(data, 1, (size_t)sz, f) != (size_t)sz) {
+        printf("%s: cannot read reference\n", ref);
+        goto out;
+    }
+    fclose(f);
+    f = NULL;
+
+    if (pnm_token(data, (size_t)sz, &pos, tok, sizeof(tok)) ||
+        (strcmp(tok, "P5") && strcmp(tok, "P6"))) {
+        printf("%s: not a binary PGM/PPM\n", ref);
+        goto out;
+    }
+    ch = tok[1] == '5' ? 1 : 3;
+    if (pnm_token(data, (size_t)sz, &pos, tok, sizeof(tok))) {
+        goto out;
+    }
+    w = (int)strtol(tok, NULL, 10);
+    if (pnm_token(data, (size_t)sz, &pos, tok, sizeof(tok))) {
+        goto out;
+    }
+    h = (int)strtol(tok, NULL, 10);
+    if (pnm_token(data, (size_t)sz, &pos, tok, sizeof(tok))) {
+        goto out;
+    }
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096 ||
+        strtol(tok, NULL, 10) != 255) {
+        printf("%s: bad %dx%d maxval header\n", ref, w, h);
+        goto out;
+    }
+    /* one whitespace byte separates the header from the raster */
+    if (pos < (size_t)sz) {
+        pos++;
+    }
+    want = (size_t)w * (size_t)h * (size_t)ch;
+    if ((size_t)sz - pos < want) {
+        printf("%s: reference raster is short\n", ref);
+        goto out;
+    }
+
+    p = file_load(ops, jp2, 0);
+    if (p == NULL) {
+        printf("%s: load failed\n", jp2);
+        goto out;
+    }
+    if (p->width != w || p->height != h || p->pixels == NULL) {
+        printf("%s: got %dx%d%s, expected %dx%d\n", jp2, p->width, p->height,
+               p->pixels ? "" : " without pixels", w, h);
+        goto out;
+    }
+    for (int y = 0; y < h; y++) {
+        const uint32_t *q = (const uint32_t *)((const uint8_t *)p->pixels +
+                                               (size_t)y * p->pitch);
+        for (int x = 0; x < w; x++) {
+            const uint8_t *r = data + pos + ((size_t)y * w + x) * ch;
+            uint32_t word = q[x];
+            int gr = (int)((word >> 16) & 0xff);
+            int gg = (int)((word >> 8) & 0xff);
+            int gb = (int)(word & 0xff);
+            int bad;
+
+            if (ch == 1) {
+                bad = gr != r[0] || gg != r[0] || gb != r[0];
+            } else {
+                bad = gr != r[0] || gg != r[1] || gb != r[2];
+            }
+            if (bad) {
+                mism++;
+                if (shown++ < 3) {
+                    printf("%s: (%d,%d) got %d,%d,%d want %d,%d,%d\n", jp2,
+                           x, y, gr, gg, gb, r[0], r[1], r[2]);
+                }
+            }
+        }
+    }
+    if (mism) {
+        printf("%s: %d of %d pixels differ from %s\n", jp2, mism, w * h, ref);
+        goto out;
+    }
+    rc = 0;
+    printf("%s: pixels match %s\n", jp2, ref);
+
+out:
+    if (p) {
+        file_free(ops, p);
+    }
+    if (f) {
+        fclose(f);
+    }
+    free(data);
     return rc;
 }
 
@@ -3409,6 +3577,15 @@ int main(void)
         check_jp2(JP2_DATA("jp2_lossy.jp2"), 64, 48, 3, 1, 0, 2) ||
         check_jp2(JP2_DATA("jp2_gray.jp2"), 64, 48, 1, 1, 1, 0) ||
         check_jp2(JP2_DATA("jp2_tiles.jp2"), 64, 48, 3, 4, 1, 0)) {
+        failed++;
+    }
+    /* exact lossless reconstruction against independently decoded rasters */
+    if (check_jp2_pixels(JP2_DATA("jp2_lossless.jp2"),
+                         JP2_DATA("jp2_lossless.ppm")) ||
+        check_jp2_pixels(JP2_DATA("jp2_gray.jp2"),
+                         JP2_DATA("jp2_gray.pgm")) ||
+        check_jp2_pixels(JP2_DATA("jp2_tiles.jp2"),
+                         JP2_DATA("jp2_tiles.ppm"))) {
         failed++;
     }
     for (long keep = 12; keep < 1100; keep += 73) {

@@ -2,6 +2,10 @@
 #define _JP2_H_
 
 #include <stdint.h>
+#include <stdio.h>
+
+struct pic;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -438,6 +442,10 @@ struct tile_header {
     struct sot sot;
     // struct sop sop;
     struct ppt ppt;
+
+    /* tile-part coded data, starting right after the SOD marker */
+    uint32_t data_start;
+    uint32_t data_size;
 };
 
 typedef struct {
@@ -463,6 +471,8 @@ typedef struct {
 
 
 void JP2_init(void);
+
+int jp2_decode(struct pic *p, JP2 *j, FILE *f);
 
 #ifdef __cplusplus
 }

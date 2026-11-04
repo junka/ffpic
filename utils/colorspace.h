@@ -279,6 +279,12 @@ struct cs_profile;
 
 struct cs_profile *cs_profile_from_icc(const void *data, size_t len);
 struct cs_profile *cs_profile_from_cicp(int primaries, int transfer);
+/* Fill HDR metadata fields on an existing profile.  All fields are copied
+ * verbatim; zero values mean "not signalled" and leave the legacy
+ * 10000 / 1000 cd/m2 assumptions in effect. */
+void cs_profile_set_hdr(struct cs_profile *p,
+                        int hdr_cll_present, uint16_t max_cll, uint16_t max_fall,
+                        int hdr_mdcv_present, uint32_t lum_max, uint32_t lum_min);
 int cs_profile_is_identity(const struct cs_profile *p);
 void cs_profile_apply_bgra(const struct cs_profile *p, uint8_t *pixels,
                            int width, int height, int pitch);

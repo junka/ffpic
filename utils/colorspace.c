@@ -1201,6 +1201,16 @@ struct cs_profile {
     double luma[3];         /* source RGB -> Y coefficients */
     struct cs_curve curve[3];
     uint8_t *icc;           /* owned copy of the profile */
+
+    /* HDR metadata, filled by cs_profile_set_hdr().  Zero fields mean
+     * "not signalled" and the tone-map falls back to the legacy
+     * 10000 / 1000 cd/m2 assumptions.  */
+    int hdr_cll_present;
+    uint16_t max_content_light_level;
+    uint16_t max_frame_average_light_level;
+    int hdr_mdcv_present;
+    uint32_t luminance_max;
+    uint32_t luminance_min;
 };
 
 /* linear XYZ (D65) -> linear sRGB */
@@ -1602,6 +1612,22 @@ cs_profile_from_cicp(int primaries, int transfer)
     return p;
 }
 
+/* Fill HDR metadata fields on an existing profile.  Passed-in zeros are
+ * interpreted as "not signalled" and keep the legacy 10000 / 1000 cd/m2
+ * assumptions active in cs_hdr_linear / cs_hdr_apply. */
+void cs_profile_set_hdr(struct cs_profile *p,
+                        int hdr_cll_present, uint16_t max_cll, uint16_t max_fall,
+                        int hdr_mdcv_present, uint32_t lum_max, uint32_t lum_min)
+{
+    if (!p) return;
+    p->hdr_cll_present = hdr_cll_present;
+    p->max_content_light_level = max_cll;
+    p->max_frame_average_light_level = max_fall;
+    p->hdr_mdcv_present = hdr_mdcv_present;
+    p->luminance_max = lum_max;
+    p->luminance_min = lum_min;
+}
+
 int cs_profile_is_identity(const struct cs_profile *p)
 {
     return !p || p->identity;
@@ -1619,15 +1645,26 @@ static void
 cs_hdr_linear(const struct cs_profile *p, double r, double g, double b,
               double *lr, double *lg, double *lb)
 {
-    double y, scale = 10000.0;    /* PQ normalises 1.0 to 10000 cd/m2 */
+    /* Base display luminance: PQ 曲线把 1.0 归一化到 10000 cd/m2
+     * (SMPTE ST 2084); HLG OOTF 把 scene light 映射到 1000 cd/m2
+     * (BT.2100 默认假设).  OBU_METADATA MDCV.luminance_max 覆盖
+     * 默认值。 */
+    double base = 10000.0;
+    if (p->curve[0].kind == CS_CURVE_HLG) {
+        base = 1000.0;
+    }
+    if (p->hdr_mdcv_present && p->luminance_max > 0) {
+        base = (double)p->luminance_max;
+    }
+    double y, scale = base;
 
     r = cs_curve_decode(&p->curve[0], r);
     g = cs_curve_decode(&p->curve[1], g);
     b = cs_curve_decode(&p->curve[2], b);
     if (p->curve[0].kind == CS_CURVE_HLG) {
-        /* BT.2100 OOTF for a 1000 cd/m2 HLG display */
+        /* BT.2100 OOTF: scene light -> display light, base=peak luminance */
         y = p->luma[0] * r + p->luma[1] * g + p->luma[2] * b;
-        scale = y > 0.0 ? 1000.0 * pow(y, 0.2) : 0.0;
+        scale = y > 0.0 ? base * pow(y, 0.2) : 0.0;
     }
     r *= scale;
     g *= scale;
@@ -1705,7 +1742,17 @@ cs_hdr_apply(const struct cs_profile *p, uint8_t *pixels, int width, int height,
             }
         }
     }
-    w = peak / 100.0;
+    /* Reference white for Reinhard normalisation.  Use the frame's actual
+     * peak, but when OBU_METADATA CLLI is present, never below MaxCLL so the
+     * master bright highlights survive without crushing. */
+    double ref_peak = peak;
+    if (p->hdr_cll_present && p->max_content_light_level > 0) {
+        double mcll = (double)p->max_content_light_level;
+        if (ref_peak < mcll) {
+            ref_peak = mcll;
+        }
+    }
+    w = ref_peak / 100.0;
     if (w < 1.0) {
         w = 1.0;
     }

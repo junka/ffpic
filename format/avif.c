@@ -300,6 +300,19 @@ int parse_metadata_itut_t35(struct metadata_itut_t35 *mi, struct bits_vec *v)
 }
 
 
+/* ------------------------------------------------------------------ */
+/* parse_obu / parse_metadata_obu — 静态诊断与参考实现                */
+/*                                                                    */
+/* 这些函数不参与生产解码路径: avif_decode_item 把 AV1 原始 bitstream  */
+/* 直接喂给 coding/av1.c 里的 av1_decode_image，而不是经过这里的        */
+/* parse_obu 分派。它们仅用于调试/分析 av1C configOBUs 或 item payloads */
+/* 时手动扫描 OBU 序列，或作为将来接入 container 层 OBU 解析的参考。    */
+/*                                                                    */
+/* 新增 type 分支时，优先改 coding/av1.c::av1_decode_image 里的        */
+/* 生产分派循环 (type 1/3/4/5/6)，这里只要保持 metadata_type enum     */
+/* 与 format/avif.h 对齐即可。                                         */
+/* ------------------------------------------------------------------ */
+
 int parse_metadata_hdr_cll(struct metadata_hdr_cll *mh, struct bits_vec *v)
 {
     mh->max_cll = READ_BITS(v, 16);
@@ -777,33 +790,47 @@ avif_item_colr(const AVIF *h, uint32_t item_id)
     return nclx;
 }
 
-/* Container colour information wins over the CICP codes in the bitstream. */
+/* Container colour information wins over the CICP codes in the bitstream.
+ * After the profile is built we fill in OBU_METADATA HDR fields from the
+ * decoded image so the tone mapper stops assuming 10000 / 1000 cd/m2 when
+ * the bitstream actually carried CLLI / MDCV. */
 static struct cs_profile *
 avif_color_profile(const AVIF *h, uint32_t item_id,
                    const struct av1_image *img)
 {
     const struct colr_box *colr = avif_item_colr(h, item_id);
+    struct cs_profile *cp = NULL;
 
     if (colr) {
         if (colr->icc_data && colr->icc_len) {
-            struct cs_profile *cp = cs_profile_from_icc(colr->icc_data,
-                                                        colr->icc_len);
-            if (cp) {
-                return cp;
+            cp = cs_profile_from_icc(colr->icc_data, colr->icc_len);
+            if (!cp) {
+                VWARN(avif, "the embedded ICC profile is not supported");
             }
-            VWARN(avif, "the embedded ICC profile is not supported");
         }
-        if (colr->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
-            struct cs_profile *cp =
-                cs_profile_from_cicp(colr->color_primaries,
-                                     colr->transfer_characteristics);
-            if (cp) {
-                return cp;
-            }
+        if (!cp && colr->color_type == FOURCC2UINT('n', 'c', 'l', 'x')) {
+            cp = cs_profile_from_cicp(colr->color_primaries,
+                                      colr->transfer_characteristics);
         }
     }
-    return cs_profile_from_cicp(img->color_primaries,
-                                img->transfer_characteristics);
+    if (!cp) {
+        cp = cs_profile_from_cicp(img->color_primaries,
+                                  img->transfer_characteristics);
+    }
+
+    /* OBU_METADATA HDR is independent of ICC / nclx; always pass it through
+     * when the bitstream carried it.  Zero fields mean "not signalled" and
+     * the tone mapper keeps its legacy 10000 / 1000 cd/m2 defaults. */
+    if (cp && img) {
+        cs_profile_set_hdr(cp,
+                           img->hdr_cll_present,
+                           img->max_content_light_level,
+                           img->max_frame_average_light_level,
+                           img->hdr_mdcv_present,
+                           img->luminance_max,
+                           img->luminance_min);
+    }
+    return cp;
 }
 
 /* The alpha plane of a still image is a monochrome AV1 item that an auxl

@@ -29,6 +29,16 @@ struct av1_image {
     int chroma_sample_position;
     uint16_t *plane[3];
     int stride[3];              /* in samples */
+
+    /* OBU_METADATA HDR, copied from the bitstream when present.
+     * Zeroed fields mean "not signalled" and the caller should fall back
+     * to the legacy 10000 / 1000 cd/m2 assumptions in the tone mapper. */
+    int hdr_cll_present;
+    uint16_t max_content_light_level;
+    uint16_t max_frame_average_light_level;
+    int hdr_mdcv_present;
+    uint32_t luminance_max;
+    uint32_t luminance_min;
 };
 
 /* Decodes a low overhead AV1 bitstream (one still picture) into planar

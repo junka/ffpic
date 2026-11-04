@@ -1303,6 +1303,40 @@ av1_decode_image(const uint8_t *data, size_t len, struct av1_image *img)
             frame_payload_consumed = 1;
             pos += header_size + obu_size;
             break;
+        } else if (type == 5) { /* OBU_METADATA: HDR CLLI / MDCV */
+            struct av1_bits sb;
+            av1_bits_init(&sb, payload, obu_size);
+            uint32_t mt = av1_bits_leb128(&sb);
+            /* AV1 规范 metadata_type: 2=MDCV, 3=CLLI
+             * (format/avif.h 的 enum 值与规范错位，这里按规范真值判断) */
+            if (mt == 3) {  /* HDR Static Metadata: MaxCLL & MaxFALL */
+                if (av1_bits_left(&sb) >= 32) {
+                    f->hdr_cll_present = 1;
+                    f->max_content_light_level =
+                        (uint16_t)av1_bits_get(&sb, 16);
+                    f->max_frame_average_light_level =
+                        (uint16_t)av1_bits_get(&sb, 16);
+                }
+            } else if (mt == 2) {  /* HDR Mastering Display Colour Volume */
+                if (av1_bits_left(&sb) >= 192) {
+                    f->hdr_mdcv_present = 1;
+                    for (int i = 0; i < 3; i++) {
+                        f->mdcv_primary_chromaticity_x[i] =
+                            (uint16_t)av1_bits_get(&sb, 16);
+                        f->mdcv_primary_chromaticity_y[i] =
+                            (uint16_t)av1_bits_get(&sb, 16);
+                    }
+                    f->mdcv_white_point_x =
+                        (uint16_t)av1_bits_get(&sb, 16);
+                    f->mdcv_white_point_y =
+                        (uint16_t)av1_bits_get(&sb, 16);
+                    f->mdcv_luminance_max =
+                        av1_bits_get(&sb, 32);
+                    f->mdcv_luminance_min =
+                        av1_bits_get(&sb, 32);
+                }
+            }
+            /* 其他 metadata_type 或 payload 不足: 安全跳过，保持旧行为 */
         }
         pos += header_size + obu_size;
 
@@ -1348,6 +1382,15 @@ av1_decode_image(const uint8_t *data, size_t len, struct av1_image *img)
         img->color_primaries = f->color_primaries;
         img->transfer_characteristics = f->transfer_characteristics;
         img->chroma_sample_position = f->chroma_sample_position;
+
+        /* OBU_METADATA HDR */
+        img->hdr_cll_present = f->hdr_cll_present;
+        img->max_content_light_level = f->max_content_light_level;
+        img->max_frame_average_light_level = f->max_frame_average_light_level;
+        img->hdr_mdcv_present = f->hdr_mdcv_present;
+        img->luminance_max = f->mdcv_luminance_max;
+        img->luminance_min = f->mdcv_luminance_min;
+
         for (int p = 0; p < f->num_planes; p++) {
             img->plane[p] = d->plane[p];
             img->stride[p] = d->stride[p];

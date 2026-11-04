@@ -58,12 +58,15 @@ struct frame_obu {
 
 
 
+/* AV1 OBU_METADATA metadata_type 规范真值 (AOM-2 5.7).
+ * 注意: 这些值必须与 AV1 bitstream 里的 LEB128 真值完全一致，
+ * 不能随意改序，否则 bitstream 解析会读错类型。 */
 enum {
-    METADATA_TYPE_HDR_CLL = 1,
-    METADATA_TYPE_HDR_MDCV = 2,
-    METADATA_TYPE_SCALABILITY = 3,
     METADATA_TYPE_ITUT_T35 = 4,
-    METADATA_TYPE_TIMECODE = 5,
+    METADATA_TYPE_HDR_MDCV = 2,
+    METADATA_TYPE_HDR_CLL = 3,
+    METADATA_TYPE_SCALABILITY = 5,
+    METADATA_TYPE_TIMECODE = 6,
 };
 
 enum {

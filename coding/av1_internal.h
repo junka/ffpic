@@ -331,6 +331,21 @@ struct av1_frame {
     int8_t ar_coeffs_cr[25];
 
     struct av1_tile_layout tiles;
+
+    /* OBU_METADATA HDR payloads.  Zero fields mean "not signalled"; the
+     * container or the absence of OBU_METADATA leaves these at their zero
+     * defaults and the tone-map falls back to the legacy 10000 / 1000 cd/m2
+     * assumptions.  See AOM AV1 spec section 5.7 for the exact bit layout. */
+    int hdr_cll_present;
+    uint16_t max_content_light_level;       /* CLLI max_cll */
+    uint16_t max_frame_average_light_level; /* CLLI max_fall */
+    int hdr_mdcv_present;
+    uint16_t mdcv_primary_chromaticity_x[3];
+    uint16_t mdcv_primary_chromaticity_y[3];
+    uint16_t mdcv_white_point_x;
+    uint16_t mdcv_white_point_y;
+    uint32_t mdcv_luminance_max;            /* cd/m2, exact integer */
+    uint32_t mdcv_luminance_min;            /* 1/10000 cd/m2 */
 };
 
 /* ------------------------------------------------------------------ */

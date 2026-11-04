@@ -7406,6 +7406,7 @@ free_slice_segment_header(struct slice_segment_header *slice)
             free(slice->ScanOrder[log2blocksize][i]);
         }
     }
+    free(slice->entry_point_offset);
     free(slice->st);
     free(slice);
 }

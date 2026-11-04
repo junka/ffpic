@@ -1283,10 +1283,9 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
 
     /* Track-based animation (avis brand + moov). */
     if (h->moov_num > 0 && avif_is_avis(h)) {
-        struct pic *first = NULL; int n = 0;
+        struct pic *first = NULL;
         for (int m = 0; m < h->moov_num; m++) {
-            int got = avif_decode_moov_track(f, h->moov + m, m == 0 ? &first : NULL);
-            if (got > 0) n += got;
+            avif_decode_moov_track(f, h->moov + m, m == 0 ? &first : NULL);
         }
         if (first) {
             fclose(f); first->pic = p->pic; AVIF_free(p); return first;

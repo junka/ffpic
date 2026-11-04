@@ -50,6 +50,19 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
+    - name: Install SDL3 build dependencies (Linux)
+      # SDL3 is pulled in through FetchContent when no system copy exists, and
+      # its CMake script aborts when neither X11 nor Wayland headers are
+      # present.  The ubuntu images ship the runtime libraries but not the
+      # headers, so install what SDL's README-linux lists for a desktop build.
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+          libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev \
+          libdecor-0-dev
+
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
@@ -93,6 +106,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+
+    - name: Install SDL3 build dependencies
+      # Same reason as the build job: SDL3 comes from FetchContent and refuses
+      # to configure without X11 or Wayland development headers.
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+          libxfixes-dev libxss-dev libxkbcommon-dev libwayland-dev \
+          libdecor-0-dev
 
     - name: Configure CMake
       run: >

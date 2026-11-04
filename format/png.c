@@ -96,8 +96,10 @@ void PNG_encode(struct pic *p, const char *filename){
         /* GCC ≥13 -O3 false-positive: it can't prove malloc(bpr) covers sr_p[i]
          * accesses when bpr depends on runtime p->width. Silence the spurious
          * stringop-overflow warning; bounds are correct by construction. */
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
         int stride=channels;
         uint8_t *bufs[4]={NULL,NULL,NULL,NULL};  /* bufs[0..3] = scratch for filters 1-4 */
         uint8_t *cur_orig=malloc((size_t)bpr);   /* original current row */
@@ -167,7 +169,9 @@ void PNG_encode(struct pic *p, const char *filename){
         }
         for(int b=0;b<4;b++)free(bufs[b]);
         free(cur_orig); free(prev_orig); free(sr_a); free(sr_p); free(sums);
+#if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
+#endif
     }
     int cap=raw_len*4+64; if(cap<256)cap=256;
     uint8_t *zb=malloc((size_t)cap); if(!zb){free(raw);fclose(f);return;}

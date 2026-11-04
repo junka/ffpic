@@ -902,6 +902,7 @@ JP2_free(struct pic *p)
     for (int i = 0; i < j->jp2h.n_colr; i++) {
         free(j->jp2h.colr[i].iccpro.iccp);
     }
+    free(j->ftyp.compatible_brands);
     free(j->jp2h.colr);
     free(j->jp2h.bpcc.bits_per_comp);
     free(j->jp2h.pclr.bit_depth);

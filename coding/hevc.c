@@ -6896,6 +6896,8 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     // struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
 
     uint8_t end_of_slice_segment_flag = 0;
+    /* 保存 slice segment data 起点；cabac_dec_reset 内部的 bits_vec_reinit_cur 会改 v->start */
+    const uint8_t *slice_data_start = v->start;
 
     int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
 
@@ -6997,6 +6999,15 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
             bits_vec_dump(v);
 
             // assert(lastByte == v->ptr - v->start);
+            // entry_point_offset 已累加，是相对 slice_data_start 的绝对字节偏移
+            if (slice->num_entry_point_offsets > 0) {
+                int next_tile = pps->TileId[CtbAddrInTs];
+                if (next_tile > 0 && next_tile <= (int)slice->num_entry_point_offsets) {
+                    uint32_t off = slice->entry_point_offset[next_tile - 1];
+                    v->ptr = (uint8_t *)slice_data_start + off;
+                    v->offset = 0;
+                }
+            }
             cabac_dec_reset(d);
             // i ++;
             // end of entry_point_offset

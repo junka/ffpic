@@ -77,6 +77,17 @@ target_compile_definitions(test_hevc PRIVATE
 target_link_libraries(test_hevc ffpic m)
 add_test(NAME test_hevc COMMAND test_hevc)
 
+# NOTE: the hevc_tiles.heic sample used by test_hevc has tiles_enabled_flag=0
+# (it is a single-tile HEIF still; the name is misleading).  Real tile coverage
+# lives in test_hevc_tiles_real below.
+set(HEVC_TILES_REAL_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_hevc_tiles_real.c)
+add_executable(test_hevc_tiles_real ${HEVC_TILES_REAL_TEST})
+target_include_directories(test_hevc_tiles_real PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_hevc_tiles_real PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_hevc_tiles_real ffpic m)
+add_test(NAME test_hevc_tiles_real COMMAND test_hevc_tiles_real)
+
 set(AVIF_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_avif.c)
 add_executable(test_avif ${AVIF_TEST})
 target_include_directories(test_avif PRIVATE ${FFPIC_DIRS})

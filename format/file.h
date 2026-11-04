@@ -37,7 +37,12 @@ struct pic {
     int format;
     int refcnt;
     void *pic;
+    uint32_t duration_ms;
 };
+
+static inline void pic_set_duration(struct pic *p, uint32_t ms) {
+    if (p) p->duration_ms = ms;
+}
 
 struct pic *pic_alloc(size_t size);
 void pic_free(struct pic *p);

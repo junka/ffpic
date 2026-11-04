@@ -34,7 +34,7 @@ AVIF_probe(FILE *f)
     if (hdr[1] != TYPE2UINT("ftyp")) {
         return -EINVAL;
     }
-    if (hdr[2] == TYPE2UINT("avif")) {
+    if (hdr[2] == TYPE2UINT("avif") || hdr[2] == TYPE2UINT("avis")) {
         return 0;
     }
     /* Some muxers use a generic HEIF major brand and only list avif among
@@ -602,6 +602,119 @@ free_av1c_box(void *box)
     free(((struct av1C_box *)box)->config_obus);
 }
 
+/* Read AV1 Sample Entry (ISO/IEC 23008-12 6.6.2.3). */
+int read_AV1SampleEntry(FILE *f, struct SampleEntry **b)
+{
+    if (*b == NULL) *b = calloc(1, sizeof(struct AV1SampleEntry));
+    struct AV1SampleEntry *e = (struct AV1SampleEntry *)*b;
+    long entry_start = ftell(f);
+    read_VisualSampleEntry(f, &e->sample);
+    assert(e->sample.entry.type == FOURCC2UINT('a', 'v', '0', '1'));
+    read_av1c_box(f, (struct box **)(&e->config));
+    fseek(f, entry_start + (long)e->sample.entry.size, SEEK_SET);
+    return 0;
+}
+
+/* Decode one AV1 sample from an moov track. Joins configOBUs from av1C. */
+int av1_decode_track_sample(const uint8_t *sample_data, size_t sample_len,
+                            const struct av1C_box *av1c, struct av1_image *img)
+{
+    if (!av1c || !av1c->config_obus || av1c->config_obus_len == 0)
+        return av1_decode_image(sample_data, sample_len, img);
+    size_t total = (size_t)av1c->config_obus_len + sample_len;
+    uint8_t *joined = malloc(total);
+    if (!joined) return -ENOMEM;
+    memcpy(joined, av1c->config_obus, av1c->config_obus_len);
+    memcpy(joined + av1c->config_obus_len, sample_data, sample_len);
+    int rc = av1_decode_image(joined, total, img);
+    free(joined);
+    return rc;
+}
+
+/* Track-based AVIF animation helpers. */
+static int avif_is_avis(const AVIF *h) {
+    if (h->ftyp.major_brand == FOURCC2UINT('a','v','i','s')) return 1;
+    if (h->ftyp.compatible_brands)
+        for (int i = 0; i < 64; i++)
+            if (h->ftyp.compatible_brands[i] == FOURCC2UINT('a','v','i','s')) return 1;
+    return 0;
+}
+static uint32_t avif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {
+    uint32_t one = ci + 1, r = 0;
+    for (uint32_t i = 0; i < stsc->entry_count; i++)
+        if (stsc->first_chunk[i] <= one) r = stsc->sample_per_chunk[i];
+    return r;
+}
+
+static int
+avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_out)
+{
+    *first_pic_out = NULL;
+    int trak_idx = -1, stsd_idx = -1;
+    for (int t = 0; t < moov->trak_num && trak_idx < 0; t++) {
+        struct stbl_box *stbl = &moov->trak[t].mdia.minf.stbl;
+        for (uint32_t s = 0; s < stbl->stsd.entry_count; s++)
+            if (stbl->stsd.entries[s] && stbl->stsd.entries[s]->type == FOURCC2UINT('a','v','0','1')) {
+                trak_idx = t; stsd_idx = (int)s; break;
+            }
+    }
+    if (trak_idx < 0) return 0;
+    struct trak_box *trak = &moov->trak[trak_idx];
+    struct stbl_box *stbl = &trak->mdia.minf.stbl;
+    struct mdhd_box *mdhd = &trak->mdia.mdhd;
+    struct AV1SampleEntry *entry = (struct AV1SampleEntry *)stbl->stsd.entries[stsd_idx];
+    if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0)
+        return 0;
+    uint32_t timescale = mdhd->timescale ? mdhd->timescale : 1;
+    int decoded = 0; uint32_t si = 0;
+    for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < stbl->stsz.sample_count; ci++) {
+        uint64_t chunk_off = stbl->stco.chunk_offset[ci];
+        uint32_t spc = avif_stsc_spc(&stbl->stsc, ci);
+        if (spc == 0) spc = stbl->stsz.sample_count - si;
+        uint64_t cum = chunk_off;
+        for (uint32_t k = 0; k < spc && si < stbl->stsz.sample_count; k++) {
+            uint32_t sz = stbl->stsz.entry_size[si];
+            fseek(f, cum, SEEK_SET);
+            uint8_t *data = malloc(sz ? sz : 1);
+            if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
+            struct av1_image img;
+            int rc = av1_decode_track_sample(data, sz, &entry->config, &img);
+            free(data);
+            if (rc == 0) {
+                int wide = img.bitdepth > 8;
+                struct pic *p = pic_alloc(sizeof(AVIF));
+                p->width = img.width; p->height = img.height;
+                p->depth = wide ? 64 : 32;
+                p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+                p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGBA8888;
+                p->pixels = malloc((size_t)p->pitch * p->height);
+                if (p->pixels) {
+                    if (wide) av1_image_to_rgba16(&img, p->pixels, p->pitch);
+                    else av1_image_to_bgra(&img, p->pixels, p->pitch);
+                }
+                uint64_t dt = 0;
+                if (stbl->stts.entry_count > 0) {
+                    uint32_t a = 0;
+                    for (uint32_t ei = 0; ei < stbl->stts.entry_count; ei++) {
+                        a += stbl->stts.sample_count[ei];
+                        if (si < a) { dt = stbl->stts.sample_delta[ei]; break; }
+                    }
+                }
+                uint32_t dms = (uint32_t)((dt * 1000 + timescale/2) / timescale);
+                pic_set_duration(p, dms);
+                if (decoded == 0) *first_pic_out = p;
+                else file_enqueue_pic(p);
+                decoded++;
+                av1_image_free(&img);
+            }
+            cum += sz; si++;
+        }
+    }
+    return decoded;
+}
+
+
+
 void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)
 {
     // hexdump(stdout, "coded ", "", data, 256);
@@ -954,6 +1067,11 @@ avif_parse_meta(AVIF *h, FILE *f, uint64_t size)
         case FOURCC2UINT('m', 'e', 't', 'a'):
             read_meta_box(f, &h->meta);
             break;
+        case FOURCC2UINT('m', 'o', 'o', 'v'):
+            h->moov = realloc(h->moov, (h->moov_num + 1) * sizeof(struct moov_box));
+            read_moov_box(f, h->moov + h->moov_num);
+            h->moov_num++;
+            break;
         case FOURCC2UINT('m', 'd', 'a', 't'):
             h->mdat_num++;
             fseek(f, b.size, SEEK_CUR);
@@ -1163,6 +1281,18 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     }
     avif_collect_metadata(h, primary_id, f, (uint64_t)file_size);
 
+    /* Track-based animation (avis brand + moov). */
+    if (h->moov_num > 0 && avif_is_avis(h)) {
+        struct pic *first = NULL; int n = 0;
+        for (int m = 0; m < h->moov_num; m++) {
+            int got = avif_decode_moov_track(f, h->moov + m, m == 0 ? &first : NULL);
+            if (got > 0) n += got;
+        }
+        if (first) {
+            fclose(f); first->pic = p->pic; AVIF_free(p); return first;
+        }
+    }
+
     /* Decode the primary AV1 image item with the in-house spec-based
      * decoder.  The item payload is a low overhead bitstream. */
     int av01_idx = prim_idx;
@@ -1335,6 +1465,10 @@ AVIF_free(struct pic *p)
             free(a->items[i].data);
         }
         free(a->items);
+    }
+    if (a->moov) {
+        for (int i = 0; i < a->moov_num; i++) free_moov_box(a->moov + i);
+        free(a->moov);
     }
     if (a->ftyp.compatible_brands) {
         free(a->ftyp.compatible_brands);

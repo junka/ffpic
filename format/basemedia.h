@@ -374,7 +374,7 @@ struct stsc_box {
 struct stco_box {
     FULL_BOX_ST;
     uint32_t entry_count;
-    uint32_t* chunk_offset;
+    uint64_t* chunk_offset;
 };
 
 struct stss_box {

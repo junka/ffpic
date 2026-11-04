@@ -145,10 +145,12 @@ int read_HEVCSampleEntry(FILE *f, struct SampleEntry **b)
         *b = calloc(1, sizeof(struct HEVCSampleEntry));
     }
     struct HEVCSampleEntry *e = (struct HEVCSampleEntry *)*b;
+    long entry_start = ftell(f);
     read_VisualSampleEntry(f, &e->sample);
     assert(e->sample.entry.type == FOURCC2UINT('h', 'v', 'c', '1') ||
            e->sample.entry.type == FOURCC2UINT('h', 'e', 'v', '1'));
     read_hvcc_box(f, (struct box **)(&e->config));
+    fseek(f, entry_start + (long)e->sample.entry.size, SEEK_SET);
     return 0;
 }
 
@@ -1084,52 +1086,66 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
     return num;
 }
 
+static uint32_t heif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {
+    uint32_t one = ci + 1, r = 0;
+    for (uint32_t i = 0; i < stsc->entry_count; i++)
+        if (stsc->first_chunk[i] <= one) r = stsc->sample_per_chunk[i];
+    return r;
+}
+
 static int
 decode_moov(FILE *f, struct moov_box *b)
 {
-    int n = 0;
-    uint32_t offset, size;
-    for (int i = 0; i <b->trak_num; i++) {
-        // chunk coun
-        uint32_t chunk_count = b->trak[i].mdia.minf.stbl.stco.entry_count;
-        uint32_t sc_count = b->trak[i].mdia.minf.stbl.stsc.entry_count;
-        int width = (int)fix16_16(b->trak[i].tkhd.width);
-        int height = (int)fix16_16(b->trak[i].tkhd.height);
-        uint32_t total_samples = 0;
-        for (uint32_t j = 0; j < chunk_count; j++) {
-            total_samples += (j < sc_count) ?
-                b->trak[i].mdia.minf.stbl.stsc.sample_per_chunk[j] : 0;
-        }
-        if (total_samples > b->trak[i].mdia.minf.stbl.stsz.sample_count) {
-            VERR(heif, "track %d wants %u samples but stsz lists %u", i,
-                 total_samples, b->trak[i].mdia.minf.stbl.stsz.sample_count);
-            continue;
-        }
-        for (uint32_t j = 0; j < chunk_count; j++) {
-            if (j >= sc_count) {
-                break;
+    int total = 0;
+    for (int t = 0; t < b->trak_num; t++) {
+        struct trak_box *trak = &b->trak[t];
+        struct stbl_box *stbl = &trak->mdia.minf.stbl;
+        struct mdhd_box *mdhd = &trak->mdia.mdhd;
+        if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0) continue;
+        int width = (int)fix16_16(trak->tkhd.width);
+        int height = (int)fix16_16(trak->tkhd.height);
+        struct hevc_param_set *hps = NULL; int out_bits = 8; int stsd_idx = -1;
+        for (uint32_t s = 0; s < stbl->stsd.entry_count; s++) {
+            struct SampleEntry *e = stbl->stsd.entries[s];
+            if (e && (e->type == FOURCC2UINT('h','v','c','1') || e->type == FOURCC2UINT('h','e','v','1'))) {
+                hps = &((struct HEVCSampleEntry*)e)->config.hps;
+                out_bits = heif_output_bits(&((struct HEVCSampleEntry*)e)->config);
+                stsd_idx = (int)s; break;
             }
-            offset = b->trak[i].mdia.minf.stbl.stco.chunk_offset[j];
-            int sample_num = b->trak[i].mdia.minf.stbl.stsc.sample_per_chunk[j];
-            // printf("sample num %d\n", sample_num);
-            n += sample_num;
-            // int first = b->trak[i].mdia.minf.stbl.stsc.first_chunk[j];
-            fseek(f, offset, SEEK_SET);
-            for (int k = 0; k < sample_num; k++) {
-                size = b->trak[i].mdia.minf.stbl.stsz.entry_size[k];
-                uint8_t *data = malloc(size);
-                FFREAD_IGNORE(data, size, 1, f);
-                // printf("load one for %d, length %d\n", k, size);
-                struct pic *p1 = HEIF_load_one(width, height, data, size, NULL,
-                                               32);
-                if (p1) {
-                    file_enqueue_pic(p1);
-                }
+        }
+        if (stsd_idx < 0) continue;
+        uint32_t timescale = mdhd->timescale ? mdhd->timescale : 1;
+        uint32_t si = 0;
+        for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < stbl->stsz.sample_count; ci++) {
+            uint64_t chunk_off = stbl->stco.chunk_offset[ci];
+            uint32_t spc = heif_stsc_spc(&stbl->stsc, ci);
+            if (spc == 0) spc = stbl->stsz.sample_count - si;
+            uint64_t cum = chunk_off;
+            for (uint32_t k = 0; k < spc && si < stbl->stsz.sample_count; k++) {
+                uint32_t sz = stbl->stsz.entry_size[si];
+                fseek(f, cum, SEEK_SET);
+                uint8_t *data = malloc(sz ? sz : 1);
+                if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
+                struct pic *p1 = HEIF_load_one(width, height, data, sz, hps, out_bits);
                 free(data);
+                if (p1) {
+                    uint64_t dt = 0;
+                    if (stbl->stts.entry_count > 0) {
+                        uint32_t a = 0;
+                        for (uint32_t ei = 0; ei < stbl->stts.entry_count; ei++) {
+                            a += stbl->stts.sample_count[ei];
+                            if (si < a) { dt = stbl->stts.sample_delta[ei]; break; }
+                        }
+                    }
+                    uint32_t dms = (uint32_t)((dt * 1000 + timescale/2) / timescale);
+                    pic_set_duration(p1, dms);
+                    file_enqueue_pic(p1); total++;
+                }
+                cum += sz; si++;
             }
         }
     }
-    return n;
+    return total;
 }
 
 static struct pic*
@@ -1485,7 +1501,7 @@ HEIF_info(FILE *f, struct pic* p)
                 print_box(f, &m->trak[i].mdia.minf.stbl);
                 fprintf(f, "\n\t\tchunk count: %d\n", m->trak[i].mdia.minf.stbl.stco.entry_count);
                 for (uint32_t j = 0; j< m->trak[i].mdia.minf.stbl.stco.entry_count; j++) {
-                    fprintf(f, "\t\toffset: 0x%x\n", m->trak[i].mdia.minf.stbl.stco.chunk_offset[j]);
+                    fprintf(f, "\t\toffset: 0x%lx\n", (unsigned long)m->trak[i].mdia.minf.stbl.stco.chunk_offset[j]);
                     fprintf(f, "\t\tsize: 0x%x\n", m->trak[i].mdia.minf.stbl.stsz.entry_size[j]);
 
                 }

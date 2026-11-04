@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include "basemedia.h"
+#include "../coding/av1.h"
 
 #pragma pack(push, 1)
 
@@ -396,6 +397,17 @@ struct avif_item {
     uint8_t *data;
 };
 
+/* AV1 Sample Entry for ISO/IEC 23008-12 moov stsd. */
+struct AV1SampleEntry {
+    struct VisualSampleEntry sample;
+    struct av1C_box config;
+};
+
+/* Decode one AV1 track sample, joining configOBUs when present. */
+int av1_decode_track_sample(const uint8_t *sample_data, size_t sample_len,
+                            const struct av1C_box *av1c,
+                            struct av1_image *img);
+
 typedef struct {
     struct ftyp_box ftyp;
     struct meta_box meta;
@@ -403,6 +415,10 @@ typedef struct {
     // struct mdat_box *mdat;
 
     struct avif_item *items;
+
+    /* Track-based animation (avis brand + moov). */
+    int moov_num;
+    struct moov_box *moov;
 
     /* metadata items tied to the primary picture */
     uint32_t exif_id;

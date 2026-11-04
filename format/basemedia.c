@@ -838,12 +838,33 @@ int read_stsd_box(FILE *f, struct stsd_box *b)
         struct box p;
         probe_box(f, &p);
         struct SampleEntry *e = NULL;
-        if (p.type == FOURCC2UINT('h', 'v', 'c', '1')) {
+        if (p.type == FOURCC2UINT('h', 'v', 'c', '1') ||
+            p.type == FOURCC2UINT('h', 'e', 'v', '1')) {
             read_HEVCSampleEntry(f, &e);
+        } else if (p.type == FOURCC2UINT('a', 'v', '0', '1')) {
+            extern int read_AV1SampleEntry(FILE *f, struct SampleEntry **b);
+            read_AV1SampleEntry(f, &e);
         } else {
             fseek(f, p.size, SEEK_CUR);
         }
         b->entries[i] = e;
+    }
+    return b->size;
+}
+
+
+/* 8.7.8 Chunk Offset Box (64-bit offsets) — co64.  Mutually exclusive
+ * with stco; whichever appears second in the file overwrites stco. */
+int read_co64_box(FILE *f, struct stco_box *b)
+{
+    FFREAD_BOX_FULL(b, f, FOURCC2UINT('c', 'o', '6', '4'));
+    b->entry_count = read_u32(f);
+    free(b->chunk_offset);
+    b->chunk_offset = calloc(b->entry_count, sizeof(uint64_t));
+    for (uint32_t i = 0; i < b->entry_count; i++) {
+        uint32_t hi = read_u32(f);
+        uint32_t lo = read_u32(f);
+        b->chunk_offset[i] = ((uint64_t)hi << 32) | lo;
     }
     return b->size;
 }
@@ -914,9 +935,9 @@ int read_stco_box(FILE *f, struct stco_box *b)
     VDBG(basemedia, "%s size %" PRIu64 ", entry_count %d", type2name(b->type), b->size,
            b->entry_count);
 
-    b->chunk_offset = calloc(b->entry_count, 4);
+    b->chunk_offset = calloc(b->entry_count, sizeof(uint64_t));
     for (uint32_t i = 0; i < b->entry_count; i++) {
-        b->chunk_offset[i] = read_u32(f);
+        b->chunk_offset[i] = (uint64_t)read_u32(f);
     }
     return b->size;
 }
@@ -1025,6 +1046,9 @@ int read_stbl_box(FILE *f, struct stbl_box *b)
         case FOURCC2UINT('s', 't', 'c', 'o'):
             read_stco_box(f, &b->stco);
             break;
+        case FOURCC2UINT('c', 'o', '6', '4'):
+            read_co64_box(f, &b->stco);
+            break;
         case FOURCC2UINT('c', 't', 't', 's'):
             read_ctts_box(f, &b->ctts);
             break;
@@ -1063,16 +1087,10 @@ int read_minf_box(FILE *f, struct minf_box *b)
             read_vmhd_box(f, &b->vmhd);
             break;
         case FOURCC2UINT('s', 'm', 'h', 'd'):
-            // read_smhd_box();
-            break;
         case FOURCC2UINT('h', 'm', 'h', 'd'):
-            // read_hmhd_box();
-            break;
         case FOURCC2UINT('s', 't', 'h', 'd'):
-            // read_sthd_box();
-            break;
         case FOURCC2UINT('n', 'm', 'h', 'd'):
-            // read_nmhd_box();
+            fseek(f, p.size, SEEK_CUR);
             break;
         case FOURCC2UINT('d', 'i', 'n', 'f'):
             read_dinf_box(f, &b->dinf);
@@ -1206,22 +1224,16 @@ int read_trak_box(FILE *f, struct trak_box *b)
     FFREAD_BOX_ST(b, f, FOURCC2UINT('t', 'r', 'a', 'k'));
     read_tkhd_box(f, &b->tkhd);
     int64_t s = b->size - 8 - b->tkhd.size;
-    while (s) {
+    while (s > 0) {
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "TRAK: %s, left %"PRIu64"", type2name(type), s);
         switch (type) {
             case FOURCC2UINT('t', 'r', 'e', 'f'):
-                // read_tref_box();
-                break;
             case FOURCC2UINT('t', 'r', 'g', 'r'):
-                // read_trgr_box();
-                break;
             case FOURCC2UINT('e', 'd', 't', 's'):
-                // read_edts_box();
-                break;
             case FOURCC2UINT('m', 'e', 't', 'a'):
-                // read_meta_box();
+                fseek(f, p.size, SEEK_CUR);
                 break;
             case FOURCC2UINT('m', 'd', 'i', 'a'):
                 read_mdia_box(f, &b->mdia);
@@ -1242,7 +1254,9 @@ read_moov_box(FILE *f, struct moov_box *b)
     read_mvhd_box(f, &b->mvhd);
 
     int64_t s = b->size - b->mvhd.size - 8;
-    while (s) {
+    int loop_guard = 0;
+    while (s > 0 && loop_guard < 1000) {
+        loop_guard++;
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "MOOV: %s left %"PRIu64"", type2name(type), s);

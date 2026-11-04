@@ -1992,6 +1992,10 @@ int WEBP_read_frame(WEBP *w, FILE *f)
     return 0;
 }
 
+/* vp8l_decode_image is implemented in format/vp8l.c */
+extern int vp8l_decode_image(struct bits_vec *v, int width, int height,
+                             int alpha_is_used, uint32_t *out_pixels);
+
 int WEBP_read_lossless(WEBP *w, FILE *f)
 {
     unsigned char b; // magic byte 0x2f
@@ -2000,23 +2004,49 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
         VERR(webp, "invalid magic value %x", b);
         return -1;
     }
-    uint8_t *buf = malloc(w->vp8l.size);
-    FFREAD_IGNORE(buf, w->vp8l.size, 1, f);
-    // struct bool_dec *d = bool_dec_init(buf, w->vp8l.size);
-    struct bits_vec * v = bits_vec_alloc(buf, w->vp8l.size, BITS_LSB);
-    w->fi.width = READ_BITS(v, 14) + 1;
-    w->fi.height = READ_BITS(v, 14) + 1;
-    /* both are only reported by the info log, which is compiled out of the
-     * release build, so mark them to keep -Wunused-variable quiet */
-    int is_alpha_used UNUSED = READ_BIT(v);
-    int version_num UNUSED = READ_BITS(v, 3);
-    VINFO(webp, "VP8L %dx%d alpha %d version %d", w->fi.width, w->fi.height,
+    /* VP8L chunk layout: [0x2f magic (1B)][image_data (size-1 B)] */
+    uint32_t image_data_len = w->vp8l.size - 1;
+    uint8_t *buf = malloc(image_data_len);
+    if (!buf) {
+        VERR(webp, "malloc failed for VP8L image_data");
+        return -1;
+    }
+    FFREAD_IGNORE(buf, image_data_len, 1, f);
+    struct bits_vec *v = bits_vec_alloc(buf, image_data_len, BITS_LSB);
+    if (!v) {
+        free(buf);
+        VERR(webp, "bits_vec_alloc failed");
+        return -1;
+    }
+    int width = READ_BITS(v, 14) + 1;
+    int height = READ_BITS(v, 14) + 1;
+    int is_alpha_used = READ_BIT(v);
+    int version_num = READ_BITS(v, 3);
+    if (version_num != 0) {
+        VERR(webp, "unsupported VP8L version %d", version_num);
+        bits_vec_free(v);
+        return -1;
+    }
+    VINFO(webp, "VP8L %dx%d alpha %d version %d", width, height,
           is_alpha_used, version_num);
+    w->fi.width = width;
+    w->fi.height = height;
+    w->data = malloc((size_t)width * height * 4);
+    if (!w->data) {
+        bits_vec_free(v);
+        VERR(webp, "malloc failed for VP8L pixels");
+        return -1;
+    }
+    if (vp8l_decode_image(v, width, height, is_alpha_used,
+                          (uint32_t *)w->data) < 0) {
+        free(w->data);
+        w->data = NULL;
+        bits_vec_free(v);
+        VERR(webp, "vp8l_decode_image failed");
+        return -1;
+    }
     bits_vec_free(v);
-    /* the huffman coded VP8L pixel data and its transforms are not decoded
-     * yet, reject instead of handing back uninitialised pixels */
-    VERR(webp, "lossless webp decoding is not implemented");
-    return -1;
+    return 0;
 }
 
 static struct pic* 
@@ -2078,6 +2108,9 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
                 fclose(f);
                 return NULL;
             }
+            /* VP8L header carries exact dims, no macroblock padding */
+            if (!p->width)  p->width  = w->fi.width;
+            if (!p->height) p->height = w->fi.height;
             break;
         } else {
             // skip other chuck as optional

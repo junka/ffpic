@@ -109,6 +109,7 @@ list(APPEND FFPIC_FORMART
   "${FFPIC_ROOT}/format/svg.c"
   "${FFPIC_ROOT}/format/file.c"
   "${FFPIC_ROOT}/format/webp.c"
+  "${FFPIC_ROOT}/format/vp8l.c"
   "${FFPIC_ROOT}/format/jp2.c"
   "${FFPIC_ROOT}/format/jp2_dec.c"
   "${FFPIC_ROOT}/format/heif.c"

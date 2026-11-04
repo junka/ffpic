@@ -2954,6 +2954,128 @@ emit_webp_lossless(void)
                       sizeof(webp_lossless_8x8));
 }
 
+/* Reference MD5 of ffmpeg's BGRA output for webp_lossless_8x8 (8x8, 256 bytes). */
+static const char WEBP_LOSSLESS_REF_MD5[] = "701e724ea435c646da83f630446be02c";
+
+/* Minimal RFC 1321 MD5 (public-domain style, copied from test_hevc_tiles_real.c). */
+static const char *
+md5_hex(const uint8_t *buf, size_t len)
+{
+    static const uint32_t T[64] = {
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
+        0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
+        0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
+        0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
+        0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
+        0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
+        0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
+        0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
+        0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
+    };
+    static const uint32_t s[64] = {
+        7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+        5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
+        4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+        6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
+    };
+    uint32_t a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+    uint64_t bit_len = (uint64_t)len * 8;
+    size_t pad = (len % 64 < 56) ? (56 - len % 64) : (120 - len % 64);
+    size_t total = len + pad + 8;
+    uint8_t *full = malloc(total);
+    if (!full) return "OOM";
+    memcpy(full, buf, len);
+    full[len] = 0x80;
+    memset(full + len + 1, 0, pad);
+    for (int i = 0; i < 8; i++)
+        full[len + pad + i] = (uint8_t)(bit_len >> (i * 8));
+
+    for (size_t off = 0; off < total; off += 64) {
+        uint32_t M[16];
+        for (int i = 0; i < 16; i++) {
+            M[i] = (uint32_t)full[off + i*4]
+                 | ((uint32_t)full[off + i*4 + 1] << 8)
+                 | ((uint32_t)full[off + i*4 + 2] << 16)
+                 | ((uint32_t)full[off + i*4 + 3] << 24);
+        }
+        uint32_t A = a0, B = b0, C = c0, D = d0;
+        for (int i = 0; i < 64; i++) {
+            uint32_t f, g;
+            if (i < 16)      { f = (B & C) | ((~B) & D);         g = i; }
+            else if (i < 32) { f = (D & B) | ((~D) & C);         g = (5*i + 1) % 16; }
+            else if (i < 48) { f = B ^ C ^ D;                    g = (3*i + 5) % 16; }
+            else             { f = C ^ (B | (~D));               g = (7*i) % 16; }
+            f = f + A + T[i] + M[g];
+            uint32_t tmp = D; D = C; C = B;
+            B = B + ((f << s[i]) | (f >> (32 - s[i])));
+            A = tmp;
+        }
+        a0 += A; b0 += B; c0 += C; d0 += D;
+    }
+    free(full);
+    static char out[33];
+    uint8_t digest[16];
+    memcpy(digest, &a0, 4); memcpy(digest + 4, &b0, 4);
+    memcpy(digest + 8, &c0, 4); memcpy(digest + 12, &d0, 4);
+    for (int i = 0; i < 16; i++)
+        sprintf(out + i*2, "%02x", digest[i]);
+    out[32] = 0;
+    return out;
+}
+
+static int
+check_webp_lossless_md5(const char *name)
+{
+    struct file_ops *ops = file_probe(name);
+    struct pic *p;
+    int rc = 0;
+
+    if (!ops) {
+        printf("%s: no format claimed it\n", name);
+        return -1;
+    }
+    if (strcmp(ops->name, "WEBP") != 0) {
+        printf("%s: probed as %s, expected WEBP\n", name, ops->name);
+        return -1;
+    }
+
+    p = file_load(ops, name, 0);
+    if (!p) {
+        printf("%s: WEBP decoder rejected it\n", name);
+        return -1;
+    }
+    if (p->width != 8 || p->height != 8) {
+        printf("%s: got %dx%d, expected 8x8\n", name, p->width, p->height);
+        rc = -1;
+    } else if (!p->pixels) {
+        printf("%s: decoded with no pixels\n", name);
+        rc = -1;
+    } else {
+        /* VP8L width is exact (no macroblock padding); use width*4*height
+         * to avoid hashing any uninitialised tail padding bytes. */
+        size_t tight = (size_t)p->width * 4 * p->height;
+        const char *got = md5_hex((const uint8_t *)p->pixels, tight);
+        if (strcmp(got, WEBP_LOSSLESS_REF_MD5) != 0) {
+            printf("%s: MD5 mismatch got %s want %s\n", name, got, WEBP_LOSSLESS_REF_MD5);
+            rc = -1;
+        }
+    }
+
+    file_free(ops, p);
+    remove(name);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 /* RIFF/WEBP container whose vp8 chunk size promises 104 bytes that are not
  * there, the frame header read has to fail instead of decoding stale memory */
 static int
@@ -3631,7 +3753,7 @@ int main(void)
         failed++;
     }
     if (emit_webp_lossless() ||
-        check_reject("webp_lossless.webp", "WEBP")) {
+        check_webp_lossless_md5("webp_lossless.webp")) {
         failed++;
     }
     if (emit_webp_truncated() || check_reject("webp_short.webp", "WEBP")) {

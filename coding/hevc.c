@@ -17,6 +17,18 @@
 
 VLOG_REGISTER(hevc, DEBUG)
 
+/* 从 parse_nalu → parse_slice_segment_layer → parse_slice_segment_data 传递
+ * NAL 原始 payload 的 emulation prevention 信息，用于修正 entry_point_offset
+ * 的坐标系（原始 payload → RBSP）。
+ * HEVC spec 7.4.7.1: entry_point_offset 是相对于 slice segment data 的原始
+ * 字节偏移；但 ffpic 的 bits_vec v 使用的是去 emulation prevention 后的 RBSP，
+ * 两者之间有 skipped_bytes（00 00 03 中的 03）的差值。
+ */
+static uint8_t *g_nal_raw_payload = NULL;
+static int      g_nal_raw_len = 0;
+static int     *g_nal_skip_count = NULL;
+static int      g_slice_data_offset = 0;
+
 #pragma pack(push, 1)
 struct cu_info {
     uint8_t ctDepth : 2;
@@ -6896,7 +6908,13 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     // struct vps *vps = hps->vps[sps->sps_video_parameter_set_id];
 
     uint8_t end_of_slice_segment_flag = 0;
-    /* 保存 slice segment data 起点；cabac_dec_reset 内部的 bits_vec_reinit_cur 会改 v->start */
+    /* parse_slice_segment_layer 在调用本函数之前已经调了
+     * bits_vec_reinit_cur(v)，把 v->start 移到了 slice header 结束位置，
+     * 所以这里 v->start = v->ptr = slice_segment_data() 在 RBSP 里的起点。
+     * 但 entry_point_offset[i] 是在 x265 编码时（emulation prevention 之前）
+     * 写入的，是相对于原始 NAL payload 里 slice_data_start 的偏移。
+     * 所以 tile 跳转时需要用 skip_count + data_offset 修正到 RBSP 坐标系。
+     */
     const uint8_t *slice_data_start = v->start;
 
     int slice_qpy = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
@@ -6990,27 +7008,49 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         if (!end_of_slice_segment_flag && ((pps->tiles_enabled_flag && pps->TileId[CtbAddrInTs] != pps->TileId[CtbAddrInTs - 1]) ||
                 (pps->entropy_coding_sync_enabled_flag && (CtbAddrInRs % sps->PicWidthInCtbsY == 0 ||
                 pps->TileId[CtbAddrInTs] != pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]])))) {
-            uint8_t end_of_subset_one_bit = cabac_dec_terminate(d); // should be equal to 1
-            if (end_of_subset_one_bit != 1) {
-                VERR(hevc, "end_of_subset_one_bit is %d", end_of_subset_one_bit);
-                cabac_dec_free(d);
-                return -EINVAL;
-            }
+            /* HEVC spec 7.3.8.1 + FFmpeg cabac.c:480-491: tile/subset 边界
+             * 不需要再调 CABAC terminate。规范里的 end_of_subset_one_bit 由
+             * 每个 tile 子流末尾的 byte_alignment 自然处理；并行解码器直接跳
+             * 入独立子流起点。ffpic 这里通过 entry_point_offset 跳到新 tile
+             * 子流起点，cabac_dec_reset 重新初始化 CABAC range/value，等价于
+             * FFmpeg cabac_reinit。二次 terminate 会从已被旧 tile 消耗完的
+             * CABAC 状态中读垃圾值，导致 range/value 错乱。
+             */
             bits_vec_dump(v);
 
-            // assert(lastByte == v->ptr - v->start);
-            // entry_point_offset 已累加，是相对 slice_data_start 的绝对字节偏移
             if (slice->num_entry_point_offsets > 0) {
                 int next_tile = pps->TileId[CtbAddrInTs];
                 if (next_tile > 0 && next_tile <= (int)slice->num_entry_point_offsets) {
-                    uint32_t off = slice->entry_point_offset[next_tile - 1];
-                    v->ptr = (uint8_t *)slice_data_start + off;
+                    uint32_t cumul = slice->entry_point_offset[next_tile - 1];
+                    /* entry_point_offset 是 x265 在 emulation prevention 之前编码的，
+                     * 是原始 NAL payload 坐标系里从 slice_data_start（原始位置
+                     * data_offset）到 entry point 的偏移。需要扣掉两者之间的
+                     * skipped_bytes（emulation prevention 里的 03 字节）才能落到
+                     * RBSP 坐标系。
+                     * 修正公式：rbsp_offset = cumul - (skip_count[data_offset + cumul]
+                     *                       - skip_count[data_offset])
+                     */
+                    if (g_nal_skip_count && g_slice_data_offset > 0) {
+                        int raw_entry = g_slice_data_offset + cumul;
+                        if (raw_entry > g_nal_raw_len) {
+                            VERR(hevc, "entry_point_offset[%d]=%u 超出原始 payload 长度 %d",
+                                 next_tile - 1, cumul, g_nal_raw_len);
+                            cabac_dec_free(d);
+                            return -EINVAL;
+                        }
+                        int sc_entry = g_nal_skip_count[raw_entry];
+                        int sc_start = g_nal_skip_count[g_slice_data_offset];
+                        int rbsp_offset = (int)cumul - (sc_entry - sc_start);
+                        v->ptr = (uint8_t *)slice_data_start + rbsp_offset;
+                    } else {
+                        /* 没有 skip_count 信息（非 VCL slice 或构建问题），
+                         * 直接用原始值跳转 */
+                        v->ptr = (uint8_t *)slice_data_start + cumul;
+                    }
                     v->offset = 0;
                 }
             }
             cabac_dec_reset(d);
-            // i ++;
-            // end of entry_point_offset
         }
     } while (!end_of_slice_segment_flag);
     cabac_dec_free(d);
@@ -7461,6 +7501,23 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         }
     }
     // bits_vec_dump(v);
+    /* 计算 slice header 在原始 NAL payload 里的长度 data_offset：
+     * RBSP 里 slice header 消耗了 slice_header_rbsp_len = v->ptr - v->start 字节。
+     * 原始位置 raw 对应 RBSP 位置 rbsp = raw - skip_count[raw]。
+     * 求 data_offset 使得 slice_header_rbsp_len = data_offset - skip_count[data_offset]。
+     * 这是一个单调递增函数，直接遍历 skip_count 数组即可。
+     */
+    int slice_header_rbsp_len = (int)(v->ptr - v->start);
+    if (g_nal_skip_count && g_nal_raw_len > 0 && slice_header_rbsp_len >= 0) {
+        g_slice_data_offset = 0;
+        for (int raw = 0; raw <= g_nal_raw_len; raw++) {
+            int rbsp_at_raw = raw - g_nal_skip_count[raw];
+            if (rbsp_at_raw == slice_header_rbsp_len) {
+                g_slice_data_offset = raw;
+                break;
+            }
+        }
+    }
     //we have process the segment header done, reinit for segment_data, move pointer
     bits_vec_reinit_cur(v);
     // bits_vec_dump(v);
@@ -7657,17 +7714,46 @@ parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
     // See 7.3.1.1
     int nrbsp = 0;
     uint8_t *p = data + 2;
+    int raw_payload_len = len - 2;
+    int *skip_count = calloc(raw_payload_len + 1, sizeof(int));
     for (int l = 2; l < len; l ++) {
         if ((l + 2 < len) && ((p[0]<<16| p[1]<<8| p[2]) == 0x3)) {
             rbsp[nrbsp++] = p[0];
             rbsp[nrbsp++] = p[1];
             l += 2;
             /* skip third byte */
+            // skip_count 从 emulation prevention 的 03 位置开始 +1
+            int raw_pos = (int)(p - (data + 2)) + 2;  // 03 byte 在原始 payload 里的位置
+            if (raw_pos < raw_payload_len) {
+                for (int k = raw_pos; k <= raw_payload_len; k++)
+                    skip_count[k]++;
+            }
             p += 3;
         } else {
             rbsp[nrbsp++] = *p;
             p++;
         }
+    }
+
+    /* 记录原始 payload skip_count 信息给 tile 跳转使用
+     * 只对 VCL slice NAL 设置，不影响 VPS/SPS/PPS/SEI */
+    int is_vcl_slice = (h.nal_unit_type >= IDR_W_RADL && h.nal_unit_type <= RSV_IRAP_VCL23);
+    if (g_nal_skip_count) {
+        free(g_nal_skip_count);
+        g_nal_skip_count = NULL;
+    }
+    if (is_vcl_slice) {
+        g_nal_raw_payload = data + 2;
+        g_nal_raw_len = raw_payload_len;
+        g_nal_skip_count = skip_count;
+        g_slice_data_offset = 0;  // 在 parse_slice_segment_layer 里设置
+    } else {
+        g_nal_raw_payload = NULL;
+        g_nal_raw_len = 0;
+        g_nal_skip_count = NULL;
+        g_slice_data_offset = 0;
+        free(skip_count);
+        skip_count = NULL;
     }
 
     struct bits_vec *v = bits_vec_alloc(rbsp, nrbsp, BITS_MSB);

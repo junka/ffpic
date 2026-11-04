@@ -69,6 +69,12 @@ typedef struct {
     bool has_graphic_control;
     struct graphic_control_extension* control;
 
+    /* post-LZW index stream, one byte per pixel, in normal (top-to-bottom)
+     * row order after gif_deinterlace has been applied. */
+    uint8_t* indices;
+
+    /* final BGRA pixels — kept for legacy single-frame callers (GIF_load_one
+     * path). The animation-aware loader uses indices for canvas composition. */
     uint8_t* data;
 } Image;
 
@@ -165,6 +171,9 @@ typedef struct {
 
     int extension_count;
     Extension* extensions;
+
+    /* Netscape loop count (0 = infinite, -1 = no Netscape ext) */
+    int loop_count;
 } GIF;
 
 

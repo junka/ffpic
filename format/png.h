@@ -22,6 +22,7 @@ enum png_chuck_type {
     CHUNK_TYPE_IHDR = FOUR2UINT('I', 'H', 'D', 'R'),
     CHUNK_TYPE_PLTE = FOUR2UINT('P', 'L', 'T', 'E'),
     CHUNK_TYPE_IDAT = FOUR2UINT('I', 'D', 'A', 'T'),
+    CHUNK_TYPE_IEND = FOUR2UINT('I', 'E', 'N', 'D'),
     CHUNK_TYPE_GAMA = FOUR2UINT('g', 'A', 'M', 'A'),
     CHUNK_TYPE_ICCP = FOUR2UINT('i', 'C', 'C', 'P'),
     CHUNK_TYPE_CHRM = FOUR2UINT('c', 'H', 'R', 'M'),

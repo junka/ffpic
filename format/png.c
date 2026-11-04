@@ -37,6 +37,165 @@ PNG_probe(FILE *f)
 
     return -EINVAL;
 }
+static uint32_t chunk_crc(uint32_t type, const uint8_t *data, uint32_t len){
+    uint32_t crc=init_crc32((uint8_t*)&type,sizeof(type));
+    if(len>0)crc=update_crc(crc,(uint8_t*)data,(int)len);
+    return finish_crc32(crc);
+}
+static void write_u32_be(FILE *f, uint32_t v){
+    uint8_t b[4]={(uint8_t)(v>>24),(uint8_t)(v>>16),(uint8_t)(v>>8),(uint8_t)v};
+    fwrite(b,1,4,f);
+}
+void PNG_encode(struct pic *p, const char *filename){
+    if(!p||!filename)return;
+    FILE *f=fopen(filename,"wb"); if(!f){VERR(png,"cannot open %s",filename);return;}
+    int channels,color_type;
+    switch(p->depth){
+    case 24:channels=3;color_type=TRUECOLOR;break;
+    case 32:channels=4;color_type=TRUECOLOR_ALPHA;break;
+    default:VERR(png,"unsupported depth %d",p->depth);fclose(f);return;
+    }
+    int bpr=p->width*channels; int raw_len=(bpr+1)*p->height;
+    uint8_t *raw=malloc((size_t)raw_len); if(!raw){fclose(f);return;}
+    uint8_t *src=(uint8_t*)p->pixels;
+    int pitch=p->pitch>0?p->pitch:bpr;
+    /* Determine if we need B<->R swap. Input p->pixels byte layout depends
+     * on the loader (BMP gives BGRA/BGR, PNG gives RGBA). We must write
+     * PNG-native RGB/RGBA (color_type 2/6). */
+    uint32_t ftype = (p->format >> 24) & 0xF;
+    uint32_t forder = (p->format >> 20) & 0xF;
+    int swap_br = 0;
+    if (ftype == 7 && forder == 4) swap_br = 1;  // ARRAYU8/BGR
+    if (ftype == 6 && forder == 3) swap_br = 1;  // PACKED32/ARGB (mem BGR)
+    for(int y=0;y<p->height;y++){
+        uint8_t *dst=raw+(int64_t)(bpr+1)*y;
+        uint8_t *row_src=src+(int64_t)pitch*y;
+        if(!swap_br){
+            memcpy(dst+1,row_src,(size_t)bpr);
+        } else {
+            for(int x=0;x<p->width;x++){
+                uint8_t *sp=row_src+x*channels;
+                uint8_t *dp=dst+1+x*channels;
+                dp[0]=sp[2]; dp[1]=sp[1]; dp[2]=sp[0]; /* R,G,B <- B,G,R */
+                if(channels==4) dp[3]=sp[3];
+            }
+        }
+    }
+    if (p->width >= 2 && p->height >= 2) {
+        VERR(png, "raw row0 data (after copy): %02x %02x %02x %02x %02x %02x | row1: %02x %02x %02x %02x %02x %02x",
+            raw[1], raw[2], raw[3], raw[4], raw[5], raw[6],
+            raw[bpr+2], raw[bpr+3], raw[bpr+4], raw[bpr+5], raw[bpr+6], raw[bpr+7]);
+    }
+    /* Apply PNG row filters with adaptive heuristic.
+     * For each row, generate filters 0..4, pick the one with smallest
+     * absolute-sum-of-bytes (over signed interpretation).
+     * CRITICAL: up/left predictors must use ORIGINAL (unfiltered) values
+     * because the decoder's precon is the RECONSTRUCTED previous row,
+     * which equals the original (since we roundtrip). */
+    {
+        int stride=channels;
+        uint8_t *bufs[4]={NULL,NULL,NULL,NULL};  /* bufs[0..3] = scratch for filters 1-4 */
+        uint8_t *cur_orig=malloc((size_t)bpr);   /* original current row */
+        uint8_t *prev_orig=malloc((size_t)bpr);  /* original previous row */
+        int *sums=malloc(sizeof(int)*5);
+        int ok=cur_orig&&prev_orig&&sums;
+        for(int b=0;b<4&&ok;b++){bufs[b]=malloc((size_t)bpr);if(!bufs[b])ok=0;}
+        if(ok){
+            memset(prev_orig,0,(size_t)bpr);  /* no previous row for y=0 */
+            for(int y=0;y<p->height;y++){
+                uint8_t *cur=raw+(int64_t)(bpr+1)*y+1;
+                memcpy(cur_orig,cur,(size_t)bpr);
+                uint8_t sr_a[bpr];  /* simulated recon for Average */
+                uint8_t sr_p[bpr];  /* simulated recon for Paeth */
+                memset(sr_a,0,(size_t)bpr);
+                memset(sr_p,0,(size_t)bpr);
+                sums[0]=0;
+                for(int i=0;i<bpr;i++){int8_t v=(int8_t)cur_orig[i];sums[0]+=v<0?-v:v;}
+                for(int i=0;i<bpr;i++){
+                    uint8_t a=(i>=stride)?cur_orig[i-stride]:0;
+                    bufs[0][i]=(uint8_t)(cur_orig[i]-a);
+                }
+                sums[1]=0;
+                for(int i=0;i<bpr;i++){int8_t v=(int8_t)bufs[0][i];sums[1]+=v<0?-v:v;}
+                for(int i=0;i<bpr;i++){
+                    bufs[1][i]=(uint8_t)(cur_orig[i]-prev_orig[i]);
+                }
+                sums[2]=0;
+                for(int i=0;i<bpr;i++){int8_t v=(int8_t)bufs[1][i];sums[2]+=v<0?-v:v;}
+                for(int i=0;i<bpr;i++){
+                    uint8_t left=(i>=stride)?sr_a[i-stride]:0;
+                    bufs[2][i]=(uint8_t)(cur_orig[i]-((left+prev_orig[i])/2));
+                    sr_a[i]=bufs[2][i]+((left+prev_orig[i])/2);
+                }
+                sums[3]=0;
+                for(int i=0;i<bpr;i++){int8_t v=(int8_t)bufs[2][i];sums[3]+=v<0?-v:v;}
+                for(int i=0;i<bpr;i++){
+                    uint8_t a=(i>=stride)?sr_p[i-stride]:0;
+                    uint8_t b=prev_orig[i];
+                    uint8_t c=(i>=stride)?prev_orig[i-stride]:0;
+                    int p=(int)a+(int)b-(int)c;
+                    int pa=(p-a)<0?(a-p):(p-a);
+                    int pb=(p-b)<0?(b-p):(p-b);
+                    int pc=(p-c)<0?(c-p):(p-c);
+                    int pr;
+                    if(pa<=pb&&pa<=pc)pr=(int)a;
+                    else if(pb<=pc)pr=(int)b;
+                    else pr=(int)c;
+                    bufs[3][i]=(uint8_t)(cur_orig[i]-(uint8_t)pr);
+                    sr_p[i]=bufs[3][i]+(uint8_t)pr;
+                }
+                sums[4]=0;
+                for(int i=0;i<bpr;i++){int8_t v=(int8_t)bufs[3][i];sums[4]+=v<0?-v:v;}
+                int best=0;
+                for(int i=1;i<5;i++)if(sums[i]<sums[best])best=i;
+                raw[(int64_t)(bpr+1)*y]=(uint8_t)best;
+                if(best==0){
+                    /* None: write original */
+                    memcpy(cur,cur_orig,(size_t)bpr);
+                } else {
+                    /* Write best filter output */
+                    memcpy(cur,bufs[best-1],(size_t)bpr);
+                }
+                /* Save for next iteration: cur_orig becomes prev_orig */
+                memcpy(prev_orig,cur_orig,(size_t)bpr);
+            }
+        }
+        for(int b=0;b<4;b++)free(bufs[b]);
+        free(cur_orig); free(prev_orig); free(sums);
+    }
+    int cap=raw_len*4+64; if(cap<256)cap=256;
+    uint8_t *zb=malloc((size_t)cap); if(!zb){free(raw);fclose(f);return;}
+    int zl=deflate_encode_zlib(raw,raw_len,zb,cap); free(raw);
+    if(zl<=0){VERR(png,"deflate encode failed");free(zb);fclose(f);return;}
+    const uint8_t sig[8]={0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a};
+    fwrite(sig,1,8,f);
+    uint32_t t=CHUNK_TYPE_IHDR;
+    uint8_t ib[13];
+    ib[0]=(uint8_t)(p->width>>24);ib[1]=(uint8_t)(p->width>>16);
+    ib[2]=(uint8_t)(p->width>>8);ib[3]=(uint8_t)p->width;
+    ib[4]=(uint8_t)(p->height>>24);ib[5]=(uint8_t)(p->height>>16);
+    ib[6]=(uint8_t)(p->height>>8);ib[7]=(uint8_t)p->height;
+    ib[8]=8;ib[9]=(uint8_t)color_type;ib[10]=0;ib[11]=0;ib[12]=0;
+    write_u32_be(f,13);fwrite(&t,4,1,f);fwrite(ib,1,13,f);
+    write_u32_be(f,chunk_crc(t,ib,13));
+    /* Multiple IDAT chunks: split zlib stream into <= 8192 byte pieces */
+    t=CHUNK_TYPE_IDAT;
+    const int IDAT_MAX=8192;
+    int written=0;
+    while(written<zl){
+        int piece=zl-written;
+        if(piece>IDAT_MAX)piece=IDAT_MAX;
+        write_u32_be(f,(uint32_t)piece);fwrite(&t,4,1,f);
+        fwrite(zb+written,1,(size_t)piece,f);
+        write_u32_be(f,chunk_crc(t,zb+written,(uint32_t)piece));
+        written+=piece;
+    }
+    free(zb);
+    t=CHUNK_TYPE_IEND;
+    write_u32_be(f,0);fwrite(&t,4,1,f);
+    write_u32_be(f,chunk_crc(t,NULL,0));
+    fclose(f);
+}
 
 
 int 
@@ -933,7 +1092,7 @@ fail:
     return NULL;
 }
 
-static void
+void
 PNG_free(struct pic* p)
 {
     PNG *b = (PNG *)(p->pic);
@@ -1063,6 +1222,7 @@ static struct file_ops png_ops = {
     .load = PNG_load,
     .free = PNG_free,
     .info = PNG_info,
+    .encode = PNG_encode,
 };
 
 void 

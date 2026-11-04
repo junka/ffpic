@@ -18,6 +18,7 @@ struct zlib_header {
 
 /* decode comp buffer with comp_len to decomp buffer */
 int deflate_decode(uint8_t* comp, int comp_len, uint8_t* decomp, int * decomp_len);
+int deflate_encode_zlib(const uint8_t *in, int in_len, uint8_t *out, int out_cap);
 
 #ifdef __cplusplus
 }

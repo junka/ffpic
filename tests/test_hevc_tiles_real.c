@@ -78,7 +78,6 @@ md5_hex(const uint8_t *buf, size_t len)
         6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21
     };
     uint32_t a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
-    uint8_t bufpad[64];
     uint64_t bit_len = (uint64_t)len * 8;
     size_t pad = (len % 64 < 56) ? (56 - len % 64) : (120 - len % 64);
     size_t total = len + pad + 8;
@@ -165,8 +164,8 @@ int main(void)
         int is_slice = (nunit_type >= 1 && nunit_type <= 9) ||
                        (nunit_type >= 16 && nunit_type <= 21) ||
                        nunit_type == 38;
-        int rc = parse_nalu(nalu, nalu_len, is_slice ? bgra : NULL,
-                            PITCH, H, NULL, &hps, 32);
+        (void)parse_nalu(nalu, nalu_len, is_slice ? bgra : NULL,
+                         PITCH, H, NULL, &hps, 32);
         if (is_slice) slice_count++;
     }
 

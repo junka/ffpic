@@ -22,6 +22,7 @@ struct bits_vec {
     int len;            /* total bitstream length in bytes */
     int reserve;
     uint8_t msb;        /* indicate bits read from which side */
+    uint8_t nostuff;    /* if 1, suppress 0xFF→0x00 stuffing (deflate needs this, JPEG does not) */
 };
 
 /* Allocate a bitstream reader */
@@ -51,7 +52,7 @@ void bits_vec_reset_border(struct bits_vec *v);
 /* read bits and add the value with base */
 int bits_vec_read_bits_base(struct bits_vec *v, int n, int base);
 
-struct bits_vec * bits_writer_reserve(uint8_t msb);
+struct bits_vec * bits_writer_reserve(uint8_t msb, uint8_t nostuff);
 
 void bits_vec_write_bit(struct bits_vec *v, int8_t a);
 void bits_vec_write_bits(struct bits_vec *v, int a, int n);

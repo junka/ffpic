@@ -213,7 +213,7 @@ void bits_vec_reinit_cur(struct bits_vec *v) {
 //--- below is for bitstream writer ---
 #define DELTA_PART (4096)
 #define INIT_PART (2048)
-struct bits_vec *bits_writer_reserve(uint8_t msb) {
+struct bits_vec *bits_writer_reserve(uint8_t msb, uint8_t nostuff) {
   struct bits_vec *vec = (struct bits_vec *)malloc(sizeof(struct bits_vec));
   // the writer ors every bit into the byte it fills, so those bytes must be zero
   vec->buff = vec->start = vec->ptr = calloc(INIT_PART, 1);
@@ -221,6 +221,7 @@ struct bits_vec *bits_writer_reserve(uint8_t msb) {
   vec->len = 0;
   vec->reserve = INIT_PART;
   vec->msb = msb;
+  vec->nostuff = nostuff;
   return vec;
 }
 
@@ -241,7 +242,7 @@ void bits_vec_write_bit(struct bits_vec *v, int8_t a) {
     v->offset = 0;
     v->len++;
     v->ptr++;
-    if (*(v->ptr-1) == 0xFF) {
+    if (!v->nostuff && *(v->ptr-1) == 0xFF) {
         *(v->ptr) = 0;
         v->ptr++;
         v->len++;
@@ -269,7 +270,7 @@ void bits_vec_write_bits(struct bits_vec *v, int a, int n) {
         *v->ptr = b;
         v->ptr++;
         v->len++;
-        if (b == 0xFF) {
+        if (!v->nostuff && b == 0xFF) {
           *(v->ptr) = 0;
           v->ptr++;
           v->len++;

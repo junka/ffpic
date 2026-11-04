@@ -93,20 +93,25 @@ void PNG_encode(struct pic *p, const char *filename){
      * because the decoder's precon is the RECONSTRUCTED previous row,
      * which equals the original (since we roundtrip). */
     {
+        /* GCC ≥13 -O3 false-positive: it can't prove malloc(bpr) covers sr_p[i]
+         * accesses when bpr depends on runtime p->width. Silence the spurious
+         * stringop-overflow warning; bounds are correct by construction. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
         int stride=channels;
         uint8_t *bufs[4]={NULL,NULL,NULL,NULL};  /* bufs[0..3] = scratch for filters 1-4 */
         uint8_t *cur_orig=malloc((size_t)bpr);   /* original current row */
         uint8_t *prev_orig=malloc((size_t)bpr);  /* original previous row */
+        uint8_t *sr_a=malloc((size_t)bpr);       /* simulated recon for Average */
+        uint8_t *sr_p=malloc((size_t)bpr);       /* simulated recon for Paeth */
         int *sums=malloc(sizeof(int)*5);
-        int ok=cur_orig&&prev_orig&&sums;
+        int ok=cur_orig&&prev_orig&&sr_a&&sr_p&&sums;
         for(int b=0;b<4&&ok;b++){bufs[b]=malloc((size_t)bpr);if(!bufs[b])ok=0;}
         if(ok){
             memset(prev_orig,0,(size_t)bpr);  /* no previous row for y=0 */
             for(int y=0;y<p->height;y++){
                 uint8_t *cur=raw+(int64_t)(bpr+1)*y+1;
                 memcpy(cur_orig,cur,(size_t)bpr);
-                uint8_t sr_a[bpr];  /* simulated recon for Average */
-                uint8_t sr_p[bpr];  /* simulated recon for Paeth */
                 memset(sr_a,0,(size_t)bpr);
                 memset(sr_p,0,(size_t)bpr);
                 sums[0]=0;
@@ -161,7 +166,8 @@ void PNG_encode(struct pic *p, const char *filename){
             }
         }
         for(int b=0;b<4;b++)free(bufs[b]);
-        free(cur_orig); free(prev_orig); free(sums);
+        free(cur_orig); free(prev_orig); free(sr_a); free(sr_p); free(sums);
+#pragma GCC diagnostic pop
     }
     int cap=raw_len*4+64; if(cap<256)cap=256;
     uint8_t *zb=malloc((size_t)cap); if(!zb){free(raw);fclose(f);return;}

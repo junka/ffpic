@@ -232,7 +232,7 @@ remaining:
 struct huffman_codec* huffman_codec_init(uint8_t *in, int len) {
     struct huffman_codec *codec = malloc(sizeof(struct huffman_codec));
     if (in == NULL || len == 0) {
-        codec->v = bits_writer_reserve(BITS_MSB);
+        codec->v = bits_writer_reserve(BITS_MSB, 0);
     } else {
         codec->v = bits_vec_alloc(in, len, BITS_MSB);
     }

@@ -708,7 +708,7 @@ emit_block(const uint8_t *data, int block_len, int bfinal,
            uint8_t *out_buf, int out_cap)
 {
     /* ---- Plan A: try fixed Huffman ---- */
-    struct bits_vec *bf = bits_writer_reserve(BITS_LSB);
+    struct bits_vec *bf = bits_writer_reserve(BITS_LSB, 1);
 
     /* Block header: BFINAL(1) + BTYPE(2) = 01 (fixed Huffman) */
     int header = (bfinal & 1) | (BTYPE_COMPRESSED_WITH_FIXED_HUFFMAN << 1);

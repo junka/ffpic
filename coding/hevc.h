@@ -1112,6 +1112,7 @@ struct slice_segment_header {
     GSE(slice_act_cr_qp_offset);
     uint8_t cu_chroma_qp_offset_enabled_flag:1;
 
+    uint8_t slice_deblocking_filter_disabled_flag:1;
     GSE(slice_beta_offset_div2);
     GSE(slice_tc_offset_div2);
 

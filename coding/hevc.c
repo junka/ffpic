@@ -3168,20 +3168,24 @@ parse_slice_segment_header(struct bits_vec *v, struct hevc_nalu_header *headr,
         if (pps->deblocking_filter_override_enabled_flag) {
             deblocking_filter_override_flag = READ_BIT(v);
         }
-        uint8_t slice_deblocking_filter_disabled_flag = 0;
         if (deblocking_filter_override_flag) {
-            slice_deblocking_filter_disabled_flag = READ_BIT(v);
-            if (!slice_deblocking_filter_disabled_flag) {
+            slice->slice_deblocking_filter_disabled_flag = READ_BIT(v);
+            if (!slice->slice_deblocking_filter_disabled_flag) {
                 slice->slice_beta_offset_div2 = GOL_SE(v);
                 slice->slice_tc_offset_div2 = GOL_SE(v);
+            } else {
+                slice->slice_beta_offset_div2 = pps->pps_beta_offset_div2;
+                slice->slice_tc_offset_div2 = pps->pps_tc_offset_div2;
             }
         } else {
-            slice_deblocking_filter_disabled_flag = pps->pps_deblocking_filter_disabled_flag;
+            slice->slice_deblocking_filter_disabled_flag = pps->pps_deblocking_filter_disabled_flag;
+            slice->slice_beta_offset_div2 = pps->pps_beta_offset_div2;
+            slice->slice_tc_offset_div2 = pps->pps_tc_offset_div2;
         }
-        VDBG(hevc, "slice_deblocking_filter_disabled_flag %d", slice_deblocking_filter_disabled_flag);
+        VDBG(hevc, "slice_deblocking_filter_disabled_flag %d", slice->slice_deblocking_filter_disabled_flag);
         if (pps->pps_loop_filter_across_slices_enabled_flag &&
                 (slice->slice_sao_luma_flag || slice->slice_sao_chroma_flag ||
-                !slice_deblocking_filter_disabled_flag )) {
+                !slice->slice_deblocking_filter_disabled_flag)) {
             slice->slice_loop_filter_across_slices_enabled_flag = READ_BIT(v);
         } else {
             slice->slice_loop_filter_across_slices_enabled_flag = pps->pps_loop_filter_across_slices_enabled_flag;
@@ -6945,11 +6949,11 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         (void)coding_tree_unit(d, hslice, hps, CtbAddrInTs, CtbAddrInRs, SliceAddrRs, pps->TileId, p);
 
         // store the second CTU state in a row
-        // see Figure 9-4
+        // see Figure 9-4 and H.265 9.3.2.5
         if (pps->entropy_coding_sync_enabled_flag &&
             (CtbAddrInRs % sps->PicWidthInCtbsY == 1 ||
              (CtbAddrInRs > 1 &&
-              pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]] !=
+              pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 1]] !=
                   pps->TileId[CtbAddrInTs]))) {
             VDBG(hevc, "storage process for cabac context");
             storage_process_for_cabac_context(StatCoeff);
@@ -6996,7 +7000,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                                          struct sps *sps, struct picture *p, int16_t *rec, int stride,
                                          struct ctu *ctu, int cIdx, int rx, int ry,
                                          int nCtbSw, int nCtbSh) {
-    int bitDepth = ((cIdx == 0) ? sps->BitDepthC : sps->BitDepthC);
+    int bitDepth = ((cIdx == 0) ? sps->BitDepthY : sps->BitDepthC);
     //see 8-406
     int xCtb = rx * nCtbSw;
     int yCtb = ry * nCtbSh;
@@ -7008,7 +7012,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
             int ySj = yCtb + j;
             if ((rx == (sps->PicWidthInCtbsY - 1) &&
                  xSi >= (int)sps->pic_width_in_luma_samples) ||
-                (ry == (sps->PicWidthInCtbsY - 1) &&
+                (ry == (sps->PicHeightInCtbsY - 1) &&
                  ySj >= (int)sps->pic_height_in_luma_samples)) {
                 // outside of the picture boundaries
                 // in case the pic_height_in_luma_samples % 64 != 0
@@ -7114,23 +7118,262 @@ void sao_filter(struct slice_segment_header *slice, struct pps *pps, struct sps 
     }
 }
 
-//see 8.7.2
-static void deblock_filter(struct slice_segment_header*slice UNUSED, struct sps *sps UNUSED, struct picture *p UNUSED)
-{
+//see 8.7.2 deblocking filter process
+//
+// This implementation is simplified for intra-only (Main Still Picture profile):
+// without inter CU, bS = 2 for all intra-intra boundaries (spec 8.7.2.1 rule 3).
+// MV and CBF storage are therefore not required.  We still honour:
+//   - deblocking_filter_disabled_flag (PPS + slice override)
+//   - loop_filter_across_tiles_enabled_flag (spec 8-357)
+//   - slice_loop_filter_across_slices_enabled_flag (spec 8-358)
+//   - PCM CU boundaries (spec 8-351 skip rule)
+//   - Image boundary clipping
+//
+// Threshold tables from H.265 8.7.2.3 Tables 8-10, 8-11.
 
+/* beta table indexed by (Qp + beta_offset_div2), range 0..51 */
+static const uint8_t hevc_betatable[52] = {
+     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+     6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24,
+    26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56,
+    58, 60, 62, 64
+};
+
+/* tc table indexed by (Qp + tc_offset_div2), range 0..53 */
+static const uint8_t hevc_tctable[54] = {
+     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+     0,  1,  1,  1,  1,  2,  2,  2,  2,  3,  3,  3,  3,  4,  4,  4,
+     5,  5,  6,  6,  7,  8,  9, 10, 11, 13, 14, 16, 18, 20, 22, 24,
+    26, 28, 30, 32, 34, 36
+};
+
+/* 3-clip helper for deblock */
+static inline int deblock_clip(int x, int lo, int hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+/* Simple strong filter — processes 8 samples along an 8-pixel boundary */
+static void deblock_filter_8_samples_luma_simple(
+    int16_t *p2, int16_t *p1, int16_t *p0,
+    int16_t *q0, int16_t *q1, int16_t *q2,
+    int stride,
+    int is_vertical,  /* if 1, boundary is vertical → samples walk along row */
+    int beta, int tc, int bitMax)
+{
+    int tc2 = tc * 2;
+    for (int i = 0; i < 8; i++) {
+        /* Extract sample triplets for this position */
+        int16_t *p2s, *p1s, *p0s, *q0s, *q1s, *q2s;
+        if (is_vertical) {
+            p2s = p2 + i * stride; p1s = p1 + i * stride;
+            p0s = p0 + i * stride; q0s = q0 + i * stride;
+            q1s = q1 + i * stride; q2s = q2 + i * stride;
+        } else {
+            p2s = p2 + i; p1s = p1 + i; p0s = p0 + i;
+            q0s = q0 + i; q1s = q1 + i; q2s = q2 + i;
+        }
+
+        /* BETA + TC conditions per spec 8.7.2.4.1 */
+        int sum_ap = abs(p2s[0] - 2*p1s[0] + p0s[0]);
+        int sum_aq = abs(q2s[0] - 2*q1s[0] + q0s[0]);
+        if (sum_ap + sum_aq >= beta) continue;
+
+        int d = abs(p0s[0] - q0s[0]);
+        int tc_limit = tc2;  /* actually per spec: |p0-q0| < 2*tc */
+        if (d >= tc_limit) continue;
+
+        /* Apply strong filter (bS == 2) per spec 8.7.2.4.1 eq (8-361..8-366) */
+        int delta_p = ((3 * p1s[0] + p2s[0] - 3 * q0s[0] - q1s[0] + 4) >> 3);
+        int delta_q = ((3 * q1s[0] + q2s[0] - 3 * p0s[0] - p1s[0] + 4) >> 3);
+
+        int new_p0 = deblock_clip(
+            deblock_clip(p0s[0] + deblock_clip(delta_p, -tc2, tc2), p0s[0] - tc2, p0s[0] + tc2), 0, bitMax);
+        int new_q0 = deblock_clip(
+            deblock_clip(q0s[0] + deblock_clip(delta_q, -tc2, tc2), q0s[0] - tc2, q0s[0] + tc2), 0, bitMax);
+
+        /* p1/q1 filtered too per eq (8-365, 8-366) */
+        int delta_p1 = ((p2s[0] + p0s[0] - 2 * p1s[0] + 2) >> 2);
+        int delta_q1 = ((q2s[0] + q0s[0] - 2 * q1s[0] + 2) >> 2);
+        delta_p1 = deblock_clip(delta_p1, -tc2, tc2);
+        delta_q1 = deblock_clip(delta_q1, -tc2, tc2);
+
+        int new_p1 = deblock_clip(
+            deblock_clip(p1s[0] + delta_p1, p1s[0] - tc2, p1s[0] + tc2), 0, bitMax);
+        int new_q1 = deblock_clip(
+            deblock_clip(q1s[0] + delta_q1, q1s[0] - tc2, q1s[0] + tc2), 0, bitMax);
+
+        p0s[0] = (int16_t)new_p0;
+        q0s[0] = (int16_t)new_q0;
+        p1s[0] = (int16_t)new_p1;
+        q1s[0] = (int16_t)new_q1;
+    }
+}
+
+static void deblock_filter(struct slice_segment_header *slice, struct pps *pps,
+                           struct sps *sps, struct picture *p)
+{
+    VDBG(hevc, "run deblock_filter");
+
+    if (slice->slice_deblocking_filter_disabled_flag) {
+        VDBG(hevc, "deblock disabled by slice flag");
+        return;
+    }
+
+    int QpY = pps->init_qp_minus26 + 26 + slice->slice_qp_delta;
+    int beta_idx = deblock_clip(QpY + slice->slice_beta_offset_div2, 0, 51);
+    int tc_idx   = deblock_clip(QpY + slice->slice_tc_offset_div2,  0, 53);
+    int beta = hevc_betatable[beta_idx];
+    int tc   = hevc_tctable[tc_idx];
+    int bitMax = (1 << sps->BitDepthY) - 1;
+
+    VDBG(hevc, "deblock QpY=%d beta=%d tc=%d BitDepthY=%d", QpY, beta, tc, sps->BitDepthY);
+
+    /* Luma block edges */
+    int pic_w = sps->pic_width_in_luma_samples;
+    int pic_h = sps->pic_height_in_luma_samples;
+    int y_stride = p->y_stride;
+    int16_t *rec = p->pixel;
+    int log2CtbSize = sps->CtbLog2SizeY;
+    int picCtbsX = sps->PicWidthInCtbsY;
+
+    if (beta > 0 && tc > 0) {
+        /* Vertical luma edges */
+        for (int by = 0; by < pic_h; by += 8) {
+            for (int bx = 8; bx < pic_w; bx += 8) {
+                int xCtb = (bx - 1) >> log2CtbSize;
+                int yCtb = by >> log2CtbSize;
+                int skip = 0;
+                if (pps->tiles_enabled_flag && !pps->loop_filter_across_tiles_enabled_flag) {
+                    if (pps->TileId[xCtb + yCtb * picCtbsX] !=
+                        pps->TileId[(bx >> log2CtbSize) + yCtb * picCtbsX])
+                        skip = 1;
+                }
+                if (skip) continue;
+                if (get_pcm_flag(sps, p, bx - 4, by) ||
+                    get_pcm_flag(sps, p, bx + 4 - 1, by)) continue;
+
+                deblock_filter_8_samples_luma_simple(
+                    rec + (bx - 3) + by * y_stride,
+                    rec + (bx - 2) + by * y_stride,
+                    rec + (bx - 1) + by * y_stride,
+                    rec + bx       + by * y_stride,
+                    rec + (bx + 1) + by * y_stride,
+                    rec + (bx + 2) + by * y_stride,
+                    y_stride, 1, beta, tc, bitMax);
+            }
+        }
+        /* Horizontal luma edges */
+        for (int bx = 0; bx < pic_w; bx += 8) {
+            for (int by = 8; by < pic_h; by += 8) {
+                int xCtb = bx >> log2CtbSize;
+                int yCtb = (by - 1) >> log2CtbSize;
+                int skip = 0;
+                if (pps->tiles_enabled_flag && !pps->loop_filter_across_tiles_enabled_flag) {
+                    if (pps->TileId[xCtb + yCtb * picCtbsX] !=
+                        pps->TileId[xCtb + ((by >> log2CtbSize)) * picCtbsX])
+                        skip = 1;
+                }
+                if (skip) continue;
+                if (get_pcm_flag(sps, p, bx, by - 4) ||
+                    get_pcm_flag(sps, p, bx, by + 4 - 1)) continue;
+
+                deblock_filter_8_samples_luma_simple(
+                    rec + bx + (by - 3) * y_stride,
+                    rec + bx + (by - 2) * y_stride,
+                    rec + bx + (by - 1) * y_stride,
+                    rec + bx + by       * y_stride,
+                    rec + bx + (by + 1) * y_stride,
+                    rec + bx + (by + 2) * y_stride,
+                    y_stride, 0, beta, tc, bitMax);
+            }
+        }
+    }
+
+    /* --- Chroma deblock (spec 8.7.2.5, 3-tap weak filter) --- */
+    if (sps->ChromaArrayType != 0) {
+        int sub_w = sps->SubWidthC;
+        int sub_h = sps->SubHeightC;
+        int QpCr = QpY + pps->pps_cb_qp_offset + slice->slice_cb_qp_offset;
+        int tcC_idx = deblock_clip(QpCr + slice->slice_tc_offset_div2, 0, 53);
+        int tcC = hevc_tctable[tcC_idx];
+        int bitMaxC = (1 << sps->BitDepthC) - 1;
+        int cw = pic_w / sub_w;
+        int ch = pic_h / sub_h;
+        int uv_stride = p->uv_stride;
+
+        if (tcC > 0) {
+            int tc2 = tcC * 2;
+            for (int plane = 0; plane < 2; plane++) {
+                int16_t *crec = p->pixel + p->size + (plane ? p->size / 2 : 0);
+
+                /* Vertical chroma edges (border is vertical → scan along rows) */
+                for (int by = 0; by < ch; by += 8) {
+                    for (int bx = 8; bx < cw; bx += 8) {
+                        int16_t *p0 = crec + (bx - 1) + by * uv_stride;
+                        int16_t *q0 = crec + bx       + by * uv_stride;
+                        /* Check |p0 - q0| for all 8 samples */
+                        int ok = 1;
+                        for (int i = 0; i < 8 && ok; i++) {
+                            if (abs(p0[i * uv_stride] - q0[i * uv_stride]) >= tc2) ok = 0;
+                        }
+                        if (!ok) continue;
+                        /* 3-tap weak filter (spec 8-373).
+                         * Vertical edge: p1 = p0's left neighbor (x-2),
+                         *                 q1 = q0's right neighbor (x+1) */
+                        for (int i = 0; i < 8; i++) {
+                            int off = i * uv_stride;
+                            int p1 = p0[off - 1]; /* x-2, same row */
+                            int q1 = q0[off + 1]; /* x+1, same row */
+                            int delta = deblock_clip(
+                                (9 * (q0[off] - p0[off]) - 3 * (q1 - p1) + 8) >> 4,
+                                -tcC, tcC);
+                            p0[off] = deblock_clip(p0[off] + delta, 0, bitMaxC);
+                            q0[off] = deblock_clip(q0[off] - delta, 0, bitMaxC);
+                        }
+                    }
+                }
+                /* Horizontal chroma edges (border is horizontal → scan along cols) */
+                for (int bx = 0; bx < cw; bx += 8) {
+                    for (int by = 8; by < ch; by += 8) {
+                        int16_t *p0 = crec + bx + (by - 1) * uv_stride;
+                        int16_t *q0 = crec + bx + by       * uv_stride;
+                        int ok = 1;
+                        for (int i = 0; i < 8 && ok; i++) {
+                            if (abs(p0[i] - q0[i]) >= tc2) ok = 0;
+                        }
+                        if (!ok) continue;
+                        /* Horizontal edge: p1 = p0's above neighbor (y-2),
+                         *                  q1 = q0's below neighbor (y+1), same column */
+                        for (int i = 0; i < 8; i++) {
+                            int p1 = p0[i - uv_stride]; /* y-2, same col (row above p0) */
+                            int q1 = q0[i + uv_stride]; /* y+1, same col (row below q0) */
+                            int delta = deblock_clip(
+                                (9 * (q0[i] - p0[i]) - 3 * (q1 - p1) + 8) >> 4,
+                                -tcC, tcC);
+                            p0[i] = deblock_clip(p0[i] + delta, 0, bitMaxC);
+                            q0[i] = deblock_clip(q0[i] - delta, 0, bitMaxC);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 //see 8.7
-static void inloop_filter(struct slice_segment_header*slice, struct pps *pps UNUSED, struct sps *sps, struct picture *p)
+static void inloop_filter(struct slice_segment_header *slice, struct pps *pps,
+                          struct sps *sps, struct picture *p)
 {
     // When the in-loop filter process is specified as optional in Annex
     // A, the application of either or both of these filters is optional.
-    // deblocking filter
-    // invoke 8.7.2
-    deblock_filter(slice, sps, p);
-    /* sao is not applied yet, but the flag lives in the parameter set that a
-     * heif grid shares between tiles: clearing it here would make the next
-     * tile parse its slice header without the sao flags and desync */
+    // Order per H.265 8.7: deblocking → SAO.
+    deblock_filter(slice, pps, sps, p);
+    // SAO (spec 8.7.3).  sao_ctb_modification_process already honours
+    // loop_filter_across_tiles_enabled_flag (spec 8-407..8-408) and
+    // slice_loop_filter_across_slices_enabled_flag via MinTbAddrZs ordering.
+    sao_filter(slice, pps, sps, p);
 }
 
 static void

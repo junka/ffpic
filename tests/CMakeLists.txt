@@ -92,3 +92,10 @@ target_compile_definitions(test_colorspace PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_colorspace ffpic m)
 add_test(NAME test_colorspace COMMAND test_colorspace)
+
+
+set(TILE_MAP_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_tile_map.c)
+add_executable(test_tile_map ${TILE_MAP_TEST})
+# test_tile_map is a self-contained unit test for HEVC tile mapping math
+# (CtbAddrRsToTs / CtbAddrTsToRs / TileId). It does not link libffpic.
+add_test(NAME test_tile_map COMMAND test_tile_map)

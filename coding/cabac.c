@@ -712,13 +712,15 @@ static uint8_t tableStateSync[CTX_TYPE_MAX_NUM];
 static uint8_t tableMPSSync[CTX_TYPE_MAX_NUM];
 
 void storage_process_for_cabac_context(int *StatCoeff) {
-    // see Figure 9-4
-    // if (pps->entropy_coding_sync_enabled_flag &&
-    //     (CtbAddrInRs % slice->PicWidthInCtbsY == 1 ||
-    //      (CtbAddrInRs > 1 && pps->TileId[pps->CtbAddrRsToTs[CtbAddrInRs - 2]]
-    //      !=
-    //                              pps->TileId[CtbAddrInTs]))) {
-    // store context in Wpp
+    // see Figure 9-4 and H.265 9.3.2.5
+    // Invoked when any of the following holds:
+    //   a) entropy_coding_sync_enabled_flag && (CtbAddrInRs % PicWidthInCtbsY == 1)
+    //      (second CTU of a row, unconditional context store)
+    //   b) entropy_coding_sync_enabled_flag && (CtbAddrInRs > 1 &&
+    //      TileId[CtbAddrRsToTs[CtbAddrInRs - 1]] != TileId[CtbAddrInTs])
+    //      (tile boundary crossing: store context for WPP worker of next tile)
+    // The actual gate is in parse_slice_segment_data(); this function stores
+    // unconditionally because the calling site already matched (a) or (b).
     for (int i = 0; i < CTX_TYPE_MAX_NUM; i++) {
         tableStateSync[i] = ctx_table[i].state;
         tableMPSSync[i] = ctx_table[i].mpsbit;

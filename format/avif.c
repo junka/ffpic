@@ -1409,6 +1409,10 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         }
         VERR(av1, "in-house AV1 decode failed: %d", rc);
         /* fall through to the container-only path */
+        /* The fallback re-parses the container from the start, so the first
+         * attempt and its box tree have to go before p is reused. */
+        AVIF_free(p);
+        p = NULL;
         f = fopen(filename, "rb");
         if (f == NULL) {
             return NULL;

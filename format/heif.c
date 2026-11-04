@@ -890,7 +890,7 @@ decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p)
                             continue;
                         }
                         heif_apply_alpha(p, p1, prem);
-                        pic_free(p1);
+                        heif_pic_free(p1);
                     } else if (heif_aux_is_depth(auxc->aux_type)) {
                         VDBG(heif, "skipping auxl image: depth plane");
                     } else {

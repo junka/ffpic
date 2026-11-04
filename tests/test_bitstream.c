@@ -136,7 +136,7 @@ read_err:
 
 int test_writer(void)
 {
-    struct bits_vec *v = bits_writer_reserve(BITS_MSB);
+    struct bits_vec *v = bits_writer_reserve(BITS_MSB, 0);  /* nostuff=0: keep original stuffing behavior for bitstream writer test */
 
     WRITE_BIT(v, 1);
     WRITE_BIT(v, 1);

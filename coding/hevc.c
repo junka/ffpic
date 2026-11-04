@@ -6915,8 +6915,8 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
     int CtbAddrInTs = pps->CtbAddrRsToTs[CtbAddrInRs];
     VDBG(hevc, "starting CtbAddrInTs %d", CtbAddrInTs);
     // int i = 0;
-    cabac_dec *d;
-    bool first_ctu_in_tile = true, first_ctu_in_slice_segment = true;
+    cabac_dec *d = NULL;
+    bool first_ctu_in_slice_segment = true;
     do {
         // see 7-55, 7-56, but slice->entry_point_offset is alreay accumlated
         // int firstByte = (i > 0) ? slice->entry_point_offset[i-1]: 0;
@@ -6928,11 +6928,22 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
         uint32_t xCtb = (CtbAddrInRs % sps->PicWidthInCtbsY) << sps->CtbLog2SizeY;
         uint32_t yCtb = (CtbAddrInRs / sps->PicWidthInCtbsY) << sps->CtbLog2SizeY;
         //see Figure 9-3
-        if (first_ctu_in_tile || first_ctu_in_slice_segment) {
-            // reset cabac
-            first_ctu_in_tile = false;
-            first_ctu_in_slice_segment = false;
+        // tile 边界检测：仅 tiles_enabled_flag=1 且 TileId 变化时触发
+        bool tile_boundary = pps->tiles_enabled_flag &&
+                             d != NULL &&
+                             CtbAddrInTs > 0 &&
+                             pps->TileId[CtbAddrInTs] != pps->TileId[CtbAddrInTs - 1];
+        if (d == NULL || first_ctu_in_slice_segment) {
+            // 切片第一个 CTU，首次初始化 CABAC 解码器
             d = cabac_dec_init(v);
+            first_ctu_in_slice_segment = false;
+        } else if (tile_boundary) {
+            // 进入新 tile：清零 CABAC 上下文状态，重建 init_models
+            VDBG(hevc, "tile boundary at CtbAddrInTs %d, TileId %d",
+                 CtbAddrInTs, pps->TileId[CtbAddrInTs]);
+            memset(StatCoeff, 0, sizeof(StatCoeff));
+            cabac_init_models(slice_qpy, 0);
+            // commit 2: 此处按 entry_point_offset 跳 bitstream 后再 cabac_dec_reset
         } else if ((xCtb == 0) && pps->entropy_coding_sync_enabled_flag) {
             //load cabac context with upper-right CTU if it is avaibale and at the start of a line
             int availableFlagT = process_zscan_order_block_availablity(slice, hps, xCtb, yCtb, xCtb + sps->CtbSizeY, yCtb - sps->CtbSizeY);

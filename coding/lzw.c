@@ -139,7 +139,7 @@ lzw_decode_gif(int order, int codesize, const uint8_t* compressed,
                     return -1;
                 }
                 for (int i = 0; i <= len; i++) {
-                    if (dict[ptr].prev!=0)
+                    if (dict[ptr].length > 1)
                         ptr = dict[ptr].prev;
                 }
                 dict[dict_index].prev = prev;

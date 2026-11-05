@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <limits.h>
 #include <assert.h>
 #include <string.h>
 
@@ -82,8 +83,15 @@ read_dqt(JPG *j, FILE *f)
     uint16_t tlen;
     FFREAD_IGNORE(&tlen, 2, 1, f);
     tlen = SWAP(tlen);
+    if (tlen < 2) {
+        return;
+    }
     tlen -= 2;
-    while (tlen) {
+    /* safety cap: a DQT cannot hold more than 4 tables of 64 entries each */
+    if (tlen > 65533) {
+        return;
+    }
+    while (tlen > 0 && !feof(f) && !ferror(f)) {
         c = fgetc(f);
         tlen -= 1;
         uint8_t id = (c & 0xF);
@@ -127,8 +135,15 @@ read_dht(JPG* j, FILE *f)
     uint16_t tlen;
     FFREAD_IGNORE(&tlen, 2, 1, f);
     tlen = SWAP(tlen);
+    if (tlen < 2) {
+        return;
+    }
     tlen -= 2;
-    while (tlen)
+    /* safety cap: marker length fits in a uint16, cannot exceed 65533 */
+    if (tlen > 65533) {
+        return;
+    }
+    while (tlen > 0 && !feof(f) && !ferror(f))
     {
         struct dht d;
         FFREAD_IGNORE(&d, 1, 1, f);
@@ -144,9 +159,13 @@ read_dht(JPG* j, FILE *f)
         for (int i =0; i < 16; i ++) {
             len += j->dht[ac][id].num_codecs[i];
         }
+        /* the table data must fit within the remaining segment bytes */
+        if (len < 0 || (uint32_t)len > (uint32_t)tlen) {
+            break;
+        }
         // a progressive image may redefine a table between scans
         free(j->dht[ac][id].data);
-        j->dht[ac][id].data = malloc(len);
+        j->dht[ac][id].data = malloc(len ? (size_t)len : 1);
         FFREAD_IGNORE(j->dht[ac][id].data, len, 1, f);
         j->dht[ac][id].len = len;
         tlen -= len;
@@ -805,15 +824,36 @@ write_sos(FILE *f)
     fwrite(&approx, 1, 1, f);
 }
 
-static void
+/* read_sof: parse the SOF segment header.  Returns 0 on success, -1 if the
+ * file is malformed (bad precision, missing or out-of-range components,
+ * unreasonable dimensions that would overflow later multiplies). */
+static int
 read_sof(JPG *j, FILE *f)
 {
     FFREAD_IGNORE(&j->sof, 8, 1, f);
     j->sof.len = SWAP(j->sof.len);
     j->sof.height = SWAP(j->sof.height);
     j->sof.width = SWAP(j->sof.width);
-    FFREAD_IGNORE(j->sof.colors, sizeof(struct jpg_component), j->sof.components_num,
-          f);
+
+    /* components_num is a uint8_t in the header; it indexes into the fixed
+     * j->sof.colors[4] array below, so anything outside [1..4] is fatal. */
+    if (j->sof.components_num < 1 || j->sof.components_num > 4) {
+        VERR(jpg, "components_num %u out of range", j->sof.components_num);
+        return -1;
+    }
+    /* the color index and the scan decoder tables are sized for 4 components */
+    if (j->sof.precision != 8 && j->sof.precision != 10 &&
+        j->sof.precision != 12 && j->sof.precision != 16) {
+        VERR(jpg, "unsupported precision %u", j->sof.precision);
+        return -1;
+    }
+    if (j->sof.width == 0 || j->sof.height == 0) {
+        VERR(jpg, "zero width or height");
+        return -1;
+    }
+
+    FFREAD_IGNORE(j->sof.colors, sizeof(struct jpg_component),
+                  j->sof.components_num, f);
     VDBG(jpg, "height %d, width %d, comp %d", j->sof.height, j->sof.width,
          j->sof.components_num);
     for (int i = 0; i < j->sof.components_num; i++) {
@@ -821,6 +861,7 @@ read_sof(JPG *j, FILE *f)
              j->sof.colors[i].cid, j->sof.colors[i].vertical,
              j->sof.colors[i].horizontal, j->sof.colors[i].qt_id);
     }
+    return 0;
 }
 
 static void
@@ -897,6 +938,8 @@ write_app0(FILE *f)
     fwrite(&thumbnail, 1, 1, f);
 }
 
+static void JPG_free(struct pic *p);
+
 static struct pic *
 JPG_load_one(FILE *f, int skip_flag)
 {
@@ -917,7 +960,11 @@ JPG_load_one(FILE *f, int skip_flag)
         case SOF1:
         case SOF2:
             VDBG(jpg, "SOFn");
-            read_sof(j, f);
+            if (read_sof(j, f) != 0) {
+                VERR(jpg, "invalid SOF header");
+                JPG_free(p);
+                return NULL;
+            }
             p->width = j->sof.width;
             p->height = j->sof.height;
             p->depth = 32;
@@ -936,18 +983,68 @@ JPG_load_one(FILE *f, int skip_flag)
                         j->vmax = v;
                     }
                 }
-                j->mcu_cols = (j->sof.width + 8 * j->hmax - 1) / (8 * j->hmax);
-                j->mcu_rows = (j->sof.height + 8 * j->vmax - 1) / (8 * j->vmax);
-                j->bg_w = j->mcu_cols * j->hmax;
-                j->bg_h = j->mcu_rows * j->vmax;
+                /* 8 * hmax/vmax is always 8 here, but keep the form for clarity */
+                uint64_t mcu_cols = (uint64_t)(j->sof.width + 8 * j->hmax - 1)
+                                    / (8 * j->hmax);
+                uint64_t mcu_rows = (uint64_t)(j->sof.height + 8 * j->vmax - 1)
+                                    / (8 * j->vmax);
+                uint64_t bg_w = mcu_cols * j->hmax;
+                uint64_t bg_h = mcu_rows * j->vmax;
+                /* reject anything that would allocate more than ~2^24 pixels
+                 * worth of decoded data -- that is large enough for any real
+                 * image and keeps all further multiplies well within size_t */
+                const uint64_t max_pixels = (uint64_t)1 << 24;
+                if (bg_w == 0 || bg_h == 0 || bg_w > max_pixels / bg_h) {
+                    VERR(jpg, "image dimensions too large %llu*%llu",
+                         (unsigned long long)bg_w,
+                         (unsigned long long)bg_h);
+                    JPG_free(p);
+                    return NULL;
+                }
+                j->mcu_cols = (int)mcu_cols;
+                j->mcu_rows = (int)mcu_rows;
+                j->bg_w = (int)bg_w;
+                j->bg_h = (int)bg_h;
 
-                p->pitch = j->bg_w * 8 * 4;
-                j->data_len = p->pitch * j->bg_h * 8;
+                /* pixel pitch: BGRA32 = 4 bytes per pixel, times 8 rows per
+                 * MCU (pitch is in 8-byte units for this library, not raw bytes) */
+                uint64_t pitch64 = bg_w * 8 * 4;
+                if (pitch64 > (uint64_t)INT_MAX) {
+                    VERR(jpg, "pitch overflow");
+                    JPG_free(p);
+                    return NULL;
+                }
+                uint64_t data_len64 = pitch64 * bg_h * 8;
+                if (data_len64 > (uint64_t)SIZE_MAX) {
+                    VERR(jpg, "image data length overflow");
+                    JPG_free(p);
+                    return NULL;
+                }
+                p->pitch = (int)pitch64;
+                j->data_len = (size_t)data_len64;
                 j->data = malloc(j->data_len);
-                size_t yuv_len = (size_t)j->bg_w * j->bg_h * 64;
+                if (!j->data) {
+                    VERR(jpg, "cannot allocate %zu bytes for pixel data",
+                         j->data_len);
+                    JPG_free(p);
+                    return NULL;
+                }
+                /* YUV plane size: 64 coefficients per 8x8 data unit */
+                uint64_t yuv64 = bg_w * bg_h * 64;
+                if (yuv64 > (uint64_t)SIZE_MAX) {
+                    VERR(jpg, "yuv buffer overflow");
+                    JPG_free(p);
+                    return NULL;
+                }
+                size_t yuv_len = (size_t)yuv64;
                 j->yuv[0] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
                 j->yuv[1] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
                 j->yuv[2] = calloc(yuv_len ? yuv_len : 1, sizeof(int16_t));
+                if (!j->yuv[0] || !j->yuv[1] || !j->yuv[2]) {
+                    VERR(jpg, "cannot allocate yuv buffers");
+                    JPG_free(p);
+                    return NULL;
+                }
             }
             break;
         case APP0:

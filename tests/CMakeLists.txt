@@ -110,3 +110,11 @@ add_executable(test_tile_map ${TILE_MAP_TEST})
 # test_tile_map is a self-contained unit test for HEVC tile mapping math
 # (CtbAddrRsToTs / CtbAddrTsToRs / TileId). It does not link libffpic.
 add_test(NAME test_tile_map COMMAND test_tile_map)
+
+set(ROBUSTNESS_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_robustness.c)
+add_executable(test_robustness ${ROBUSTNESS_TEST})
+target_include_directories(test_robustness PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_robustness PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_robustness ffpic m)
+add_test(NAME test_robustness COMMAND test_robustness)

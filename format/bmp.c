@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "bmp.h"
 #include "file.h"
@@ -220,59 +221,125 @@ BMP_load(const char* filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;
     FILE *f = fopen(filename, "rb");
+    if (!f) {
+        BMP_free(p);
+        return NULL;
+    }
     FFREAD_IGNORE(&b->file_header, sizeof(struct bmp_file_header), 1, f);
     uint32_t size;
     FFREAD_IGNORE(&size, 4, 1, f);
     fseek(f, -4, SEEK_CUR);
+    /* the info header size must be 12 (OS/2 v1) or >= 40 (Windows and later);
+     * anything else is a malformed BMP we cannot interpret */
+    if (size != 12 && size < 40) {
+        VERR(bmp, "dib header size %u not supported", size);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
     FFREAD_IGNORE(&b->dib, size, 1, f);
 
-    /* FIXME: header length and later struct */
+    /* --- parse width / height and sanity-check dimensions --- */
+    int32_t w;
+    int32_t h;
+    uint16_t bit_count;
+    uint32_t compression = 0;
+    uint32_t size_image = 0;
+    uint32_t colors_used = 0;
+
     if (size == 12) {
-        p->depth = b->dib.v1.bit_count;
-        p->width = b->dib.v1.width;
-        p->height = b->dib.v1.height;
+        bit_count = b->dib.v1.bit_count;
+        w = (int32_t)b->dib.v1.width;
+        h = (int32_t)b->dib.v1.height;
+    } else {
+        bit_count = b->dib.v2.bit_count;
+        w = b->dib.v2.width;
+        h = b->dib.v2.height;
+        compression = b->dib.v2.compression;
+        size_image = b->dib.v2.size_image;
+        colors_used = b->dib.v2.colors_used;
+    }
+
+    /* bit_count must be a known multiple of 8 (or 1,2,4 for indexed) */
+    if (bit_count != 1 && bit_count != 2 && bit_count != 4 && bit_count != 8 &&
+        bit_count != 16 && bit_count != 24 && bit_count != 32) {
+        VERR(bmp, "unsupported bit count %u", bit_count);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    /* width is stored unsigned in v1, signed in v2; both must be positive and
+     * small enough that later (width + 3) doesn't overflow int */
+    if (w <= 0 || w > 0x40000) {
+        VERR(bmp, "invalid width %d", w);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    /* height may be negative (top-down storage); take the absolute value */
+    if (h == 0 || h == INT32_MIN) {
+        VERR(bmp, "invalid height %d", h);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    uint32_t abs_h = (uint32_t)((h < 0) ? -h : h);
+    if (abs_h > 0x40000) {
+        VERR(bmp, "height %d too large", h);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    /* reject anything that would blow up the pitch or allocation size */
+    if ((uint64_t)w * (uint64_t)abs_h > ((uint64_t)1 << 28)) {
+        VERR(bmp, "image dimensions too large %u*%u", w, abs_h);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+
+    p->depth = bit_count;
+    p->width = w;
+    p->height = h;
+
+    if (size == 12) {
         if (b->dib.v1.bit_count <= 8) {
             p->depth = 24;
-            int color_num = (1 << b->dib.v1.bit_count);
+            /* bit_count is at most 8 here, so 1u << bit_count is bounded to 256 */
+            uint32_t color_num = 1u << b->dib.v1.bit_count;
             b->palette = malloc(sizeof(struct bmp_color_entry) * color_num);
             if (b->palette == NULL) {
                 fclose(f);
                 BMP_free(p);
                 return NULL;
             }
-            b->palette_size = color_num;
+            b->palette_size = (int)color_num;
             VDBG(bmp, "palette");
-            for (int i = 0; i < color_num; i++) {
+            for (uint32_t i = 0; i < color_num; i++) {
                 FFREAD_IGNORE(b->palette + i, 4, 1, f);
                 VDBG(bmp, "\t %d %d %d, %d", b->palette[i].blue, b->palette[i].green,
                      b->palette[i].red, b->palette[i].alpha);
             }
         }
-    } else if (size == 40 || memcmp("BM", &b->file_header.file_type, 2) == 0) {
-        p->depth = b->dib.v2.bit_count;
-        p->width = b->dib.v2.width;
-        p->height = b->dib.v2.height;
-        if (b->dib.v2.compression == BI_BITFIELDS) {
+    } else if (size >= 40) {
+        if (compression == BI_BITFIELDS) {
             FFREAD_IGNORE(&b->color, 12, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
-        } else if (b->dib.v2.compression == BI_ALPHABITFIELDS) {
+        } else if (compression == BI_ALPHABITFIELDS) {
             FFREAD_IGNORE(&b->color, 16, 1, f);
             p->format = CS_MasksToPixelFormatEnum(
                 p->depth, b->color.red_mask, b->color.green_mask,
                 b->color.blue_mask, b->color.alpha_mask);
         }
 
-        if (b->dib.v2.bit_count <= 8) {
+        if (bit_count <= 8) {
             p->depth = 24;
-            uint32_t max_colors = (uint32_t)1 << b->dib.v2.bit_count;
-            uint32_t color_num = b->dib.v2.colors_used
-                                ? b->dib.v2.colors_used
-                                : max_colors;
+            uint32_t max_colors = 1u << bit_count;
+            uint32_t color_num = colors_used ? colors_used : max_colors;
             /* colors_used cannot promise more entries than the bit count
-             * allows, and a bogus count must not size the allocation
-             */
+             * allows, and a bogus count must not size the allocation */
             if (color_num > max_colors) {
                 VERR(bmp, "colors_used %u exceeds the %u entry table",
                      color_num, max_colors);
@@ -303,37 +370,78 @@ BMP_load(const char* filename, int skip_flag UNUSED)
 
     fseek(f, b->file_header.offset_data, SEEK_SET);
 
-    /* pitch must be multiple of 4 bytes */
-    p->pitch = ((p->width + 3) >> 2 << 2) * p->depth / 8;
-    b->data = malloc((ABS(p->height)) * p->pitch);
-    memset(b->data, 0, (ABS(p->height)) * p->pitch);
+    /* pitch must be a multiple of 4 bytes, so round width up first; do the
+     * calculation in size_t and check for overflow before casting back to int.
+     * Use the final p->depth (which palette modes may have promoted to 24) */
+    uint64_t aligned_w = ((uint64_t)w + 3) & ~(uint64_t)3;
+    uint64_t pitch64 = aligned_w * (uint64_t)p->depth / 8;
+    if (pitch64 == 0 || pitch64 > (uint64_t)INT_MAX) {
+        VERR(bmp, "pitch %llu invalid", (unsigned long long)pitch64);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    /* total buffer: abs(height) * pitch, also in size_t */
+    uint64_t buf64 = (uint64_t)abs_h * pitch64;
+    if (buf64 == 0 || buf64 > (uint64_t)SIZE_MAX) {
+        VERR(bmp, "pixel buffer size %llu invalid", (unsigned long long)buf64);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    p->pitch = (int)pitch64;
+    b->data = malloc((size_t)buf64);
+    if (!b->data) {
+        VERR(bmp, "cannot allocate %llu bytes", (unsigned long long)buf64);
+        fclose(f);
+        BMP_free(p);
+        return NULL;
+    }
+    memset(b->data, 0, (size_t)buf64);
 
     if (size == 12) {
-        if (b->dib.v1.bit_count > 8) {
+        if (bit_count > 8) {
             read_pixels(p, f);
         } else {
-            VDBG(bmp, "width %d pitch %d, bit %d", p->width, p->pitch, b->dib.v1.bit_count);
-            read_color_index(p, b->dib.v1.bit_count, f);
+            VDBG(bmp, "width %d pitch %d, bit %d", p->width, p->pitch, bit_count);
+            read_color_index(p, bit_count, f);
         }
-    } else if (size == 40 || memcmp("BM", &b->file_header.file_type, 2) == 0) {
-        if (b->dib.v2.bit_count > 8) {
+    } else if (size >= 40) {
+        if (bit_count > 8) {
             read_pixels(p, f);
         } else {
-            if (b->dib.v2.compression == BI_RLE8) {
-                uint8_t *compressed = malloc(b->dib.v2.size_image);
-                FFREAD_IGNORE(compressed, b->dib.v2.size_image, 1, f);
-                RLE8_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
-                            p->height, p->depth, b->palette);
-                free(compressed);
-            } else if (b->dib.v2.compression == BI_RLE4) {
-                uint8_t *compressed = malloc(b->dib.v2.size_image);
-                FFREAD_IGNORE(compressed, b->dib.v2.size_image, 1, f);
-                RLE4_decode(compressed, b->dib.v2.size_image, b->data, p->pitch,
-                            p->height, p->depth, b->palette);
+            if (compression == BI_RLE8 || compression == BI_RLE4) {
+                /* a compressed payload must be at least 2 bytes (one run) and
+                 * smaller than the image can possibly uncompress to; anything
+                 * else is bogus */
+                if (size_image < 2 || size_image == 0) {
+                    VERR(bmp, "rle compressed size %u invalid", size_image);
+                    free(b->data);
+                    b->data = NULL;
+                    fclose(f);
+                    BMP_free(p);
+                    return NULL;
+                }
+                uint8_t *compressed = malloc(size_image ? size_image : 1);
+                if (!compressed) {
+                    free(b->data);
+                    b->data = NULL;
+                    fclose(f);
+                    BMP_free(p);
+                    return NULL;
+                }
+                FFREAD_IGNORE(compressed, size_image, 1, f);
+                if (compression == BI_RLE8) {
+                    RLE8_decode(compressed, (int)size_image, b->data, p->pitch,
+                                p->height, p->depth, b->palette);
+                } else {
+                    RLE4_decode(compressed, (int)size_image, b->data, p->pitch,
+                                p->height, p->depth, b->palette);
+                }
                 free(compressed);
             } else {
                 VDBG(bmp, "width %d pitch %d", p->width, p->pitch);
-                read_color_index(p, b->dib.v2.bit_count, f);
+                read_color_index(p, bit_count, f);
             }
         }
     }

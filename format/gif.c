@@ -399,80 +399,248 @@ void read_gif(FILE* f, GIF *gif) {
 
 }
 
-static struct pic *
-GIF_load_one(Graphic *g)
-{
-    struct pic *p = pic_alloc(sizeof(GIF *));
-    /* the frame keeps the gif container, it does not own a payload of its own */
-    free(p->pic);
-    p->pic = NULL;
-    p->left = g->image->image_dsc.left;
-    p->top = g->image->image_dsc.top;
-    p->width = g->image->image_dsc.width;
-    p->height = g->image->image_dsc.height;
-    p->depth = 32;
-    p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
-    p->pixels = g->image->data;
-    p->format = CS_PIXELFORMAT_RGB888;
-    /* propagate per-frame delay from the GCE if present (GIF stores in units
-     * of 10 ms; duration_ms is in milliseconds). Default 100 ms per frame
-     * when no GCE was attached. */
-    if (g->has_control && g->control)
-        pic_set_duration(p, (uint32_t)g->control->delay_time * 10u);
-    else
-        pic_set_duration(p, 100u);
-    return p;
-}
-
 static bool
 graphic_is_image(const Graphic* g)
 {
-    return g->type == GRAPHIC_IMAGE && g->image && g->image->data;
+    return g->type == GRAPHIC_IMAGE && g->image && g->image->indices;
+}
+
+/* ---- canvas helpers (used by the animation-aware GIF_load) ---- */
+
+static void
+gif_copy_canvas(uint8_t *dst, int dst_pitch,
+                const uint8_t *src, int src_pitch,
+                const GIF *g)
+{
+    int w = g->ls_dsc.screen_witdh;
+    int h = g->ls_dsc.screen_height;
+    for (int y = 0; y < h; y++)
+        memcpy(dst + (size_t)y * dst_pitch,
+               src + (size_t)y * src_pitch,
+               (size_t)w * 4);
+}
+
+static void
+gif_fill_background(uint8_t *canvas, int pitch, const GIF *g)
+{
+    int w = g->ls_dsc.screen_witdh, h = g->ls_dsc.screen_height;
+    Color bg = {0, 0, 0};
+    bg.r = 0xFF; bg.g = bg.b = 0;
+    if (g->ls_dsc.global_color_table_flag && g->global_ct) {
+        int idx = g->ls_dsc.background_color_index;
+        if (idx < GIF_MAX_COLOR_TABLE) bg = g->global_ct[idx];
+    }
+    for (int y = 0; y < h; y++) {
+        uint8_t *row = canvas + (size_t)y * pitch;
+        for (int x = 0; x < w; x++) {
+            row[x*4+0] = bg.b; row[x*4+1] = bg.g;
+            row[x*4+2] = bg.r; row[x*4+3] = 0xFF;
+        }
+    }
+}
+
+/* Compose one decoded image tile onto the canvas. Pixels whose index equals
+ * transparent_color_index (when enabled by the GCE) are skipped so the
+ * canvas keeps whatever was underneath. */
+static void
+gif_compose_frame(uint8_t *canvas, int pitch,
+                  const Graphic *gr, const GIF *g)
+{
+    const Image *img = gr->image;
+    int L = img->image_dsc.left, T = img->image_dsc.top;
+    int W = img->image_dsc.width, H = img->image_dsc.height;
+    int cw = g->ls_dsc.screen_witdh, ch = g->ls_dsc.screen_height;
+
+    bool have_transp = false;
+    uint8_t transp_idx = 0;
+    if (gr->has_control && gr->control && gr->control->transparent_color_flag) {
+        have_transp = true;
+        transp_idx = gr->control->transparent_color_index;
+    }
+
+    Color *ct = img->local_ct ? img->local_ct : g->global_ct;
+    uint32_t ct_size = img->local_ct
+        ? color_table_size(img->image_dsc.local_color_table_size)
+        : (g->ls_dsc.global_color_table_flag
+           ? color_table_size(g->ls_dsc.global_color_table_size) : 0);
+
+    for (int y = 0; y < H; y++) {
+        int cy = T + y;
+        if (cy < 0 || cy >= ch) continue;
+        const uint8_t *sr = img->indices + (size_t)y * W;
+        uint8_t *dr = canvas + (size_t)cy * pitch;
+        for (int x = 0; x < W; x++) {
+            int cx = L + x;
+            if (cx < 0 || cx >= cw) continue;
+            uint8_t idx = sr[x];
+            if (have_transp && idx == transp_idx) continue;
+            Color c;
+            if (!ct || ct_size == 0 || idx >= ct_size) {
+                dr[cx*4+0] = dr[cx*4+1] = dr[cx*4+2] = 0;
+                dr[cx*4+3] = 0xFF;
+                continue;
+            }
+            c = ct[idx];
+            dr[cx*4+0] = c.b; dr[cx*4+1] = c.g;
+            dr[cx*4+2] = c.r; dr[cx*4+3] = 0xFF;
+        }
+    }
+}
+
+/* dispose=2: clear the *previous* frame's own rectangle to the background
+ * colour (GIF89a spec — NOT the whole canvas). */
+static void
+gif_dispose_clear_prev(uint8_t *canvas, int pitch,
+                       const Graphic *prev, const GIF *g)
+{
+    if (!prev || !prev->image) return;
+    const Image *img = prev->image;
+    int L = img->image_dsc.left, T = img->image_dsc.top;
+    int W = img->image_dsc.width, H = img->image_dsc.height;
+    int cw = g->ls_dsc.screen_witdh, ch = g->ls_dsc.screen_height;
+    Color bg = {0, 0, 0};
+    bg.r = 0xFF;
+    if (g->ls_dsc.global_color_table_flag && g->global_ct) {
+        int idx = g->ls_dsc.background_color_index;
+        if (idx < GIF_MAX_COLOR_TABLE) bg = g->global_ct[idx];
+    }
+    for (int y = 0; y < H; y++) {
+        int cy = T + y;
+        if (cy < 0 || cy >= ch) continue;
+        uint8_t *row = canvas + (size_t)cy * pitch;
+        for (int x = 0; x < W; x++) {
+            int cx = L + x;
+            if (cx < 0 || cx >= cw) continue;
+            row[cx*4+0] = bg.b; row[cx*4+1] = bg.g;
+            row[cx*4+2] = bg.r; row[cx*4+3] = 0xFF;
+        }
+    }
 }
 
 static struct pic *
-GIF_load(const char *filename, int skip_flag)
+pic_new_fullcanvas(int w, int h)
+{
+    struct pic *p = pic_alloc(sizeof(void*));
+    free(p->pic); p->pic = NULL;
+    p->width = w; p->height = h; p->depth = 32;
+    p->pitch = ((w * 32 + 31) >> 5) << 2;   /* 32-byte aligned */
+    p->pixels = calloc((size_t)p->pitch * h, 1);
+    p->format = CS_PIXELFORMAT_BGRA8888;
+    p->left = 0; p->top = 0;
+    return p;
+}
+
+static struct pic *
+GIF_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *holder = pic_alloc(sizeof(GIF));
     GIF* g = (GIF *)holder->pic;
     FILE* f = fopen(filename, "rb");
-    if (f == NULL) {
-        pic_free(holder);
-        return NULL;
-    }
+    if (f == NULL) { pic_free(holder); return NULL; }
     read_gif(f, g);
     fclose(f);
-    if (!skip_flag) {
-        if (g->graphic_count > 1) {
-            struct pic *last = NULL;
-            for (int i = 0; i < g->graphic_count; i++) {
-                if (!graphic_is_image(&g->graphics[i]))
-                    continue;
-                last = GIF_load_one(&g->graphics[i]);
-                file_enqueue_pic(last);
-            }
-            if (last == NULL) {
-                VERR(gif, "no image in the file");
-                GIF_free(holder);
-                return NULL;
-            }
-            //for GIF, the info will be stored in the last frame
-            last->pic = g;
-            holder->pic = NULL;
-            pic_free(holder);
-            return NULL;
-        } else if (g->graphic_count == 1 && graphic_is_image(&g->graphics[0])) {
-            struct pic *p = GIF_load_one(g->graphics);
-            p->pic = g;
-            holder->pic = NULL;
-            pic_free(holder);
-            return p;
-        }
-        VERR(gif, "no image in the file");
-        GIF_free(holder);
+
+    int cw = g->ls_dsc.screen_witdh, ch = g->ls_dsc.screen_height;
+    if (cw <= 0 || ch <= 0) {
+        VERR(gif, "invalid canvas size");
+        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
         return NULL;
     }
-    return holder;
+
+    int pitch = cw * 4, bytes = pitch * ch;
+
+    /* Single-frame shortcut: graphic_count == 1 AND it's an image is returned
+     * directly as file_load's return value (legacy contract). Multi-frame
+     * animations (graphic_count > 1) always go to the queue — this also
+     * covers files where a plaintext / app block precedes the single image. */
+    if (g->graphic_count == 1 && graphic_is_image(&g->graphics[0])) {
+        Graphic *gr = &g->graphics[0];
+
+        uint8_t *canvas = (uint8_t*)calloc((size_t)bytes, 1);
+        if (!canvas) {
+            pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+            return NULL;
+        }
+        gif_fill_background(canvas, pitch, g);
+        gif_compose_frame(canvas, pitch, gr, g);
+
+        struct pic *p = pic_new_fullcanvas(cw, ch);
+        gif_copy_canvas((uint8_t*)p->pixels, p->pitch, canvas, pitch, g);
+        if (gr->has_control && gr->control)
+            pic_set_duration(p, (uint32_t)gr->control->delay_time * 10u);
+        else
+            pic_set_duration(p, 100u);
+
+        free(canvas);
+        /* single frame owns the GIF container — file_free → GIF_free releases it */
+        p->pic = holder->pic;
+        holder->pic = NULL;
+        pic_free(holder);
+        return p;
+    }
+
+    uint8_t *canvas = (uint8_t*)calloc((size_t)bytes, 1);
+    if (!canvas) {
+        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+        return NULL;
+    }
+
+    gif_fill_background(canvas, pitch, g);
+
+    int prev_dispose = 1;   /* previous frame's disposal, default: do nothing */
+    Graphic *prev_img = NULL;
+    struct pic *last = NULL;
+
+    for (int i = 0; i < g->graphic_count; i++) {
+        Graphic *gr = &g->graphics[i];
+        if (!graphic_is_image(gr)) continue;
+
+        /* 1. apply previous frame's disposal */
+        if (prev_dispose == 2 && prev_img)
+            gif_dispose_clear_prev(canvas, pitch, prev_img, g);
+        /* dispose 0/1 = leave alone (default) */
+
+        /* 2. compose this frame tile onto the persistent canvas */
+        gif_compose_frame(canvas, pitch, gr, g);
+
+        /* 3. snapshot the full canvas into a newly-malloc'd pic; its pitch
+         *    may be wider than the canvas, so copy line-by-line */
+        struct pic *sn = pic_new_fullcanvas(cw, ch);
+        gif_copy_canvas((uint8_t*)sn->pixels, sn->pitch, canvas, pitch, g);
+        if (gr->has_control && gr->control)
+            pic_set_duration(sn, (uint32_t)gr->control->delay_time * 10u);
+        else
+            pic_set_duration(sn, 100u);
+
+        /* 4. enqueue; ring_queue has a bounded buffer so file_enqueue_pic
+         *    returns false when full — drop and bail out */
+        if (!file_enqueue_pic(sn)) {
+            VERR(gif, "queue full, dropping frame");
+            free(sn->pixels); pic_free(sn); break;
+        }
+
+        /* 5. remember this frame's metadata for the next iteration */
+        prev_dispose = (gr->has_control && gr->control)
+                        ? gr->control->disposal_method : 1;
+        prev_img = gr;
+        last = sn;
+    }
+
+    free(canvas);
+
+    if (last == NULL) {
+        /* no valid frame produced — free GIF container ourselves */
+        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+        return NULL;
+    }
+
+    /* Contract: the *last* queued frame owns the GIF container so that
+     * callers (picinfo.c, GIF_info) can reach the original GIF struct.
+     * All other queued frames carry p->pic == NULL and only own pixels. */
+    last->pic = holder->pic;
+    holder->pic = NULL;
+    pic_free(holder);
+    return NULL;
 }
 
 static int 

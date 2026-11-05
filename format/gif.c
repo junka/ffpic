@@ -580,48 +580,44 @@ GIF_load(const char *filename, int skip_flag UNUSED)
     }
 
     uint8_t *canvas = (uint8_t*)calloc((size_t)bytes, 1);
-    uint8_t *snap_curr = (uint8_t*)calloc((size_t)bytes, 1);
-    uint8_t *snap_prev = (uint8_t*)calloc((size_t)bytes, 1);
-    if (!canvas || !snap_curr || !snap_prev) {
-        free(canvas); free(snap_curr); free(snap_prev);
+    uint8_t *prev_before = (uint8_t*)calloc((size_t)bytes, 1);
+    if (!canvas || !prev_before) {
+        free(canvas); free(prev_before);
         pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
         return NULL;
     }
 
+    /* prev_before 存"canvas 在 [dispose 应用后、compose 本帧前] 的状态"。
+     * 下一帧若 prev_dispose==3 就恢复到这里。只需要一张：
+     * 单帧路径（dispose=0/1/2） prev_before 始终被覆盖但未被使用；
+     * dispose=3 只看这一张，因为它要恢复的是上一帧 compose 之前。 */
     gif_fill_background(canvas, pitch, g);
-    /* prime the two snapshots to match the initial canvas; snap_prev stays
-     * garbage-reading safe (prev_snap_valid gates its use below) */
-    gif_copy_canvas(snap_curr, pitch, canvas, pitch, g);
-    gif_copy_canvas(snap_prev, pitch, canvas, pitch, g);
+    gif_copy_canvas(prev_before, pitch, canvas, pitch, g);
 
     int prev_dispose = 1;   /* previous frame's disposal, default: do nothing */
     Graphic *prev_img = NULL;
     struct pic *last = NULL;
-    bool prev_snap_valid = false;   /* snap_prev holds a real frame-compose-before state */
 
     for (int i = 0; i < g->graphic_count; i++) {
         Graphic *gr = &g->graphics[i];
         if (!graphic_is_image(gr)) continue;
 
-        /* 0. rotate snapshots BEFORE touching canvas:
-         *    snap_prev ← old snap_curr  (state *before* previous frame's compose)
-         *    snap_curr ← current canvas (state *before* this frame's compose —
-         *                                what dispose=3 on the NEXT frame needs) */
-        { uint8_t *t = snap_prev; snap_prev = snap_curr; snap_curr = t; }
-        gif_copy_canvas(snap_curr, pitch, canvas, pitch, g);
-        prev_snap_valid = true;
-
-        /* 1. apply previous frame's disposal */
-        if (prev_dispose == 3 && prev_snap_valid)
-            gif_copy_canvas(canvas, pitch, snap_prev, pitch, g);
+        /* 1. apply previous frame's disposal
+         *    dispose=3 恢复到"prev_before"（即上一帧 compose 前的状态） */
+        if (prev_dispose == 3)
+            gif_copy_canvas(canvas, pitch, prev_before, pitch, g);
         else if (prev_dispose == 2 && prev_img)
             gif_dispose_clear_prev(canvas, pitch, prev_img, g);
         /* dispose 0/1 = leave alone (default) */
 
-        /* 2. compose this frame tile onto the persistent canvas */
+        /* 2. snapshot canvas *after* dispose applied but *before* compose
+         *    — this is what next frame's dispose=3 must restore to */
+        gif_copy_canvas(prev_before, pitch, canvas, pitch, g);
+
+        /* 3. compose this frame tile onto the persistent canvas */
         gif_compose_frame(canvas, pitch, gr, g);
 
-        /* 3. snapshot the full canvas into a newly-malloc'd pic; its pitch
+        /* 4. snapshot the full canvas into a newly-malloc'd pic; its pitch
          *    may be wider than the canvas, so copy line-by-line */
         struct pic *sn = pic_new_fullcanvas(cw, ch);
         gif_copy_canvas((uint8_t*)sn->pixels, sn->pitch, canvas, pitch, g);
@@ -630,21 +626,21 @@ GIF_load(const char *filename, int skip_flag UNUSED)
         else
             pic_set_duration(sn, 100u);
 
-        /* 4. enqueue; ring_queue has a bounded buffer so file_enqueue_pic
-         *    returns false when full — drop and bail out */
+        /* 5. enqueue; ring_queue has a bounded buffer so file_enqueue_pic
+         *    returns false when full — drop and bail out cleanly */
         if (!file_enqueue_pic(sn)) {
             VERR(gif, "queue full, dropping frame");
             free(sn->pixels); pic_free(sn); break;
         }
 
-        /* 5. remember this frame's metadata for the next iteration */
+        /* 6. remember this frame's metadata for the next iteration */
         prev_dispose = (gr->has_control && gr->control)
                         ? gr->control->disposal_method : 1;
         prev_img = gr;
         last = sn;
     }
 
-    free(canvas); free(snap_curr); free(snap_prev);
+    free(canvas); free(prev_before);
 
     if (last == NULL) {
         /* no valid frame produced — free GIF container ourselves */

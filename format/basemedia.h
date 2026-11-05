@@ -34,7 +34,13 @@ type2name(uint32_t type)
 #define MDAT TYPE2UINT("mdat")
 //prededined box type should be list in each file type header
 
-#pragma pack(push, 2)
+/* These structures only hold the parsed, in-memory representation of the
+ * boxes: every field is deserialized explicitly from the file, and no raw
+ * byte buffer is ever overlaid with them (there are no whole-struct reads
+ * and no sizeof-based offset arithmetic).  They must therefore stay
+ * naturally aligned -- a 2-byte packed layout put the char * members on
+ * 2-byte boundaries, which is undefined behaviour for the 8-byte loads and
+ * stores performed by read_till_null(). */
 
 #define BOX_ST \
     uint64_t size; \
@@ -709,8 +715,6 @@ struct meta_box {
     struct iref_box iref; // zero or one
     struct grpl_box grpl; // zero or one
 };
-
-#pragma pack(pop)
 
 int read_till_null(FILE *f, char **str);
 uint32_t read_box(FILE *f, void *d);

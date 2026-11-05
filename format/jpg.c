@@ -150,6 +150,23 @@ read_dht(JPG* j, FILE *f)
         uint8_t ac = d.table_class;
         uint8_t id = d.huffman_id;
         VDBG(jpg, "ac %d, id %d, %02x", ac, id, *(uint8_t *)&d);
+        /* ITU-T T.81 4.8.2: Tc is 0 for DC and 1 for AC tables.  Anything
+         * else is a malformed segment; reject it instead of indexing past
+         * j->dht[2][16].  The id selects one of the sixteen tables.  The
+         * remaining segment must also be large enough for the one-byte
+         * selector plus the sixteen code-length counters. */
+        if (ac > 1) {
+            VERR(jpg, "invalid DHT table class %u", (unsigned)ac);
+            break;
+        }
+        if (id >= 16) {
+            VERR(jpg, "invalid DHT table id %u", (unsigned)id);
+            break;
+        }
+        if (tlen < 17) {
+            VERR(jpg, "truncated DHT segment");
+            break;
+        }
         j->dht[ac][id].table_class = d.table_class;
         j->dht[ac][id].huffman_id = d.huffman_id;
         tlen --;

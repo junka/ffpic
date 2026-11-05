@@ -59,9 +59,14 @@ round2i(int v, int n)
     return (v + (1 << (n - 1))) >> n;
 }
 
+/* Round2 with n == 0 is the identity operation: the box filter uses
+ * 2 * (bitdepth - 8) and bitdepth - 8, which are zero for 8-bit content. */
 static inline int64_t
 round2_64(int64_t v, int n)
 {
+    if (n <= 0) {
+        return v;
+    }
     return (v + ((int64_t)1 << (n - 1))) >> n;
 }
 
@@ -607,12 +612,21 @@ av1_cdef_frame(struct av1_dec *d)
         memcpy(src[pl], d->plane[pl],
                (size_t)d->stride[pl] * d->plane_h[pl] * sizeof(uint16_t));
     }
-    VDBG(av1, "cdef %dx%d damp %d idx0 %d yp %d ys %d up %d us %d",
-         f->width, f->height, f->cdef_damping,
-         d->cdef_idx[0], f->cdef_y_pri_strength[d->cdef_idx[0]],
-         f->cdef_y_sec_strength[d->cdef_idx[0]],
-         f->cdef_uv_pri_strength[d->cdef_idx[0]],
-         f->cdef_uv_sec_strength[d->cdef_idx[0]]);
+#ifndef NDEBUG
+    {
+        /* cdef_idx is -1 for blocks that skip CDEF; the strength tables only
+         * have eight entries, so the log must not index them with that
+         * value. */
+        int idx0 = d->cdef_idx[0];
+        int lidx = (idx0 >= 0 && idx0 < 8) ? idx0 : 0;
+        VDBG(av1, "cdef %dx%d damp %d idx0 %d yp %d ys %d up %d us %d",
+             f->width, f->height, f->cdef_damping,
+             idx0, f->cdef_y_pri_strength[lidx],
+             f->cdef_y_sec_strength[lidx],
+             f->cdef_uv_pri_strength[lidx],
+             f->cdef_uv_sec_strength[lidx]);
+    }
+#endif
     for (r = 0; r < f->mi_rows; r += 2) {
         for (c = 0; c < f->mi_cols; c += 2) {
             int base_r = r & ~15;

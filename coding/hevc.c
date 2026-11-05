@@ -4215,8 +4215,11 @@ quatization_parameters(int xCb, int yCb,
                              slice->slice_act_cr_qp_offset + cu->CuQpOffsetCr);
         }
         if (sps->ChromaArrayType == 1) {
-            qPcb = qpc_from_qpi[qPcb];
-            qPcr = qpc_from_qpi[qPcr];
+            /* ITU-T H.265 8.6.1: the QPc lookup table is indexed by a qPi
+             * clipped to 0..57; with a QpBdOffsetC the value can be
+             * negative before clipping. */
+            qPcb = qpc_from_qpi[clip3(0, 57, qPcb)];
+            qPcr = qpc_from_qpi[clip3(0, 57, qPcr)];
         } else {
             qPcb = MIN(qPcb, 51);
             qPcr = MIN(qPcr, 51);

@@ -439,7 +439,15 @@ pred_directional(struct av1_dec *d, int plane, int x, int y,
                 }
             }
         }
+    } else if (p_angle == 90) {
+        for (i = 0; i < h; i++) {
+            for (j = 0; j < w; j++) {
+                pred[i][j] = above[j];
+            }
+        }
     } else if (p_angle < 180) {
+        /* p_angle is now strictly between 90 and 180, so both lookups are
+         * in 1..89; the 90 case above would need Dr_Intra_Derivative[90]. */
         int dx = Dr_Intra_Derivative[180 - p_angle];
         int dy = Dr_Intra_Derivative[p_angle - 90];
 
@@ -478,13 +486,8 @@ pred_directional(struct av1_dec *d, int plane, int x, int y,
                     (int64_t)left[base + 1] * shift, 5);
             }
         }
-    } else if (p_angle == 90) {
-        for (i = 0; i < h; i++) {
-            for (j = 0; j < w; j++) {
-                pred[i][j] = above[j];
-            }
-        }
     } else {
+        /* p_angle == 180 */
         for (i = 0; i < h; i++) {
             for (j = 0; j < w; j++) {
                 pred[i][j] = left[i];

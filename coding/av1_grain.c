@@ -440,7 +440,7 @@ av1_apply_film_grain(struct av1_dec *d)
                                        orig * (mult - 128);
                         merged = clip3(0, (1 << bitdepth) - 1,
                                        (combined >> 6) +
-                                           ((offset - 256) << shift));
+                                           ((offset - 256) * (1 << shift)));
                     }
                     noise = round2(scale_lut(&g, plane, merged) * noise,
                                    scaling_shift);

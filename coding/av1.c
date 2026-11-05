@@ -1092,13 +1092,19 @@ frame_alloc_buffers(struct av1_dec *d)
         }
         int cmi_w = (mi_cols + sub_x) >> sub_x;
         int cmi_h = (mi_rows + sub_y) >> sub_y;
+        /* Transform blocks overhang the frame edge by up to 64 luma samples,
+         * and coeffs() still stores their above/left context.  Give those
+         * arrays the same 32-unit padding as the mi grid instead of clipping
+         * the stores, which would drop contexts for edge blocks. */
+        int ctx_w = ((mi_cols + 32) + sub_x) >> sub_x;
+        int ctx_h = ((mi_rows + 32) + sub_y) >> sub_y;
         d->mi_stride_c[p] = cmi_w + 2;
         d->block_decoded[p] = calloc((size_t)(cmi_w + 2) * (cmi_h + 2),
                                      sizeof(int8_t));
-        d->above_level[p] = calloc(cmi_w + 2, sizeof(uint8_t));
-        d->above_dc[p] = calloc(cmi_w + 2, sizeof(uint8_t));
-        d->left_level[p] = calloc(cmi_h + 2, sizeof(uint8_t));
-        d->left_dc[p] = calloc(cmi_h + 2, sizeof(uint8_t));
+        d->above_level[p] = calloc(ctx_w + 2, sizeof(uint8_t));
+        d->above_dc[p] = calloc(ctx_w + 2, sizeof(uint8_t));
+        d->left_level[p] = calloc(ctx_h + 2, sizeof(uint8_t));
+        d->left_dc[p] = calloc(ctx_h + 2, sizeof(uint8_t));
         d->loopfilter_tx_sizes[p] = calloc((size_t)(cmi_w + 2) * (cmi_h + 2),
                                            sizeof(uint8_t));
         if (!d->block_decoded[p] || !d->above_level[p] || !d->above_dc[p] ||

@@ -26,8 +26,18 @@ golomb_decode_unsigned_value(struct bits_vec *v, int kexp)
     /* the bits num for info */
     bit_count = zero_count + kexp;
 
-    code = (1 << bit_count) - (1 << kexp)
-        + READ_BITS(v, bit_count);
+    /* An exp-golomb code needs one leading 1 plus bit_count suffix bits.
+     * Shifting a 32-bit value by bit_count >= 32 is undefined, and such a
+     * code cannot be represented in the uint32_t result either, so treat it
+     * as a malformed stream and saturate.  Valid codes take the same path
+     * as before (bit_count <= 31). */
+    if (kexp < 0 || kexp >= 32 || bit_count >= 32) {
+        VERR(golomb, "exp-golomb code width exceeds 32 bits");
+        return UINT32_MAX;
+    }
+
+    code = (uint32_t)(((uint64_t)1 << bit_count) - ((uint64_t)1 << kexp)
+        + (uint32_t)READ_BITS(v, bit_count));
 
     return code;
 }

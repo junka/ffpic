@@ -253,6 +253,51 @@ static int test_jpg_dht_huge(void *unused)
     return 0;
 }
 
+/* Test 3b: JPEG DHT with Tc=15.  Only Tc=0 (DC) and Tc=1 (AC) are legal
+ *         per ITU-T T.81 4.8.2; the parser used to index j->dht[15][id],
+ *         writing far past the 2x16 table array and corrupting the heap.
+ *         Under ASan/UBSan this is an immediate heap-buffer-overflow, and
+ *         the malformed table must now be rejected. */
+
+static int test_jpg_dht_bad_class(void *unused)
+{
+    (void)unused;
+    uint8_t buf[64];
+    unsigned n = 0;
+    buf[n++] = 0xFF; buf[n++] = 0xD8;                  /* SOI */
+    /* SOF0: 96x96, 3 components */
+    buf[n++] = 0xFF; buf[n++] = 0xC0;
+    w16be(buf, n, 2 + 1 + 2 + 2 + 1 + 6); n += 2;
+    buf[n++] = 8;
+    w16be(buf, n, 96); n += 2;
+    w16be(buf, n, 96); n += 2;
+    buf[n++] = 3;
+    buf[n++] = 1; buf[n++] = 0x11; buf[n++] = 0;
+    buf[n++] = 2; buf[n++] = 0x11; buf[n++] = 1;
+    buf[n++] = 3; buf[n++] = 0x11; buf[n++] = 1;
+    /* DHT: length is consistent (1 selector + 16 counters), but Tc=15. */
+    buf[n++] = 0xFF; buf[n++] = 0xC4;
+    w16be(buf, n, 2 + 1 + 16); n += 2;
+    buf[n++] = 0xF0;                                   /* Tc=15, Th=0 */
+    memset(buf + n, 0, 16); n += 16;
+    buf[n++] = 0xFF; buf[n++] = 0xD9;                  /* EOI */
+
+    char *path = write_temp("rob_jpg_dht_bad_class.jpg", buf, n);
+    if (!path) return -1;
+    struct file_ops *ops = file_probe(path);
+    struct pic *p = ops ? file_load(ops, path, 0) : NULL;
+    free(path);
+    if (p) {
+        /* no tables were stored, so a pic here would mean the bad table was
+         * accepted; either way free it before bailing out */
+        printf("  FAIL: DHT with Tc=15 was accepted\n");
+        file_free(ops, p);
+        return -1;
+    }
+    printf("  ok: DHT with Tc=15 rejected without out-of-bounds access\n");
+    return 0;
+}
+
 /* Test 4: BMP width=height=0x7FFFFFFF -- old code overflows int on pitch */
 
 static int test_bmp_huge_dims(void *unused)
@@ -410,6 +455,7 @@ int main(void)
         {"JPG components_num=250",   test_jpg_sof_components_250},
         {"JPG components_num=0",     test_jpg_sof_components_0},
         {"JPG DHT huge segment",     test_jpg_dht_huge},
+        {"JPG DHT table class 15",   test_jpg_dht_bad_class},
         {"BMP huge 0x7FFFFFFF",      test_bmp_huge_dims},
         {"BMP 8-bit palette pixels", test_bmp_palette_8bit},
     };

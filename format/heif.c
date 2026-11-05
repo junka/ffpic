@@ -1416,10 +1416,10 @@ HEIF_info(FILE *f, struct pic* p)
                 f, "\t\t\t\tgeneral_constraint_indicator_flags 0x%" PRIx64 "\n",
                 (uint64_t)hvcc->general_constraint_indicator_flags[0] << 40 |
                     (uint64_t)hvcc->general_constraint_indicator_flags[1] << 32 |
-                    hvcc->general_constraint_indicator_flags[2] << 24 |
-                    hvcc->general_constraint_indicator_flags[3] << 16 |
-                    hvcc->general_constraint_indicator_flags[4] << 8 |
-                    hvcc->general_constraint_indicator_flags[5]);
+                    (uint64_t)hvcc->general_constraint_indicator_flags[2] << 24 |
+                    (uint64_t)hvcc->general_constraint_indicator_flags[3] << 16 |
+                    (uint64_t)hvcc->general_constraint_indicator_flags[4] << 8 |
+                    (uint64_t)hvcc->general_constraint_indicator_flags[5]);
 
             fprintf(f, "\t\t\t\tparallelismType %d, chroma_format_idc %d, bit_depth_luma_minus8 %d\n\t\t\t\tbit_depth_chroma_minus8 %d\n", 
                 hvcc->parallelismType, hvcc->chroma_format_idc, hvcc->bit_depth_luma_minus8, hvcc->bit_depth_chroma_minus8);

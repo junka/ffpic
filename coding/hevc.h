@@ -1207,10 +1207,14 @@ struct trans_tree {
     int xT0;
     int yT0;
 
-    int8_t transform_skip_flag[4][32][32];
+    /* The grids below are indexed with coordinates relative to the coding
+     * unit origin, so they must cover a full 64x64 coding unit (a 64x64 CU
+     * holds 32x32 or smaller transform units at offsets up to 48).  At 32x32
+     * the entries past the first transform unit were out of bounds. */
+    int8_t transform_skip_flag[4][64][64];
     // see 7.4.9.10
-    uint8_t tu_residual_act_flag[32][32];
-    int16_t TransCoeffLevel[3][32][32]; // 3 for color index, 0 for Y, 1 for Cb,
+    uint8_t tu_residual_act_flag[64][64];
+    int16_t TransCoeffLevel[3][64][64]; // 3 for color index, 0 for Y, 1 for Cb,
                                         // 2 for Cr
     int numSigCoeff[3];
     int tu_num;

@@ -92,7 +92,12 @@ extern "C" {
 // start of data marker
 #define SOD MARK(0x93)
 
-#pragma pack(push, 1)
+/* These structures hold the parsed, in-memory representation of the boxes:
+ * every field is read explicitly from the file, and no raw byte buffer is
+ * overlaid with them.  They must stay naturally aligned -- packing them to
+ * 1 byte put members such as struct jp2_ihdr_box on 4-byte boundaries, so
+ * passing &b->ihdr to read_box(), which treats it as an 8-byte aligned
+ * struct box, was undefined behaviour. */
 
 // I.6 Box definition share the same struct with basemedia
 // LBox TBox XLBox DBox, which could use BOX_ST
@@ -422,7 +427,6 @@ struct cme {
     uint8_t *str;
 };
 
-#pragma pack(pop)
 
 struct main_header {
     struct siz siz;

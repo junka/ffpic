@@ -10,6 +10,7 @@
  * The malformed files at the end have to be refused cleanly: recognised by
  * their probe and then rejected by the loader without a crash. */
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,10 +273,10 @@ check_reject(const char *name, const char *expect)
     return rc;
 }
 
-/* the jp2 samples under tests/data are real opj_compress output; this build
- * parses the container and codestream headers but does not decode pixels, so
- * the checks cover the image size, the component count, the tile layout, the
- * cod marker and the Sqcd quantization style */
+/* the jp2 samples under tests/data are real opj_compress output; the checks
+ * cover the image size, the component count, the tile layout, the cod marker
+ * and the Sqcd quantization style, and both the reversible and the
+ * irreversible path must produce pixels */
 static int
 check_jp2(const char *path, int width, int height, int comps, int tiles,
           int transform, int quant_type)
@@ -339,10 +340,9 @@ check_jp2(const char *path, int width, int height, int comps, int tiles,
                j->main_h.qcd.guard_num);
         rc = -1;
     }
-    /* the reversible transform decodes to pixels; the irreversible 9-7
-     * path now also decodes to pixels (lossy) */
-    if (transform == 1 && p->pixels == NULL) {
-        printf("%s: reversible codestream produced no pixels\n", path);
+    /* the reversible and irreversible samples both decode to pixels */
+    if (p->pixels == NULL) {
+        printf("%s: codestream produced no pixels\n", path);
         rc = -1;
     }
 
@@ -389,17 +389,21 @@ pnm_token(const uint8_t *d, size_t n, size_t *pos, char *out, size_t cap)
     return k ? 0 : -1;
 }
 
-/* exact pixel comparison against a reference PGM/PPM written by an
- * independent decoder */
+/* pixel comparison against a reference PGM/PPM written by an independent
+ * decoder.  maxdiff 0 demands an exact match (reversible path); the
+ * irreversible path allows a small rounding difference and also requires at
+ * least min_psnr dB. */
 static int
-check_jp2_pixels(const char *jp2, const char *ref)
+check_jp2_pixels(const char *jp2, const char *ref, int maxdiff,
+                 double min_psnr)
 {
     struct file_ops *ops = file_probe(jp2);
     struct pic *p = NULL;
     uint8_t *data = NULL;
     size_t pos = 0, want;
     long sz;
-    int w, h, ch, mism = 0, shown = 0, rc = -1;
+    int w, h, ch, mism = 0, shown = 0, rc = -1, maxd = 0;
+    double sse = 0.0, psnr;
     char tok[64];
     FILE *f = fopen(ref, "rb");
 
@@ -478,14 +482,26 @@ check_jp2_pixels(const char *jp2, const char *ref)
             int gr = (int)((word >> 16) & 0xff);
             int gg = (int)((word >> 8) & 0xff);
             int gb = (int)(word & 0xff);
-            int bad;
+            int d0, d1, d2, dmax;
 
             if (ch == 1) {
-                bad = gr != r[0] || gg != r[0] || gb != r[0];
+                d0 = abs(gr - r[0]);
+                d1 = abs(gg - r[0]);
+                d2 = abs(gb - r[0]);
             } else {
-                bad = gr != r[0] || gg != r[1] || gb != r[2];
+                d0 = abs(gr - r[0]);
+                d1 = abs(gg - r[1]);
+                d2 = abs(gb - r[2]);
             }
-            if (bad) {
+            dmax = d0 > d1 ? d0 : d1;
+            if (d2 > dmax) {
+                dmax = d2;
+            }
+            if (dmax > maxd) {
+                maxd = dmax;
+            }
+            sse += (double)d0 * d0 + (double)d1 * d1 + (double)d2 * d2;
+            if (dmax > maxdiff) {
                 mism++;
                 if (shown++ < 3) {
                     printf("%s: (%d,%d) got %d,%d,%d want %d,%d,%d\n", jp2,
@@ -494,12 +510,21 @@ check_jp2_pixels(const char *jp2, const char *ref)
             }
         }
     }
+    psnr = sse > 0.0 ? 10.0 * log10(255.0 * 255.0 /
+                                    (sse / ((double)w * h * ch))) : 99.0;
     if (mism) {
-        printf("%s: %d of %d pixels differ from %s\n", jp2, mism, w * h, ref);
+        printf("%s: %d of %d pixels differ from %s (maxd=%d psnr=%.2f dB)\n",
+               jp2, mism, w * h, ref, maxd, psnr);
+        goto out;
+    }
+    if (psnr < min_psnr) {
+        printf("%s: psnr %.2f dB below %.2f dB (maxd=%d)\n", jp2, psnr,
+               min_psnr, maxd);
         goto out;
     }
     rc = 0;
-    printf("%s: pixels match %s\n", jp2, ref);
+    printf("%s: pixels match %s (maxd=%d psnr=%.2f dB)\n", jp2, ref, maxd,
+           psnr);
 
 out:
     if (p) {
@@ -3693,17 +3718,29 @@ int main(void)
      * transform, single tile and four tiles */
     if (check_jp2(JP2_DATA("jp2_lossless.jp2"), 64, 48, 3, 1, 1, 0) ||
         check_jp2(JP2_DATA("jp2_lossy.jp2"), 64, 48, 3, 1, 0, 2) ||
+        check_jp2(JP2_DATA("jp2_lossy_gray.jp2"), 64, 48, 1, 1, 0, 2) ||
+        check_jp2(JP2_DATA("jp2_lossy_tiles.jp2"), 64, 48, 3, 4, 0, 2) ||
         check_jp2(JP2_DATA("jp2_gray.jp2"), 64, 48, 1, 1, 1, 0) ||
         check_jp2(JP2_DATA("jp2_tiles.jp2"), 64, 48, 3, 4, 1, 0)) {
         failed++;
     }
     /* exact lossless reconstruction against independently decoded rasters */
     if (check_jp2_pixels(JP2_DATA("jp2_lossless.jp2"),
-                         JP2_DATA("jp2_lossless.ppm")) ||
+                         JP2_DATA("jp2_lossless.ppm"), 0, 0.0) ||
         check_jp2_pixels(JP2_DATA("jp2_gray.jp2"),
-                         JP2_DATA("jp2_gray.pgm")) ||
+                         JP2_DATA("jp2_gray.pgm"), 0, 0.0) ||
         check_jp2_pixels(JP2_DATA("jp2_tiles.jp2"),
-                         JP2_DATA("jp2_tiles.ppm"))) {
+                         JP2_DATA("jp2_tiles.ppm"), 0, 0.0)) {
+        failed++;
+    }
+    /* the irreversible path differs only by float rounding: at most two
+     * levels per sample and at least 45 dB against opj_decompress */
+    if (check_jp2_pixels(JP2_DATA("jp2_lossy.jp2"),
+                         JP2_DATA("jp2_lossy.ppm"), 2, 45.0) ||
+        check_jp2_pixels(JP2_DATA("jp2_lossy_gray.jp2"),
+                         JP2_DATA("jp2_lossy_gray.pgm"), 2, 45.0) ||
+        check_jp2_pixels(JP2_DATA("jp2_lossy_tiles.jp2"),
+                         JP2_DATA("jp2_lossy_tiles.ppm"), 2, 45.0)) {
         failed++;
     }
     for (long keep = 12; keep < 1100; keep += 73) {

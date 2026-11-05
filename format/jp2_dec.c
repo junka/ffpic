@@ -1,11 +1,12 @@
 /*
- * Built in JPEG 2000 (ISO/IEC 15444-1) reversible decoder.
+ * Built in JPEG 2000 (ISO/IEC 15444-1) decoder.
  *
- * Only the lossless path used by the sample files is implemented: one tile
- * part per tile, LRCP, a single quality layer, no SOP/EPH, no code-block
- * style flags, reversible 5-3 wavelet and the reversible component
- * transform.  Anything outside that shape is refused with -ENOTSUP and the
- * caller keeps the header only pic.
+ * The lossless (reversible 5-3) and lossy (irreversible 9-7) paths share
+ * the packet walk, Tier-1 MQ decoding and the coefficient to pixel
+ * pipeline.  Only one tile part per tile, LRCP, a single quality layer, no
+ * SOP/EPH, no code-block style flags, 8 bit, no subsampling and one or
+ * three components are accepted.  Anything outside that shape is refused
+ * with -ENOTSUP and the caller keeps the header only pic.
  */
 #include <errno.h>
 #include <math.h>
@@ -21,6 +22,17 @@
 
 #define JP2_MAX_DIM    (1 << 20)
 #define JP2_MAX_LEVELS 32
+
+/* Irreversible 9-7 lifting constants (ISO 15444-1 F.3.8.2).  OpenJPEG
+ * multiplies the low pass by K and the high pass by 2/K, and leaves the
+ * subband gain out of the stepsize (tcd.c, "BUG_WEIRD_TWO_INVK"), so the
+ * same two compensations are used here to stay bit compatible. */
+#define JP2_97_K       1.230174105f
+#define JP2_97_TWO_INVK 1.625732422f
+#define JP2_97_ALPHA   (-1.586134342f)
+#define JP2_97_BETA    (-0.052980118f)
+#define JP2_97_GAMMA    (0.882911075f)
+#define JP2_97_DELTA    (0.443506852f)
 
 /* ------------------------------------------------------------------ */
 /* packet header bit reader (ISO 15444-1 Annex B / OpenJPEG bio.c)      */
@@ -273,8 +285,10 @@ struct dec_band {
     int x0, y0, x1, y1;
     int w, h;
     int numbps;
+    float stepsize;         /* inverse quantization step, irreversible */
     struct dec_prec *prec;  /* res->pw * res->ph entries */
     int32_t *coef;
+    float *fcoef;           /* dequantized samples, irreversible only */
 };
 
 struct dec_res {
@@ -291,6 +305,7 @@ struct dec_comp {
     int nres;
     struct dec_res *res;
     int32_t *buf;
+    float *fbuf;            /* reversible uses buf, irreversible fbuf */
 };
 
 struct dec_tile {
@@ -346,11 +361,13 @@ comp_free(struct dec_comp *c)
                 }
                 free(band->prec);
                 free(band->coef);
+                free(band->fcoef);
             }
         }
         free(c->res);
     }
     free(c->buf);
+    free(c->fbuf);
     memset(c, 0, sizeof(*c));
 }
 
@@ -448,7 +465,7 @@ band_build_prec(struct dec_band *band, struct dec_res *res, int r,
 
 static int
 comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
-          int compno)
+          int compno, int lossy)
 {
     struct siz *s = &j->main_h.siz;
     struct coding_para *cp = &j->main_h.cod.p;
@@ -458,7 +475,9 @@ comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
     int dy = sc->vertical_separation;
     int cblkw = (int)cp->code_block_width + 2;
     int cblkh = (int)cp->code_block_height + 2;
-    int derived;
+    int prec = (int)(sc->depth & 0x7f) + 1;
+    int nbands;
+    int need;
     int tbl_len;
     int nres = (int)cp->decomp_level_num + 1;
     int64_t budget = 1 << 20;   /* code blocks per tile, hard cap */
@@ -477,12 +496,23 @@ comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
     if ((int64_t)c->w * c->h > (1 << 26)) {
         return -ENOTSUP;
     }
-    derived = 3 * (nres - 1) + 1;
-    tbl_len = (int)q->length - 3;
-    if (tbl_len > derived) {
-        tbl_len = derived;
+    /* one byte per subband for NOQNT, two for SIQNT (shared) and two per
+     * subband for the expounded style */
+    nbands = 3 * (nres - 1) + 1;
+    if (q->quant_type == 0) {
+        need = nbands;
+    } else if (q->quant_type == 1) {
+        need = 2;
+    } else if (q->quant_type == 2) {
+        need = 2 * nbands;
+    } else {
+        return -ENOTSUP;
     }
-    if (tbl_len <= 0) {
+    tbl_len = (int)q->length - 3;
+    if (tbl_len > need) {
+        tbl_len = need;
+    }
+    if (tbl_len < need) {
         return -EINVAL;
     }
     c->nres = nres;
@@ -543,22 +573,41 @@ comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
             }
             band->w = band->x1 - band->x0;
             band->h = band->y1 - band->y0;
-            if (idx >= tbl_len) {
-                return -EINVAL;
-            }
-            if (q->quant_type == 0) {
-                /* reversible: single byte per subband (SGcd format) */
-                band->numbps = (int)(q->table[idx] >> 3) +
-                               (int)q->guard_num - 1;
-            } else if (q->quant_type == 1) {
-                /* scalar derived: one shared pair of two bytes (big-endian) */
-                uint32_t ltmp = (uint32_t)q->table[0] * 256 | q->table[1];
-                band->numbps = (int)(ltmp >> 11) + (int)q->guard_num - 1;
-            } else {
-                /* scalar expounded: two bytes per subband, big-endian */
-                uint32_t ltmp = (uint32_t)q->table[idx * 2] * 256 |
-                                q->table[idx * 2 + 1];
-                band->numbps = (int)(ltmp >> 11) + (int)q->guard_num - 1;
+            {
+                int expn;
+                int mant;
+
+                if (q->quant_type == 0) {
+                    if (idx >= tbl_len) {
+                        return -EINVAL;
+                    }
+                    expn = (int)(q->table[idx] >> 3);
+                    mant = 0;
+                } else if (q->quant_type == 1) {
+                    int base = (int)(q->table[0] >> 3);
+
+                    expn = base - ((idx == 0) ? 0 : (idx - 1) / 3);
+                    if (expn < 0) {
+                        expn = 0;
+                    }
+                    mant = ((q->table[0] & 0x07) << 8) | q->table[1];
+                } else {
+                    if (2 * idx + 1 >= tbl_len) {
+                        return -EINVAL;
+                    }
+                    expn = (int)(q->table[2 * idx] >> 3);
+                    mant = ((q->table[2 * idx] & 0x07) << 8) |
+                           q->table[2 * idx + 1];
+                }
+                band->numbps = expn + (int)q->guard_num - 1;
+                if (band->numbps < 0 || band->numbps > 30) {
+                    return -ENOTSUP;
+                }
+                /* Equation E-3/E-4.  tcd.c keeps log2_gain at 0 for the
+                 * irreversible decoder (BUG_WEIRD_TWO_INVK), the subband
+                 * gain is paid back by two_invK in the 9-7 synthesis. */
+                band->stepsize = (float)((1.0 + (double)mant / 2048.0) *
+                                         pow(2.0, (double)(prec - expn)));
             }
             if (band->w > 0 && band->h > 0) {
                 if ((int64_t)band->w * band->h > (1 << 26)) {
@@ -568,6 +617,13 @@ comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
                                     sizeof(*band->coef));
                 if (band->coef == NULL) {
                     return -ENOMEM;
+                }
+                if (lossy) {
+                    band->fcoef = calloc((size_t)band->w * band->h,
+                                         sizeof(*band->fcoef));
+                    if (band->fcoef == NULL) {
+                        return -ENOMEM;
+                    }
                 }
                 if (res->pw == 0 || res->ph == 0) {
                     return -ENOTSUP;
@@ -580,9 +636,16 @@ comp_init(struct dec_comp *c, JP2 *j, int tx0, int ty0, int tx1, int ty1,
             }
         }
     }
-    c->buf = calloc((size_t)c->w * c->h, sizeof(*c->buf));
-    if (c->buf == NULL) {
-        return -ENOMEM;
+    if (lossy) {
+        c->fbuf = calloc((size_t)c->w * c->h, sizeof(*c->fbuf));
+        if (c->fbuf == NULL) {
+            return -ENOMEM;
+        }
+    } else {
+        c->buf = calloc((size_t)c->w * c->h, sizeof(*c->buf));
+        if (c->buf == NULL) {
+            return -ENOMEM;
+        }
     }
     return 0;
 }
@@ -1196,6 +1259,21 @@ t1_decode_cblk(struct dec_cblk *cb)
     return 0;
 }
 
+/* multiply the Tier-1 integers by the quantization step.  Tier-1 already
+ * returned t.coef / 2, so the 0.5 factor that t1.c folds into its float
+ * reconstruction is already applied and must not be repeated here. */
+static void
+band_dequant(struct dec_band *band)
+{
+    size_t n = (size_t)band->w * band->h;
+    size_t i;
+    float step = band->stepsize;
+
+    for (i = 0; i < n; i++) {
+        band->fcoef[i] = (float)band->coef[i] * step;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* inverse reversible 5-3 wavelet (ISO 15444-1 F.4 / OpenJPEG dwt.c)   */
 /* ------------------------------------------------------------------ */
@@ -1349,175 +1427,109 @@ comp_dwt(struct dec_comp *c)
     return 0;
 }
 
-/* compute one subband's quantization step (OpenJPEG + ISO 15444-1 F.1.2)
- * OpenJPEG reference: tcd.c line ~1082, j2k.c line ~11370 */
-static double
-qcd_step(const struct qcd *q, int idx, int bandno, int precision)
+/* ------------------------------------------------------------------ */
+/* inverse irreversible 9-7 wavelet (ISO 15444-1 F.4 / OpenJPEG dwt.c) */
+/* ------------------------------------------------------------------ */
+
+/* a[] holds low pass at cas + 2*i and high pass at 1 - cas + 2*i.  The
+ * missing neighbour at either end is mirrored, which is what
+ * opj_v8dwt_decode_step2 does by doubling the single boundary term.
+ * With low[i] at position cas+2i and high[i] at 1-cas+2i, the neighbours
+ * of low[i] are high[i-1+cas] and high[i+cas], and those of high[i] are
+ * low[i-cas] and low[i+1-cas] (matches opj_dwt_encode_step2 as well). */
+static void
+dwt97_update_low(float *a, int sn, int dn, int cas, float c)
 {
-    uint32_t l_tmp;
-    int expn;
-    int mant;
-    int log2_gain;
-    int Rb;
-    double step;
+    int i;
 
-    (void)bandno; /* BUG_WEIRD_TWO_INVK: decoder qmfbid==0 forces log2_gain=0 */
+    for (i = 0; i < sn; i++) {
+        int h0 = (i - 1 + cas < 0) ? 0 : i - 1 + cas;
+        int h1 = (i + cas >= dn) ? dn - 1 : i + cas;
 
-    if (q->quant_type == 0) {
-        return 1.0; /* reversible: no quantization */
+        a[cas + 2 * i] += (a[1 - cas + 2 * h0] +
+                           a[1 - cas + 2 * h1]) * c;
     }
-
-    /* unpack expn (5-bit) and mant (11-bit) from the QCD entry:
-     * two bytes are combined as a big-endian 16-bit value (ISO marker
-     * order matches OpenJPEG opj_read_bytes default), then
-     * expn = l_tmp >> 11, mant = l_tmp & 0x7ff */
-    if (q->quant_type == 1) {
-        l_tmp = (uint32_t)q->table[0] * 256 | q->table[1];
-    } else {
-        l_tmp = (uint32_t)q->table[idx * 2] * 256 |
-                q->table[idx * 2 + 1];
-    }
-    expn = (int)(l_tmp >> 11);
-    mant = (int)(l_tmp & 0x7ff);
-
-    /* sub-band gains (Table E-1, ISO 15444-1).
-     * OpenJPEG BUG_WEIRD_TWO_INVK compensation (tcd.c ~line 1074):
-     * when decoding the irreversible 9-7 transform (qmfbid==0, which is
-     * the only transform that reaches this code path with quant_type>0),
-     * ALL subbands use log2_gain = 0 to compensate for the two_invK
-     * scaling in the IDWT (dwt.c ~line 3363). */
-    log2_gain = 0;
-    Rb = precision + log2_gain;
-
-    step = (1.0 + mant / 2048.0) * pow(2.0, (double)(Rb - expn));
-    return step;
 }
 
-/* inverse quantization: for every coefficient in c->buf (already placed),
- * multiply by that subband's step.  Works on int32 input and produces
- * double output in buf_d (caller-allocated frame-size buffer). */
 static void
-comp_dequantize(const struct dec_comp *c, const struct qcd *q,
-                int precision, double *buf_d)
+dwt97_update_high(float *a, int sn, int dn, int cas, float c)
 {
-    int rr, b, y, x;
+    int i;
 
-    /* LL band first */
-    if (c->res[0].w > 0 && c->res[0].h > 0) {
-        const struct dec_band *ll = &c->res[0].b[0];
-        double step = qcd_step(q, 0, 0, precision);
+    for (i = 0; i < dn; i++) {
+        int l0 = (i - cas < 0) ? 0 : i - cas;
+        int l1 = (i + 1 - cas >= sn) ? sn - 1 : i + 1 - cas;
 
+        a[1 - cas + 2 * i] += (a[cas + 2 * l0] + a[cas + 2 * l1]) * c;
+    }
+}
+
+static void
+idwt97_1d(float *a, int sn, int dn, int cas)
+{
+    int i;
+
+    /* a lone low pass sample is left untouched, like dwt.c */
+    if (sn <= 0 || dn <= 0) {
+        return;
+    }
+    for (i = 0; i < sn; i++) {
+        a[cas + 2 * i] *= JP2_97_K;
+    }
+    for (i = 0; i < dn; i++) {
+        a[1 - cas + 2 * i] *= JP2_97_TWO_INVK;
+    }
+    dwt97_update_low(a, sn, dn, cas, -JP2_97_DELTA);
+    dwt97_update_high(a, sn, dn, cas, -JP2_97_GAMMA);
+    dwt97_update_low(a, sn, dn, cas, -JP2_97_BETA);
+    dwt97_update_high(a, sn, dn, cas, -JP2_97_ALPHA);
+}
+
+static int
+comp_place_bands_f(struct dec_comp *c)
+{
+    struct dec_band *ll = &c->res[0].b[0];
+    int x, y, rr, b;
+
+    if (ll->w > 0 && ll->h > 0) {
         for (y = 0; y < ll->h; y++) {
             for (x = 0; x < ll->w; x++) {
-                int32_t v = c->buf[(size_t)y * c->w + x];
-
-                buf_d[(size_t)y * c->w + x] = (double)v * step;
+                c->fbuf[(size_t)y * c->w + x] =
+                    ll->fcoef[(size_t)y * ll->w + x];
             }
         }
     }
-
     for (rr = 1; rr < c->nres; rr++) {
-        const struct dec_res *res = &c->res[rr];
+        struct dec_res *res = &c->res[rr];
         int llw = c->res[rr - 1].w;
         int llh = c->res[rr - 1].h;
 
         for (b = 0; b < res->numbands; b++) {
-            const struct dec_band *band = &res->b[b];
-            int bandno = b + 1;
-            int idx = 3 * (rr - 1) + bandno;
-            double step;
-            int ox, oy;
+            struct dec_band *band = &res->b[b];
+            int ox = (band->bandno & 1) ? llw : 0;
+            int oy = (band->bandno & 2) ? llh : 0;
 
             if (band->w <= 0 || band->h <= 0) {
                 continue;
             }
-            ox = (bandno & 1) ? llw : 0;
-            oy = (bandno & 2) ? llh : 0;
-            step = qcd_step(q, idx, bandno, precision);
-
+            if (ox + band->w > c->w || oy + band->h > c->h) {
+                return -EINVAL;
+            }
             for (y = 0; y < band->h; y++) {
                 for (x = 0; x < band->w; x++) {
-                    int32_t v = c->buf[(size_t)(oy + y) * c->w + ox + x];
-
-                    buf_d[(size_t)(oy + y) * c->w + ox + x] =
-                        (double)v * step;
+                    c->fbuf[(size_t)(oy + y) * c->w + ox + x] =
+                        band->fcoef[(size_t)y * band->w + x];
                 }
             }
         }
     }
+    return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* inverse irreversible 9-7 wavelet — OpenJPEG conformance             */
-/* ------------------------------------------------------------------ */
-
-static void
-idwt97_1d(double *w, int sn, int dn, int cas)
-{
-    static const double ALPHA = -1.586134342;
-    static const double BETA  = -0.052980118;
-    static const double GAMMA =  0.882911075;
-    static const double DELTA =  0.443506852;
-    static const double OPJ_K = 1.230174105;
-    static const double TWO_INVK = 1.625732422;
-
-    int a = cas;            /* low starts at w[a]  */
-    int b = 1 - cas;        /* high starts at w[b] */
-    int i;
-
-    if (dn <= 0) {
-        for (i = 0; i < sn; i++)
-            w[a + 2 * i] *= OPJ_K;
-        return;
-    }
-
-    /* scale */
-    for (i = 0; i < sn; i++)
-        w[a + 2 * i] *= OPJ_K;
-    for (i = 0; i < dn; i++)
-        w[b + 2 * i] *= TWO_INVK;
-
-    /* OpenJPEG step2 primitive (flat, no SIMD):
-     *   fw[-1] += (fl[0] + fw[0]) * c        (first iteration)
-     *   fw[-1] += (fw[-2] + fw[0]) * c        (subsequent iterations)
-     *   fw[-1] += 2 * fw[-2] * c              (boundary, one extra sample) */
-#define STEP2(fl_off, fw_off, end_cnt, bound, coeff)                  \
-    do {                                                               \
-        int _max = (end_cnt) < (bound) ? (end_cnt) : (bound);          \
-        double *_fl = (w) + (fl_off);                                  \
-        double *_fw = (w) + (fw_off);                                  \
-        if (_max > 0) {                                                \
-            _fw[-1] += (_fl[0] + _fw[0]) * (coeff);                    \
-            _fw += 2;                                                  \
-            for (int _k = 1; _k < _max; _k++) {                        \
-                _fw[-1] += (_fw[-2] + _fw[0]) * (coeff);               \
-                _fw += 2;                                              \
-            }                                                          \
-        }                                                              \
-        if ((bound) < (end_cnt)) {                                     \
-            _fw[-1] += 2.0 * _fw[-2] * (coeff);                        \
-        }                                                              \
-    } while (0)
-
-    /* Inverse lifting order matches opj_v8dwt_decode (dwt.c ~3398):
-     *   step2(wavelet+b, wavelet+a+1, sn, min(sn, dn-a), -DELTA)
-     *   step2(wavelet+a, wavelet+b+1, dn, min(dn, sn-b), -GAMMA)
-     *   step2(wavelet+b, wavelet+a+1, sn, min(sn, dn-a), -BETA)
-     *   step2(wavelet+a, wavelet+b+1, dn, min(dn, sn-b), -ALPHA)
-     * offets are a,b because wavelet base is w */
-    STEP2(b, a + 1, sn, dn - a, -DELTA);
-    STEP2(a, b + 1, dn, sn - b, -GAMMA);
-    STEP2(b, a + 1, sn, dn - a, -BETA);
-    STEP2(a, b + 1, dn, sn - b, -ALPHA);
-
-#undef STEP2
-}
-
-/* inverse 2D 9-7: same cascade structure as comp_dwt, but double */
 static int
-comp_dwt97(struct dec_comp *c, double *buf_d)
+comp_dwt97(struct dec_comp *c)
 {
-    double *tmp, *tmp_anchor;
+    float *tmp;
     int maxdim = (c->w > c->h) ? c->w : c->h;
     int rr, x, y, i;
 
@@ -1527,13 +1539,10 @@ comp_dwt97(struct dec_comp *c, double *buf_d)
     if (maxdim <= 0) {
         return -EINVAL;
     }
-    tmp_anchor = malloc((size_t)(maxdim + 4) * sizeof(*tmp));
-    if (tmp_anchor == NULL) {
+    tmp = malloc((size_t)maxdim * sizeof(*tmp));
+    if (tmp == NULL) {
         return -ENOMEM;
     }
-    /* reserve 2-element padding at the front so idwt97_1d's ptr[-1]/ptr[-2]
-     * accesses don't run off the start of the buffer */
-    tmp = tmp_anchor + 2;
     for (rr = 1; rr < c->nres; rr++) {
         int llw = c->res[rr - 1].w;
         int llh = c->res[rr - 1].h;
@@ -1546,11 +1555,11 @@ comp_dwt97(struct dec_comp *c, double *buf_d)
 
         if (llw < 0 || llh < 0 || dw < 0 || dh < 0 ||
             llw + dw != curw || llh + dh != curh) {
-            free(tmp_anchor);
+            free(tmp);
             return -EINVAL;
         }
         for (y = 0; y < curh; y++) {
-            double *row = buf_d + (size_t)y * c->w;
+            float *row = c->fbuf + (size_t)y * c->w;
 
             for (i = 0; i < llw; i++) {
                 tmp[casx + 2 * i] = row[i];
@@ -1563,20 +1572,39 @@ comp_dwt97(struct dec_comp *c, double *buf_d)
         }
         for (x = 0; x < curw; x++) {
             for (i = 0; i < llh; i++) {
-                tmp[casy + 2 * i] =
-                    buf_d[(size_t)i * c->w + x];
+                tmp[casy + 2 * i] = c->fbuf[(size_t)i * c->w + x];
             }
             for (i = 0; i < dh; i++) {
                 tmp[1 - casy + 2 * i] =
-                    buf_d[(size_t)(llh + i) * c->w + x];
+                    c->fbuf[(size_t)(llh + i) * c->w + x];
             }
             idwt97_1d(tmp, llh, dh, casy);
             for (y = 0; y < curh; y++) {
-                buf_d[(size_t)y * c->w + x] = tmp[y];
+                c->fbuf[(size_t)y * c->w + x] = tmp[y];
             }
         }
     }
-    free(tmp_anchor);
+    free(tmp);
+    return 0;
+}
+
+/* copy the reconstructed tile component into the image component plane */
+static int
+comp_store_f(struct dec_comp *c, float *plane, int pw, int ph, int px0,
+             int py0)
+{
+    int ox = c->x0 - px0;
+    int oy = c->y0 - py0;
+    int y;
+
+    if (ox < 0 || oy < 0 || ox + c->w > pw || oy + c->h > ph) {
+        return -EINVAL;
+    }
+    for (y = 0; y < c->h; y++) {
+        memcpy(plane + (size_t)(oy + y) * pw + ox,
+               c->fbuf + (size_t)y * c->w,
+               (size_t)c->w * sizeof(*plane));
+    }
     return 0;
 }
 
@@ -1600,29 +1628,6 @@ comp_store(struct dec_comp *c, int32_t *plane, int pw, int ph, int px0,
     return 0;
 }
 
-/* store the 9-7 (double) result into the tile component plane with rounding */
-static int
-comp_store97(const struct dec_comp *c, const double *buf_d,
-             int32_t *plane, int pw, int ph, int px0, int py0)
-{
-    int ox = c->x0 - px0;
-    int oy = c->y0 - py0;
-    int y, x;
-
-    if (ox < 0 || oy < 0 || ox + c->w > pw || oy + c->h > ph) {
-        return -EINVAL;
-    }
-    for (y = 0; y < c->h; y++) {
-        for (x = 0; x < c->w; x++) {
-            double v = buf_d[(size_t)(oy + y) * pw + ox + x];
-
-            plane[(size_t)(oy + y) * pw + ox + x] =
-                (int32_t)lrint(v);
-        }
-    }
-    return 0;
-}
-
 static void
 tile_free(struct dec_tile *t)
 {
@@ -1639,9 +1644,9 @@ tile_free(struct dec_tile *t)
 }
 
 static int
-tile_decode(JP2 *j, struct tile_header *th, FILE *f, long flen,
-            int32_t * const *planes, const int *pw, const int *ph,
-            const int *px0, const int *py0)
+tile_decode(JP2 *j, struct tile_header *th, FILE *f, long flen, int lossy,
+            int32_t * const *planes, float * const *fplanes, const int *pw,
+            const int *ph, const int *px0, const int *py0)
 {
     struct siz *s = &j->main_h.siz;
     struct dec_tile t;
@@ -1712,7 +1717,7 @@ tile_decode(JP2 *j, struct tile_header *th, FILE *f, long flen,
         goto fail;
     }
     for (ci = 0; ci < t.ncomp; ci++) {
-        err = comp_init(&t.comp[ci], j, tx0, ty0, tx1, ty1, ci);
+        err = comp_init(&t.comp[ci], j, tx0, ty0, tx1, ty1, ci, lossy);
         if (err) {
             goto fail;
         }
@@ -1747,43 +1752,36 @@ tile_decode(JP2 *j, struct tile_header *th, FILE *f, long flen,
                         }
                     }
                 }
+                if (lossy && band->fcoef) {
+                    band_dequant(band);
+                }
             }
         }
-        err = comp_place_bands(c);
+        if (lossy) {
+            err = comp_place_bands_f(c);
+        } else {
+            err = comp_place_bands(c);
+        }
         if (err) {
             goto fail;
         }
-        if (j->main_h.cod.p.transform == 0) {
-            /* 9-7 irreversible: dequantize, IDWT in double, store with rounding */
-            double *buf_d = malloc((size_t)c->w * c->h * sizeof(*buf_d));
-            int comp_precision = (int)s->comps[ci].depth + 1;
-
-            if (buf_d == NULL) {
-                err = -ENOMEM;
-                goto fail;
-            }
-            comp_dequantize(c, &j->main_h.qcd, comp_precision, buf_d);
-            err = comp_dwt97(c, buf_d);
-            if (err) {
-                free(buf_d);
-                goto fail;
-            }
-            err = comp_store97(c, buf_d, planes[ci], pw[ci], ph[ci],
-                               px0[ci], py0[ci]);
-            free(buf_d);
-            if (err) {
-                goto fail;
-            }
+        if (lossy) {
+            err = comp_dwt97(c);
         } else {
-            /* 5-3 reversible path (zero quantization step, integer DWT) */
             err = comp_dwt(c);
-            if (err) {
-                goto fail;
-            }
-            err = comp_store(c, planes[ci], pw[ci], ph[ci], px0[ci], py0[ci]);
-            if (err) {
-                goto fail;
-            }
+        }
+        if (err) {
+            goto fail;
+        }
+        if (lossy) {
+            err = comp_store_f(c, fplanes[ci], pw[ci], ph[ci], px0[ci],
+                               py0[ci]);
+        } else {
+            err = comp_store(c, planes[ci], pw[ci], ph[ci], px0[ci],
+                             py0[ci]);
+        }
+        if (err) {
+            goto fail;
         }
     }
     tile_free(&t);
@@ -1817,8 +1815,9 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
     struct cod *cod = &j->main_h.cod;
     struct qcd *q = &j->main_h.qcd;
     int32_t *planes[3] = {NULL, NULL, NULL};
+    float *fplanes[3] = {NULL, NULL, NULL};
     int pw[3], ph[3], px0[3], py0[3];
-    int ncomp, W, H, pitch, ci, x, y;
+    int ncomp, W, H, pitch, ci, x, y, lossy;
     long flen;
     int err = 0;
 
@@ -1846,9 +1845,10 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
         return -ENOTSUP;
     }
     if (cod->p.transform != 0 && cod->p.transform != 1) {
-        /* only 9-7 irreversible and 5-3 reversible wavelets */
+        /* reversible 5-3 and irreversible 9-7 only */
         return -ENOTSUP;
     }
+    lossy = (cod->p.transform == 0);
     if (cod->layers_num != 1 || cod->progression_order != 0) {
         return -ENOTSUP;
     }
@@ -1863,8 +1863,16 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
         cod->p.predictable_termination || cod->p.segmentation_symbol) {
         return -ENOTSUP;
     }
-    if (q->table == NULL || (q->quant_type != 0 && q->quant_type != 1 &&
-                             q->quant_type != 2)) {
+    if (q->table == NULL) {
+        return -ENOTSUP;
+    }
+    if (lossy) {
+        /* the reversible transform needs NOQNT, the irreversible one
+         * needs scalar derived or expounded quantization */
+        if (q->quant_type != 1 && q->quant_type != 2) {
+            return -ENOTSUP;
+        }
+    } else if (q->quant_type != 0) {
         return -ENOTSUP;
     }
     if (ncomp == 1 && cod->multiple_transform) {
@@ -1885,14 +1893,26 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
         if ((int)(sc->depth & 0x7f) + 1 != 8) {
             return -ENOTSUP;
         }
+        if (lossy && (sc->depth & 0x80)) {
+            /* the 9-7 path only covers unsigned samples */
+            return -ENOTSUP;
+        }
         pw[ci] = W;
         ph[ci] = H;
         px0[ci] = 0;
         py0[ci] = 0;
-        planes[ci] = calloc((size_t)W * H, sizeof(*planes[ci]));
-        if (planes[ci] == NULL) {
-            err = -ENOMEM;
-            goto fail;
+        if (lossy) {
+            fplanes[ci] = calloc((size_t)W * H, sizeof(*fplanes[ci]));
+            if (fplanes[ci] == NULL) {
+                err = -ENOMEM;
+                goto fail;
+            }
+        } else {
+            planes[ci] = calloc((size_t)W * H, sizeof(*planes[ci]));
+            if (planes[ci] == NULL) {
+                err = -ENOMEM;
+                goto fail;
+            }
         }
     }
 
@@ -1904,8 +1924,8 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
     }
 
     for (ci = 0; ci < j->tile_nums; ci++) {
-        err = tile_decode(j, &j->tiles[ci], f, flen, planes, pw, ph,
-                          px0, py0);
+        err = tile_decode(j, &j->tiles[ci], f, flen, lossy, planes, fplanes,
+                          pw, ph, px0, py0);
         if (err) {
             goto fail;
         }
@@ -1923,41 +1943,51 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
 
         for (x = 0; x < W; x++) {
             int r, g, b;
+            size_t i = (size_t)y * W + x;
 
-            if (ncomp == 1) {
-                int v = dec_clamp(planes[0][(size_t)y * W + x] + 128,
-                                  0, 255);
+            if (lossy) {
+                if (ncomp == 1) {
+                    r = g = b = dec_clamp(
+                        (int)lrintf(fplanes[0][i]) + 128, 0, 255);
+                } else if (cod->multiple_transform) {
+                    /* inverse ICT, before the level shift */
+                    float yy = fplanes[0][i];
+                    float uu = fplanes[1][i];
+                    float vv = fplanes[2][i];
+
+                    r = dec_clamp(
+                        (int)lrintf(yy + (vv * 1.402f)) + 128, 0, 255);
+                    g = dec_clamp(
+                        (int)lrintf(yy - (uu * 0.34413f) -
+                                    (vv * 0.71414f)) + 128, 0, 255);
+                    b = dec_clamp(
+                        (int)lrintf(yy + (uu * 1.772f)) + 128, 0, 255);
+                } else {
+                    r = dec_clamp(
+                        (int)lrintf(fplanes[0][i]) + 128, 0, 255);
+                    g = dec_clamp(
+                        (int)lrintf(fplanes[1][i]) + 128, 0, 255);
+                    b = dec_clamp(
+                        (int)lrintf(fplanes[2][i]) + 128, 0, 255);
+                }
+            } else if (ncomp == 1) {
+                int v = dec_clamp(planes[0][i] + 128, 0, 255);
 
                 r = g = b = v;
-            } else if (cod->multiple_transform &&
-                       cod->p.transform == 1) {
+            } else if (cod->multiple_transform) {
                 /* inverse RCT, before the level shift */
-                int yy = planes[0][(size_t)y * W + x];
-                int uu = planes[1][(size_t)y * W + x];
-                int vv = planes[2][(size_t)y * W + x];
+                int yy = planes[0][i];
+                int uu = planes[1][i];
+                int vv = planes[2][i];
                 int gg = yy - ((uu + vv) >> 2);
 
                 r = dec_clamp(vv + gg + 128, 0, 255);
                 g = dec_clamp(gg + 128, 0, 255);
                 b = dec_clamp(uu + gg + 128, 0, 255);
-            } else if (cod->multiple_transform &&
-                       cod->p.transform == 0) {
-                /* inverse irreversible ICT (YUV → RGB) */
-                double yy = planes[0][(size_t)y * W + x];
-                double cb = planes[1][(size_t)y * W + x];
-                double cr = planes[2][(size_t)y * W + x];
-                int ri, gi, bi;
-
-                ri = (int)lrint(yy + 1.402 * cr);
-                gi = (int)lrint(yy - 0.34413 * cb - 0.71414 * cr);
-                bi = (int)lrint(yy + 1.772 * cb);
-                r = dec_clamp(ri + 128, 0, 255);
-                g = dec_clamp(gi + 128, 0, 255);
-                b = dec_clamp(bi + 128, 0, 255);
             } else {
-                r = dec_clamp(planes[0][(size_t)y * W + x] + 128, 0, 255);
-                g = dec_clamp(planes[1][(size_t)y * W + x] + 128, 0, 255);
-                b = dec_clamp(planes[2][(size_t)y * W + x] + 128, 0, 255);
+                r = dec_clamp(planes[0][i] + 128, 0, 255);
+                g = dec_clamp(planes[1][i] + 128, 0, 255);
+                b = dec_clamp(planes[2][i] + 128, 0, 255);
             }
             row[x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) |
                      (uint32_t)b;
@@ -1973,12 +2003,14 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
 
     for (ci = 0; ci < ncomp; ci++) {
         free(planes[ci]);
+        free(fplanes[ci]);
     }
     return 0;
 
 fail:
     for (ci = 0; ci < 3; ci++) {
         free(planes[ci]);
+        free(fplanes[ci]);
     }
     return err;
 }

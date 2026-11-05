@@ -580,23 +580,41 @@ GIF_load(const char *filename, int skip_flag UNUSED)
     }
 
     uint8_t *canvas = (uint8_t*)calloc((size_t)bytes, 1);
-    if (!canvas) {
+    uint8_t *snap_curr = (uint8_t*)calloc((size_t)bytes, 1);
+    uint8_t *snap_prev = (uint8_t*)calloc((size_t)bytes, 1);
+    if (!canvas || !snap_curr || !snap_prev) {
+        free(canvas); free(snap_curr); free(snap_prev);
         pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
         return NULL;
     }
 
     gif_fill_background(canvas, pitch, g);
+    /* prime the two snapshots to match the initial canvas; snap_prev stays
+     * garbage-reading safe (prev_snap_valid gates its use below) */
+    gif_copy_canvas(snap_curr, pitch, canvas, pitch, g);
+    gif_copy_canvas(snap_prev, pitch, canvas, pitch, g);
 
     int prev_dispose = 1;   /* previous frame's disposal, default: do nothing */
     Graphic *prev_img = NULL;
     struct pic *last = NULL;
+    bool prev_snap_valid = false;   /* snap_prev holds a real frame-compose-before state */
 
     for (int i = 0; i < g->graphic_count; i++) {
         Graphic *gr = &g->graphics[i];
         if (!graphic_is_image(gr)) continue;
 
+        /* 0. rotate snapshots BEFORE touching canvas:
+         *    snap_prev ← old snap_curr  (state *before* previous frame's compose)
+         *    snap_curr ← current canvas (state *before* this frame's compose —
+         *                                what dispose=3 on the NEXT frame needs) */
+        { uint8_t *t = snap_prev; snap_prev = snap_curr; snap_curr = t; }
+        gif_copy_canvas(snap_curr, pitch, canvas, pitch, g);
+        prev_snap_valid = true;
+
         /* 1. apply previous frame's disposal */
-        if (prev_dispose == 2 && prev_img)
+        if (prev_dispose == 3 && prev_snap_valid)
+            gif_copy_canvas(canvas, pitch, snap_prev, pitch, g);
+        else if (prev_dispose == 2 && prev_img)
             gif_dispose_clear_prev(canvas, pitch, prev_img, g);
         /* dispose 0/1 = leave alone (default) */
 
@@ -626,7 +644,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
         last = sn;
     }
 
-    free(canvas);
+    free(canvas); free(snap_curr); free(snap_prev);
 
     if (last == NULL) {
         /* no valid frame produced — free GIF container ourselves */

@@ -2318,8 +2318,12 @@ av1_decode_tile(struct av1_dec *d, const uint8_t *data, size_t len)
 
     av1_range_init(&d->rd, data, len);
     d->have_range = 1;
-    av1_cdf_init_non_coeff(&d->cdf);
-    av1_cdf_init_coeff(&d->cdf, f->base_q_idx);
+    /* init_symbol() per spec 7.10.3: copy current frame-level CDF into
+     * this tile's working copy.  Previously we reset to the Default table
+     * every tile; that happened to match on still images (frame CDF never
+     * changes), but was wrong for multi-frame sequences or when
+     * disable_frame_end_update_cdf / context_update_tile_id semantics matter. */
+    d->cdf = d->frame_cdf;
     d->current_q_index = f->base_q_idx;
     memset(d->delta_lf, 0, sizeof(d->delta_lf));
     d->max_luma_w = 0;

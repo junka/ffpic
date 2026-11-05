@@ -971,11 +971,45 @@ avif_find_alpha_item(const AVIF *h, uint32_t color_id)
     return -1;
 }
 
+/* Does this colour item carry premultiplied alpha?  Per AVIF spec the
+ * container signals this by attaching a 'prem' property to the colour item
+ * in the iprp/ipco/ipma property hierarchy.  basemedia.c's default ipco
+ * slot keeps unknown boxes as a generic box with the correct .type, so we
+ * can detect 'prem' here by walking ipma -> property -> type. */
+static int
+avif_color_is_premultiplied(const AVIF *h, uint32_t color_id)
+{
+    const struct ipma_box *ipma = &h->meta.iprp.ipma;
+    const struct ipco_box *ipco = &h->meta.iprp.ipco;
+    uint32_t prem_type = FOURCC2UINT('p', 'r', 'e', 'm');
+
+    for (uint32_t i = 0; i < ipma->entry_count; i++) {
+        const struct ipma_item *e = &ipma->entries[i];
+        if (e->item_id != color_id) {
+            continue;
+        }
+        for (int j = 0; j < e->association_count; j++) {
+            int idx = e->property_index[j] & 0x7fff;
+            if (idx < 1 || idx > ipco->n_property) {
+                continue;
+            }
+            struct box *p = ipco->property[idx - 1];
+            if (p && p->type == prem_type) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* AVIF alpha is a separate monochrome image and is not premultiplied, so it
- * maps straight onto the alpha channel of the packed output. */
+ * maps straight onto the alpha channel of the packed output.  When the
+ * container signals premultiplied alpha (via the 'prem' property attached
+ * to the colour item), we also divide the stored RGB values by the alpha
+ * samples before writing them out. */
 static void
 avif_apply_alpha16(const struct av1_image *alpha, uint8_t *pixels, int pitch,
-                   int w, int h)
+                   int w, int h, int premultiplied)
 {
     int max = (1 << alpha->bitdepth) - 1;
     const uint16_t *src = alpha->plane[0];
@@ -984,17 +1018,34 @@ avif_apply_alpha16(const struct av1_image *alpha, uint8_t *pixels, int pitch,
     for (int y = 0; y < h; y++) {
         uint16_t *row = (uint16_t *)(pixels + (size_t)y * pitch);
         for (int x = 0; x < w; x++) {
-            int v = src[(size_t)y * stride + x];
-            v = v < 0 ? 0 : v > max ? max : v;
+            int a = src[(size_t)y * stride + x];
+            a = a < 0 ? 0 : a > max ? max : a;
+            if (premultiplied) {
+                /* inverse-premultiply R,G,B in place */
+                if (a == 0) {
+                    row[x * 4 + 0] = 0;
+                    row[x * 4 + 1] = 0;
+                    row[x * 4 + 2] = 0;
+                } else {
+                    for (int c = 0; c < 3; c++) {
+                        int v = (int)row[x * 4 + c];
+                        v = (int)(((int64_t)v * max + a / 2) / a);
+                        if (v > max) {
+                            v = max;
+                        }
+                        row[x * 4 + c] = (uint16_t)v;
+                    }
+                }
+            }
             row[x * 4 + 3] =
-                (uint16_t)(((int64_t)v * 65535 + max / 2) / max);
+                (uint16_t)(((int64_t)a * 65535 + max / 2) / max);
         }
     }
 }
 
 static void
 avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels, int pitch,
-                 int w, int h)
+                 int w, int h, int premultiplied)
 {
     int shift = alpha->bitdepth - 8;
     const uint16_t *src = alpha->plane[0];
@@ -1002,12 +1053,28 @@ avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels, int pitch,
 
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
-            int v = src[(size_t)y * stride + x];
+            int a = src[(size_t)y * stride + x];
             if (shift > 0) {
-                v = (v + (1 << (shift - 1))) >> shift;
+                a = (a + (1 << (shift - 1))) >> shift;
             }
-            pixels[(size_t)y * pitch + x * 4 + 3] =
-                (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+            a = a < 0 ? 0 : a > 255 ? 255 : a;
+            if (premultiplied) {
+                uint8_t *px = pixels + (size_t)y * pitch + x * 4;
+                if (a == 0) {
+                    px[0] = px[1] = px[2] = 0;
+                } else {
+                    int amax_clamped = 255;
+                    for (int c = 0; c < 3; c++) {
+                        int v = px[c];
+                        v = (int)(((int64_t)v * amax_clamped + a / 2) / a);
+                        if (v > 255) {
+                            v = 255;
+                        }
+                        px[c] = (uint8_t)v;
+                    }
+                }
+            }
+            pixels[(size_t)y * pitch + x * 4 + 3] = (uint8_t)a;
         }
     }
 }
@@ -1367,12 +1434,15 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
                 if (has_alpha) {
                     if (alpha.width == img.width &&
                         alpha.height == img.height) {
+                        int prem = avif_color_is_premultiplied(h, color_id);
+                        VDBG(avif, "colour item %u has prem=%d alpha",
+                             color_id, prem);
                         if (wide) {
                             avif_apply_alpha16(&alpha, p->pixels, p->pitch,
-                                               img.width, img.height);
+                                               img.width, img.height, prem);
                         } else {
                             avif_apply_alpha(&alpha, p->pixels, p->pitch,
-                                             img.width, img.height);
+                                             img.width, img.height, prem);
                         }
                     } else {
                         VWARN(avif, "alpha item is %dx%d, picture is %dx%d",

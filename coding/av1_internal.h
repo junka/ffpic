@@ -354,7 +354,18 @@ struct av1_frame {
 
 struct av1_dec {
     struct av1_frame f;
+
+    /* Per-tile working copy.  Spec 7.10.3: init_symbol() copies from
+     * frame_cdf here; sym() then updates this copy (unless
+     * disable_cdf_update flag clears the update step). */
     struct av1_cdfs cdf;
+    /* Frame-level CDF reservoir (spec 7.10.3 "frame CDF").  init_symbol()
+     * at each tile start copies frame_cdf -> cdf.  At frame end,
+     * frame_end_update_cdf() optionally copies saved_cdf -> frame_cdf. */
+    struct av1_cdfs frame_cdf;
+    /* Saved CDF: at most once per frame, when tile_num reaches
+     * context_update_tile_id, the final tile cdf is copied here. */
+    struct av1_cdfs saved_cdf;
 
     struct av1_range rd;
     int have_range;

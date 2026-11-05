@@ -1163,6 +1163,20 @@ parse_tile_group(struct av1_dec *d, const uint8_t *data, size_t len)
     const uint8_t *p = data + off;
     size_t left = len - off;
 
+    /* Spec 7.10.3: initialise the frame-level CDF reservoir to the
+     * Default tables (coeff tables depend on the frame's base_q_idx).
+     * init_symbol() inside av1_decode_tile() will copy frame_cdf -> cdf
+     * per-tile, so every tile starts from the same frame CDF snapshot. */
+    av1_cdf_init_non_coeff(&d->frame_cdf);
+    av1_cdf_init_coeff(&d->frame_cdf, f->base_q_idx);
+
+    /* Clamp context_update_tile_id to a valid tile index per spec 5.11.1.
+     * f->tiles.context_update_tile_id is always present (0 when <=1 tile). */
+    int ctx_tid = f->tiles.context_update_tile_id;
+    if (ctx_tid < 0 || ctx_tid >= num_tiles) {
+        ctx_tid = 0;
+    }
+
     for (int tile_num = start; tile_num <= end; tile_num++) {
         int tile_row = tile_num / f->tiles.cols;
         int tile_col = tile_num % f->tiles.cols;
@@ -1194,8 +1208,25 @@ parse_tile_group(struct av1_dec *d, const uint8_t *data, size_t len)
         if (d->error) {
             return -EINVAL;
         }
+        /* exit_symbol() per spec 7.10.3: if this tile is the one the
+         * signalled context_update_tile_id refers to, take the final
+         * Tile CDF snapshot (which sym() has been updating locally)
+         * and store it in Saved CDF.  Per spec, at most one tile
+         * contributes to Saved CDF per frame. */
+        if (tile_num == ctx_tid) {
+            d->saved_cdf = d->cdf;
+        }
         p += tile_size;
         left -= tile_size;
+    }
+
+    /* frame_end_update_cdf() per spec 7.10.3: promote Saved CDF -> frame CDF
+     * only when disable_frame_end_update_cdf is clear.  If no tile reached
+     * context_update_tile_id in this tile group slice (e.g. it lives in a
+     * prior OBU_TILE_GROUP for a multi-group frame), the Saved CDF simply
+     * stays at its Default-initialised state and nothing bad happens. */
+    if (!f->disable_frame_end_update_cdf) {
+        d->frame_cdf = d->saved_cdf;
     }
     return 0;
 }

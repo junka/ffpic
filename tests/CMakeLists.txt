@@ -118,3 +118,11 @@ target_compile_definitions(test_robustness PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_robustness ffpic m)
 add_test(NAME test_robustness COMMAND test_robustness)
+
+set(GIF_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_gif.c)
+add_executable(test_gif ${GIF_TEST})
+target_include_directories(test_gif PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_gif PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_gif ffpic m)
+add_test(NAME test_gif COMMAND test_gif)

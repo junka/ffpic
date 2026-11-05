@@ -47,12 +47,13 @@ static int with_timeout(int sec, int (*fn)(void *), void *arg)
     if (jumped == 0) {
         rc = fn(arg);
         alarm(0);
-        sigaction(SIGALRM, &(struct sigaction){NULL}, NULL);
+        sigaction(SIGALRM,
+                  &(struct sigaction){ .sa_handler = SIG_DFL }, NULL);
     } else {
         /* longjmp landed here because alarm() fired */
         rc = 2;
     }
-    sigaction(SIGALRM, &(struct sigaction){NULL}, NULL);
+    sigaction(SIGALRM, &(struct sigaction){ .sa_handler = SIG_DFL }, NULL);
     return rc;
 }
 

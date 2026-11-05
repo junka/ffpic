@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 #include "byteorder.h"
+#include <stddef.h>
 #include <stdint.h>
 
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -217,7 +218,7 @@ typedef struct {
     struct comment_segment comment;
 
     int16_t *yuv[3];
-    int data_len; // compressed huffman data len
+    size_t data_len; // image data buffer length in bytes
     uint8_t *data;
     /* the coefficients of every component live in a grid of 8x8 blocks as
      * large as the padded MCU grid, so scans can land on them in any order */

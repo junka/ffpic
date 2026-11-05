@@ -3046,7 +3046,7 @@ md5_hex(const uint8_t *buf, size_t len)
     memcpy(digest, &a0, 4); memcpy(digest + 4, &b0, 4);
     memcpy(digest + 8, &c0, 4); memcpy(digest + 12, &d0, 4);
     for (int i = 0; i < 16; i++)
-        sprintf(out + i*2, "%02x", digest[i]);
+        snprintf(out + i * 2, 3, "%02x", digest[i]);
     out[32] = 0;
     return out;
 }

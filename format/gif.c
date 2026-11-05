@@ -629,7 +629,11 @@ GIF_load(const char *filename, int skip_flag UNUSED)
         /* 5. enqueue; ring_queue has a bounded buffer so file_enqueue_pic
          *    returns false when full — drop and bail out cleanly */
         if (!file_enqueue_pic(sn)) {
-            VERR(gif, "queue full, dropping frame");
+            /* fprintf instead of VERR: VLOG is #ifndef NDEBUG guarded,
+             * so Release builds would silently bail out with zero
+             * observability when the bounded queue fills up. */
+            fprintf(stderr, "GIF(gif_load): ring queue full (cap=64), dropping frame at line %d\n",
+                    __LINE__);
             free(sn->pixels); pic_free(sn); break;
         }
 

@@ -121,6 +121,31 @@ Graphic* gif_next_dataless_graphic(GIF* gif) {
     return gif_increment_graphics(gif);
 }
 
+/* 4-pass interlace reorder per GIF89a Image Descriptor interlace_flag:
+ *   pass 0: start 0, step 8
+ *   pass 1: start 4, step 8
+ *   pass 2: start 2, step 4
+ *   pass 3: start 1, step 2
+ * LZW writes contiguous scanlines in pass order; we reorder to normal
+ * top-to-bottom row order in-place. */
+static void gif_deinterlace(uint8_t *data, int width, int height)
+{
+    static const int ps[4] = {0, 4, 2, 1};
+    static const int pd[4] = {8, 8, 4, 2};
+    uint8_t *tmp = (uint8_t*)malloc((size_t)width * height);
+    if (!tmp) return;
+    int src = 0;
+    for (int pass = 0; pass < 4; pass++) {
+        for (int dst_row = ps[pass]; dst_row < height; dst_row += pd[pass]) {
+            if (src >= height) break;
+            memcpy(tmp + (size_t)dst_row * width, data + (size_t)src * width, width);
+            src++;
+        }
+    }
+    memcpy(data, tmp, (size_t)width * height);
+    free(tmp);
+}
+
 void read_image(GIF* gif, FILE* f) {
     Image* image = (Image*)calloc(1, sizeof(Image));
     if (image == NULL)
@@ -144,6 +169,7 @@ void read_image(GIF* gif, FILE* f) {
     uint64_t image_data_length = image_data_length_of(&image->image_dsc);
     uint8_t* compressed = NULL;
     int compressed_length = 0;
+    image->indices = NULL;
     image->data = NULL;
 
     if (image_data_length == 0) {
@@ -152,10 +178,12 @@ void read_image(GIF* gif, FILE* f) {
         goto out;
     }
 
+    image->indices = (uint8_t*)calloc((size_t)image_data_length, 1);
     image->data = (uint8_t*)calloc((size_t)image_data_length, 4);
-    if (image->data == NULL)
+    if (!image->indices || !image->data)
         goto out;
 
+    /* LZW → indices buffer (1 byte per pixel) */
     {
         int lzw_code_size = fgetc(f);
         if (lzw_code_size < GIF_MIN_CODE_SIZE || lzw_code_size > GIF_MAX_CODE_SIZE) {
@@ -166,60 +194,64 @@ void read_image(GIF* gif, FILE* f) {
         if (compressed == NULL || compressed_length <= 0)
             goto out;
 
-        /* lzw_decode
-         * loadlzw
-         * the decoder writes one byte per pixel, so a valid stream can never
-         * need more room than the frame holds
-         */
         if (lzw_decode_gif(1, lzw_code_size, compressed, compressed_length,
-                           image->data, (int)image_data_length) != (int)image_data_length) {
+                           image->indices, (int)image_data_length) != (int)image_data_length) {
             VERR(gif, "lzw stream does not match the image size");
             goto out;
         }
     }
 
-    {
-        /* resolve the color table the way the decoder output has to be
-         * mapped, a frame without any color table can not be rendered
-         */
-        Color* ct = image->local_ct ? image->local_ct : gif->global_ct;
-        uint32_t resolved_ct_size =
-            image->local_ct ? ct_size : color_table_size(gif->ls_dsc.global_color_table_size);
-        if (!gif->ls_dsc.global_color_table_flag && image->local_ct == NULL)
-            resolved_ct_size = 0;
-        if (ct == NULL || resolved_ct_size == 0) {
-            VERR(gif, "no color table available for the image");
-            goto out;
-        }
+    /* de-interlace if the flag is set */
+    if (image->image_dsc.interlace_flag)
+        gif_deinterlace(image->indices, image->image_dsc.width, image->image_dsc.height);
 
-        uint8_t* p = image->data;
-        for (int j = image->image_dsc.height - 1; j >= 0; j --) {
-            for (int i = image->image_dsc.width - 1; i >= 0; i --) {
-                uint8_t cindex = *(p + i + j * image->image_dsc.width);
-                /* a byte written by the decoder is not guaranteed to index
-                 * the color table, the lzw code size says nothing about how
-                 * many entries the table has
-                 */
-                if (cindex >= resolved_ct_size) {
-                    VERR(gif, "color index [%d] out of the %d entry color table",
-                         cindex, resolved_ct_size);
-                    goto out;
+    /* resolve color table; no table = can't render → bail */
+    Color* ct = image->local_ct ? image->local_ct : gif->global_ct;
+    uint32_t resolved_ct_size =
+        image->local_ct ? ct_size : color_table_size(gif->ls_dsc.global_color_table_size);
+    if (!gif->ls_dsc.global_color_table_flag && image->local_ct == NULL)
+        resolved_ct_size = 0;
+    if (ct == NULL || resolved_ct_size == 0) {
+        VERR(gif, "no color table available for the image");
+        goto out;
+    }
+
+    /* now we have indices + ct; find the previous Graphic (attached GCE) to
+     * honour transparent_color_flag / transparent_color_index */
+    Graphic* graphic = gif_next_dataless_graphic(gif);
+    graphic->type = GRAPHIC_IMAGE;
+    graphic->image = image;
+
+    bool have_transp = false;
+    uint8_t transp_idx = 0;
+    if (graphic->has_control && graphic->control && graphic->control->transparent_color_flag) {
+        have_transp = true;
+        transp_idx = graphic->control->transparent_color_index;
+    }
+
+    /* look up colours from indices → BGRA; skip transparent pixels */
+    {
+        uint8_t* p = image->indices;
+        uint8_t* q = image->data;
+        int w = image->image_dsc.width, h = image->image_dsc.height;
+        for (int j = 0; j < h; j++) {
+            for (int i = 0; i < w; i++) {
+                uint8_t cindex = p[j * w + i];
+                if (have_transp && cindex == transp_idx) {
+                    *q++ = 0; *q++ = 0; *q++ = 0; *q++ = 0;
+                    continue;
                 }
-                *(p +  (j * 4 * image->image_dsc.width) + 4*i) = ct[cindex].b;
-                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 1) = ct[cindex].g;
-                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 2 ) = ct[cindex].r;
-                *(p +  (j * 4 * image->image_dsc.width) + 4*i + 3 ) = 0xFF;
+                if (cindex >= resolved_ct_size) {
+                    *q++ = 0; *q++ = 0; *q++ = 0; *q++ = 0xFF;
+                    continue;
+                }
+                Color c = ct[cindex];
+                *q++ = c.b; *q++ = c.g; *q++ = c.r; *q++ = 0xFF;
             }
         }
     }
 
     free(compressed);
-
-    {
-        Graphic* graphic = gif_next_dataless_graphic(gif);
-        graphic->type = GRAPHIC_IMAGE;
-        graphic->image = image;
-    }
     return;
 
 out:
@@ -276,6 +308,17 @@ void read_application_ext(GIF* gif, FILE* f) {
     
     FFREAD_IGNORE(&application->app_ext, sizeof(struct application_extension), 1, f);
     application->data_length = read_blocks(&application->data, f);
+
+    /* Netscape 2.0 application extension: 3-byte sub-block
+     *   [sub_id = 1][loop_count uint16 LE]
+     * loop_count == 0 means infinite. */
+    if (application->data_length == 3 && application->data) {
+        if (!memcmp(application->app_ext.identifier, "NETSCAPE2.0", 11) &&
+            application->data[0] == 1) {
+            gif->loop_count = (int)application->data[1] |
+                              ((int)application->data[2] << 8);
+        }
+    }
 
     Extension* extension = gif_increment_extensions(gif);
     extension->type = EXTENSION_APPLICATION;
@@ -334,6 +377,7 @@ void read_gif(FILE* f, GIF *gif) {
     gif->extension_count = 0;
     gif->graphics = NULL;
     gif->extensions = NULL;
+    gif->loop_count = -1;
     FFREAD_IGNORE(&gif->file_h, 1, GIF_FILE_HEADER_LEN, f);
     if (fread(&gif->ls_dsc, 1, sizeof(struct logical_screen_descriptor), f) !=
         sizeof(struct logical_screen_descriptor)) {
@@ -370,6 +414,13 @@ GIF_load_one(Graphic *g)
     p->pitch = ((p->width * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = g->image->data;
     p->format = CS_PIXELFORMAT_RGB888;
+    /* propagate per-frame delay from the GCE if present (GIF stores in units
+     * of 10 ms; duration_ms is in milliseconds). Default 100 ms per frame
+     * when no GCE was attached. */
+    if (g->has_control && g->control)
+        pic_set_duration(p, (uint32_t)g->control->delay_time * 10u);
+    else
+        pic_set_duration(p, 100u);
     return p;
 }
 
@@ -532,6 +583,7 @@ void image_free(Image* image) {
     if (image->image_dsc.local_color_table_flag)
         free(image->local_ct);
 
+    free(image->indices);
     free(image->data);
     free(image);
 }

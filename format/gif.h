@@ -69,6 +69,13 @@ typedef struct {
     bool has_graphic_control;
     struct graphic_control_extension* control;
 
+    /* raw LZW-decoded indices (one byte per pixel), normal row order after
+     * gif_deinterlace has been applied. The animation-aware loader uses
+     * these when composing the frame tile onto its own canvas. */
+    uint8_t* indices;
+
+    /* final BGRA pixels — kept for the legacy single-frame GIF_load_one
+     * path that feeds the queue directly. */
     uint8_t* data;
 } Image;
 
@@ -165,6 +172,9 @@ typedef struct {
 
     int extension_count;
     Extension* extensions;
+
+    /* Netscape loop count (0 = infinite, -1 = not present). */
+    int loop_count;
 } GIF;
 
 

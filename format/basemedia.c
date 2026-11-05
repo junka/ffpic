@@ -105,6 +105,15 @@ probe_box(FILE *f, void *d)
         b->size = end - cur + 8;
     }
     fseek(f, -8, SEEK_CUR);
+    /* sanity: a valid box must be at least 8 bytes and not run past EOF */
+    int64_t cur_pos = ftell(f);
+    fseek(f, 0, SEEK_END);
+    int64_t end_pos = ftell(f);
+    fseek(f, cur_pos, SEEK_SET);
+    if (b->size < 8 || (int64_t)b->size > end_pos - cur_pos) {
+        b->size = 0;
+        return 0;
+    }
     return b->type;
 }
 
@@ -546,7 +555,7 @@ read_ipco_box(FILE *f, struct ipco_box *b)
         struct box *cc = NULL;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "IPCO: type %s, size %" PRIu64 "", UINT2TYPE(type), p.size);
-        if (p.size < 8) {
+        if (p.size < 8 || (int64_t)p.size > s) {
             break;
         }
         if (n >= (int)(sizeof(b->property) / sizeof(b->property[0]))) {
@@ -667,6 +676,7 @@ read_iprp_box(FILE *f, struct iprp_box *b)
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "IPRP: type %s, size %" PRIu64 "", UINT2TYPE(type), p.size);
+        if (p.size < 8 || (int64_t)p.size > s) break;
         switch (type) {
             case FOURCC2UINT('i', 'p', 'c', 'o'):
                 s -= read_ipco_box(f, &b->ipco);
@@ -1033,6 +1043,7 @@ int read_stbl_box(FILE *f, struct stbl_box *b)
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "STBL: %s left %"PRIu64"", type2name(type), s);
+        if (p.size < 8 || (int64_t)p.size > s) break;
         switch (type) {
         case FOURCC2UINT('s', 't', 'd', 'p'):
             read_stdp_box(f, &b->stdp, b->stsz.sample_count);
@@ -1082,6 +1093,7 @@ int read_minf_box(FILE *f, struct minf_box *b)
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "MINF: %s left %"PRIu64"", type2name(type), s);
+        if (p.size < 8 || (int64_t)p.size > s) break;
         switch (type) {
         case FOURCC2UINT('v', 'm', 'h', 'd'):
             read_vmhd_box(f, &b->vmhd);
@@ -1178,6 +1190,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
         struct box b;
         uint32_t type = probe_box(f, &b);
         VDBG(basemedia, "META: %s, size %" PRIu64 "", UINT2TYPE(type), b.size);
+        if (b.size < 8 || (int64_t)b.size > size) break;
         switch (type) {
         case FOURCC2UINT('h', 'd', 'l', 'r'):
             read_hdlr_box(f, &meta->hdlr);
@@ -1228,6 +1241,7 @@ int read_trak_box(FILE *f, struct trak_box *b)
         struct box p;
         uint32_t type = probe_box(f, &p);
         VDBG(basemedia, "TRAK: %s, left %"PRIu64"", type2name(type), s);
+        if (p.size < 8 || (int64_t)p.size > s) break;
         switch (type) {
             case FOURCC2UINT('t', 'r', 'e', 'f'):
             case FOURCC2UINT('t', 'r', 'g', 'r'):

@@ -165,13 +165,11 @@ static int vp8l_next_table_bit_size(const int *count, int len, int root_bits) {
 
 static int vp8l_build_huff_table(vp8l_huff_table_t *t, const int *code_lengths,
                                    int num_syms) {
-    fprintf(stderr, "VP8L-BUILD: num_syms=%d code_lens=[", num_syms);
-    for (int i = 0; i < num_syms && i < 20; i++) fprintf(stderr, "%d", code_lengths[i]);
-    fprintf(stderr, "]\n"); fflush(stderr);
+    VDBG(vp8l, "VP8L-BUILD: num_syms=%d code_lens=[", num_syms);
     int count[VP8L_MAX_CODE_LEN + 1] = {0};
     for (int i = 0; i < num_syms; i++) {
         if (code_lengths[i] > VP8L_MAX_CODE_LEN) {
-            fprintf(stderr, "VP8L-BUILD: exit1 code_length[%d]=%d > max\n", i, code_lengths[i]); fflush(stderr);
+            VERR(vp8l, "VP8L-BUILD: exit1 code_length[%d]=%d > max\n", i, code_lengths[i]);
             return -1;
         }
         count[code_lengths[i]]++;
@@ -194,7 +192,7 @@ static int vp8l_build_huff_table(vp8l_huff_table_t *t, const int *code_lengths,
     offset[1] = 0;
     for (int len = 1; len <= VP8L_MAX_CODE_LEN; len++) {
         if (count[len] > (1 << len)) {
-            fprintf(stderr, "VP8L-BUILD: exit2 len=%d count=%d > %d\n", len, count[len], 1<<len); fflush(stderr);
+            VERR(vp8l, "VP8L-BUILD: exit2 len=%d count=%d > %d\n", len, count[len], 1<<len);
             return -1;
         }
         offset[len + 1] = offset[len] + count[len];
@@ -236,7 +234,7 @@ static int vp8l_build_huff_table(vp8l_huff_table_t *t, const int *code_lengths,
             num_open <<= 1;
             num_open -= count[len];
             if (num_open < 0) {
-                fprintf(stderr, "VP8L-BUILD: exit3 num_open<0 root len=%d\n", len); fflush(stderr);
+                VERR(vp8l, "VP8L-BUILD: exit3 num_open<0 root len=%d\n", len);
                 return -1;
             }
         }
@@ -247,7 +245,7 @@ static int vp8l_build_huff_table(vp8l_huff_table_t *t, const int *code_lengths,
             num_open <<= 1;
             num_open -= count[len];
             if (num_open < 0) {
-                fprintf(stderr, "VP8L-BUILD: exit4 num_open<0 overflow len=%d\n", len); fflush(stderr);
+                VERR(vp8l, "VP8L-BUILD: exit4 num_open<0 overflow len=%d\n", len);
                 return -1;
             }
             for (; count[len] > 0; count[len]--) {
@@ -831,14 +829,14 @@ typedef struct {
 
 static int vp8l_read_transform_simple(struct bits_vec *v, int *xsize, int ysize,
                                  vp8l_ctx_t *ctx) {
-    fprintf(stderr, "VP8L-TRANSFORM: enter num_transforms=%d, transforms_seen=%x\n", ctx->num_transforms, ctx->transforms_seen); fflush(stderr);
+    VDBG(vp8l, "VP8L-TRANSFORM: enter num_transforms=%d, transforms_seen=%x\n", ctx->num_transforms, ctx->transforms_seen);
     if (ctx->num_transforms >= NUM_TRANSFORMS) {
-        fprintf(stderr, "VP8L-TRANSFORM: exit num_transforms >= MAX\n"); fflush(stderr);
+        VERR(vp8l, "VP8L-TRANSFORM: exit num_transforms >= MAX");
     }
     int type = READ_BITS(v, 2);
-    fprintf(stderr, "VP8L-TRANSFORM: type=%d\n", type); fflush(stderr);
+    VDBG(vp8l, "VP8L-TRANSFORM: type=%d", type);
     if (ctx->transforms_seen & (1U << type)) {
-        fprintf(stderr, "VP8L-TRANSFORM: exit already seen type %d\n", type); fflush(stderr);
+        VERR(vp8l, "VP8L-TRANSFORM: exit already seen type %d\n", type);
     }
     ctx->transforms_seen |= (1U << type);
 
@@ -871,13 +869,13 @@ static int vp8l_read_transform_simple(struct bits_vec *v, int *xsize, int ysize,
         else if (num_colors > 2)  bits = 2;
         else                       bits = 3;
         t->bits = bits;
-        fprintf(stderr, "VP8L-TRANSFORM: COLOR_INDEXING num_colors=%d bits=%d, xsize=%d ysize=%d\n", num_colors, bits, t->xsize, t->ysize); fflush(stderr);
+        VDBG(vp8l, "VP8L-TRANSFORM: COLOR_INDEXING num_colors=%d bits=%d, xsize=%d ysize=%d\n", num_colors, bits, t->xsize, t->ysize);
         /* Do NOT modify *xsize.  The working (decode) width is derived
          * later from the transform list, not by mutating the caller's
          * canvas width. */
         uint32_t *palette = NULL;
         if (vp8l_decode_substream(v, num_colors, 1, &palette) < 0) {
-            fprintf(stderr, "VP8L-TRANSFORM: decode_substream FAIL for palette\n"); fflush(stderr);
+            VERR(vp8l, "VP8L-TRANSFORM: decode_substream FAIL for palette");
             return -1;
         }
         t->data = palette;
@@ -1017,7 +1015,7 @@ static int vp8l_decode_pixels(struct bits_vec *v, const vp8l_ctx_t *ctx,
  * handles it internally via allow_recursion=is_level0. */
 static int vp8l_decode_substream(struct bits_vec *v, int width, int height,
                                    uint32_t **out_pixels) {
-    fprintf(stderr, "VP8L-SUBSTREAM: enter width=%d height=%d\n", width, height); fflush(stderr);
+    VDBG(vp8l, "VP8L-SUBSTREAM: enter width=%d height=%d\n", width, height);
     vp8l_ctx_t ctx = {0};
 
     /* color cache */
@@ -1030,18 +1028,18 @@ static int vp8l_decode_substream(struct bits_vec *v, int width, int height,
 
     /* read huffman tables */
     if (vp8l_read_huffman_group(v, color_cache_bits, &ctx.huff) < 0) {
-        fprintf(stderr, "VP8L-SUBSTREAM: read_huffman_group FAIL\n"); fflush(stderr);
+        VERR(vp8l, "VP8L-SUBSTREAM: read_huffman_group FAIL");
         return -1;
     }
-    fprintf(stderr, "VP8L-SUBSTREAM: huff OK, decode_pixels %dx%d\n", width, height); fflush(stderr);
+    VDBG(vp8l, "VP8L-SUBSTREAM: huff OK, decode_pixels %dx%d\n", width, height);
     uint32_t *pixels = calloc((size_t)width * height, sizeof(uint32_t));
     if (!pixels) return -1;
     if (vp8l_decode_pixels(v, &ctx, width, height, pixels) < 0) {
-        fprintf(stderr, "VP8L-SUBSTREAM: decode_pixels FAIL\n"); fflush(stderr);
+        VERR(vp8l, "VP8L-SUBSTREAM: decode_pixels FAIL");
         free(pixels);
         return -1;
     }
-    fprintf(stderr, "VP8L-SUBSTREAM: OK\n"); fflush(stderr);
+    VDBG(vp8l, "VP8L-SUBSTREAM: OK");
     *out_pixels = pixels;
     return 0;
 }
@@ -1116,7 +1114,7 @@ int vp8l_decode_image(struct bits_vec *v, int width, int height,
     /* ---- level 0: transforms loop ---- */
     while (READ_BIT(v)) {
         if (vp8l_read_transform_simple(v, &width, height, &ctx) < 0) {
-            fprintf(stderr, "VP8L-TRACE: read_transform_simple FAIL\n");
+            VERR(vp8l, "VP8L-TRACE: read_transform_simple FAIL\n");
             goto cleanup;
         }
     }
@@ -1138,11 +1136,11 @@ int vp8l_decode_image(struct bits_vec *v, int width, int height,
     if (READ_BIT(v)) {
         color_cache_bits = READ_BITS(v, 4);
         if (color_cache_bits < 1 || color_cache_bits > MAX_CACHE_BITS) {
-            fprintf(stderr, "VP8L-TRACE: bad cache_bits\n");
+            VERR(vp8l, "VP8L-TRACE: bad cache_bits\n");
             goto cleanup;
         }
         if (vp8l_cc_init(&ctx.color_cache, color_cache_bits) < 0) {
-            fprintf(stderr, "VP8L-TRACE: cc_init FAIL\n");
+            VERR(vp8l, "VP8L-TRACE: cc_init FAIL\n");
             goto cleanup;
         }
         ctx.color_cache_enabled = 1;
@@ -1151,17 +1149,17 @@ int vp8l_decode_image(struct bits_vec *v, int width, int height,
     /* ---- huffman group (level 0) ---- */
     int meta_flag = READ_BIT(v);
     if (meta_flag) {
-        fprintf(stderr, "VP8L-TRACE: meta huffman not supported\n");
+        VERR(vp8l, "VP8L-TRACE: meta huffman not supported\n");
         goto cleanup;
     }
     if (vp8l_read_huffman_group(v, color_cache_bits, &ctx.huff) < 0) {
-        fprintf(stderr, "VP8L-TRACE: read_huffman_group FAIL\n");
+        VERR(vp8l, "VP8L-TRACE: read_huffman_group FAIL\n");
         goto cleanup;
     }
     uint32_t *arwb = calloc((size_t)ctx.canvas_width * ctx.canvas_height, sizeof(uint32_t));
-    if (!arwb) { fprintf(stderr, "VP8L-TRACE: arwb malloc FAIL\n"); goto cleanup; }
+    if (!arwb) { VERR(vp8l, "VP8L-TRACE: arwb malloc FAIL\n"); goto cleanup; }
     if (vp8l_decode_pixels(v, &ctx, decode_w, decode_h, arwb) < 0) {
-        fprintf(stderr, "VP8L-TRACE: decode_pixels FAIL decode_w=%d decode_h=%d\n", decode_w, decode_h);
+        VERR(vp8l, "VP8L-TRACE: decode_pixels FAIL decode_w=%d decode_h=%d\n", decode_w, decode_h);
         free(arwb);
         goto cleanup;
     }

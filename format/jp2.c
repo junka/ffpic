@@ -342,18 +342,42 @@ read_jp2_uuid_box(FILE *f, struct jp2_uuid_box *b)
 uint16_t 
 read_marker(FILE *f)
 {
-    int c = fgetc(f);
-    if (c != 0xFF) {
-        if (c != EOF) {
-            printf("marker 0x%x\n", c);
-        }
-        return 0;
-    }
-    c = fgetc(f);
+    int c;
+    /* skip leading 0xFF fill bytes (ISO 15444-1 B.2 allows one or more
+     * 0xFF padding bytes before any marker) */
+    do {
+        c = fgetc(f);
+    } while (c == 0xFF);
     if (c == EOF) {
         return 0;
     }
+    /* the byte after the last 0xFF is the marker payload; if it happens
+     * to be 0xFF (fill+fill+marker) the loop above already consumed it */
     return MARK((uint8_t)c);
+}
+
+/* ISO 15444-1 B.1: marker class A has no segment length.
+ * All other markers carry a 2-byte big-endian Lxxx right after the marker.
+ * NOTE: mark = MARK(byte2) = (byte2 << 8) | 0xFF; the payload byte2 lives in
+ * the HIGH byte of the returned uint16_t. */
+static int
+jp2_marker_has_seglen(uint16_t mark)
+{
+    uint8_t b2 = (uint8_t)(mark >> 8);
+
+    /* 0xFF30..0xFF3F: reserved delimiter/segmentation, no segment length */
+    if (b2 >= 0x30 && b2 <= 0x3F) {
+        return 0;
+    }
+    switch (b2) {
+    case 0x4F: /* SOC */
+    case 0x93: /* SOD */
+    case 0xD9: /* EOC */
+    case 0x92: /* EPH */
+        return 0;
+    default:
+        return 1;
+    }
 }
 
 int
@@ -693,18 +717,39 @@ read_stream(JP2 *j, FILE *f)
             case POC:
                 read_poc(j, f);
                 break;
-            // case TLM:
-            //     read_tlm(j, f);
-            //     break;
             case EOC:
                 //may be absent in case corrupt
                 VERR(jp2, "end of code stream  %ld", ftell(f));
                 return;
             default:
-                /* an unhandled marker segment, the rest of the codestream
-                 * cannot be parsed reliably: stop here instead of looping */
-                printf("marker %x\n", SWAP(mark));
-                return;
+                /* unhandled but valid marker: skip its segment length and
+                 * keep scanning so that later tiles/tile-parts are still
+                 * discovered (ISO 15444-1 B.1 defines which markers carry
+                 * a segment length; EPH/SOC/SOD/EOC and 0xFF30..0xFF3F do
+                 * not, everything else has a 2-byte big-endian Lxxx). */
+                if (jp2_marker_has_seglen(mark)) {
+                    int c1 = fgetc(f);
+                    int c2 = fgetc(f);
+                    if (c1 == EOF || c2 == EOF) {
+                        fprintf(stderr, "jp2: EOF while reading marker 0x%04X segment length\n",
+                                SWAP(mark));
+                        return;
+                    }
+                    int seg_len = (c1 << 8) | c2;
+                    if (seg_len < 2) {
+                        fprintf(stderr, "jp2: marker 0x%04X has illegal Lxxx=%d (<2)\n",
+                                SWAP(mark), seg_len);
+                        return;
+                    }
+                    long payload = (long)seg_len - 2;
+                    if (payload > 0 && fseek(f, payload, SEEK_CUR) != 0) {
+                        fprintf(stderr, "jp2: marker 0x%04X payload (Lxxx=%d) overflows codestream\n",
+                                SWAP(mark), seg_len);
+                        return;
+                    }
+                }
+                fprintf(stderr, "jp2: skipping unhandled marker 0x%04X\n", SWAP(mark));
+                break;
         }
     }
 }

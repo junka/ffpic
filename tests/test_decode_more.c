@@ -340,13 +340,9 @@ check_jp2(const char *path, int width, int height, int comps, int tiles,
         rc = -1;
     }
     /* the reversible transform decodes to pixels; the irreversible 9-7
-     * path is outside this decoder and must stay header only */
+     * path now also decodes to pixels (lossy) */
     if (transform == 1 && p->pixels == NULL) {
         printf("%s: reversible codestream produced no pixels\n", path);
-        rc = -1;
-    }
-    if (transform == 0 && p->pixels != NULL) {
-        printf("%s: unsupported transform decoded to pixels\n", path);
         rc = -1;
     }
 

@@ -537,6 +537,32 @@ out:
     return rc;
 }
 
+/* recognised as JP2 but the palette or the component mapping cannot be
+ * honoured: the loader has to refuse it instead of clamping the index */
+static int
+check_jp2_refused(const char *path)
+{
+    struct file_ops *ops = file_probe(path);
+    struct pic *p;
+
+    if (!ops || strcmp(ops->name, "JP2")) {
+        printf("%s: no JP2 parser claimed it\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (p && p->pixels) {
+        printf("%s: decoded, expected the palette mapping to be refused\n",
+               path);
+        file_free(ops, p);
+        return -1;
+    }
+    if (p) {
+        file_free(ops, p);
+    }
+    printf("%s: refused as expected\n", path);
+    return 0;
+}
+
 static int
 truncate_copy(const char *src, const char *dst, long keep)
 {
@@ -3748,6 +3774,28 @@ int main(void)
                                 keep)) {
             failed++;
         }
+    }
+    /* palette samples: the index component must be turned into colours by
+     * PCLR + CMAP instead of being emitted as a grey sample.  The deep one
+     * carries a four bit index component, the others eight bit indices. */
+    if (check_jp2(JP2_DATA("jp2_palette_rgb.jp2"), 64, 48, 1, 1, 1, 0) ||
+        check_jp2(JP2_DATA("jp2_palette_gray.jp2"), 64, 48, 1, 1, 1, 0) ||
+        check_jp2(JP2_DATA("jp2_palette_deep.jp2"), 64, 48, 1, 1, 1, 0)) {
+        failed++;
+    }
+    if (check_jp2_pixels(JP2_DATA("jp2_palette_rgb.jp2"),
+                         JP2_DATA("jp2_palette_rgb.ppm"), 0, 0.0) ||
+        check_jp2_pixels(JP2_DATA("jp2_palette_gray.jp2"),
+                         JP2_DATA("jp2_palette_gray.pgm"), 0, 0.0) ||
+        check_jp2_pixels(JP2_DATA("jp2_palette_deep.jp2"),
+                         JP2_DATA("jp2_palette_deep.ppm"), 0, 0.0)) {
+        failed++;
+    }
+    /* an index past the last palette entry, and a CMAP pointing at a
+     * component that does not exist, are refused rather than clamped */
+    if (check_jp2_refused(JP2_DATA("jp2_palette_badidx.jp2")) ||
+        check_jp2_refused(JP2_DATA("jp2_palette_badcmap.jp2"))) {
+        failed++;
     }
     if (emit_probe_bpg() || check_claim("probe.bpg", "BPG")) {
         failed++;

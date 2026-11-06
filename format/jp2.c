@@ -113,6 +113,7 @@ read_jp2_cmap_box(FILE *f, struct jp2_cmap_box *b)
         return b->size;
     }
     int n = (int)((b->size - 8) / 4);
+    b->num_channel = (uint16_t)n;
     b->cmp = calloc(n, 2);
     b->mtyp = calloc(n, 1);
     b->pcol = calloc(n, 1);
@@ -171,16 +172,21 @@ read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
     if (b->num_entry == 0 || b->num_channel == 0) {
         return b->size;
     }
+    /* NE, NPC and one B byte per palette column must fit in the box */
+    if (b->size < 11 + (uint64_t)b->num_channel) {
+        return b->size;
+    }
     b->bit_depth = calloc(b->num_channel, 1);
     if (b->bit_depth == NULL) {
         return b->size;
     }
     FFREAD_IGNORE(b->bit_depth, 1, b->num_channel, f);
 
-    /* every entry stores one value per column, ceil(depth / 8) bytes wide */
+    /* every entry stores one value per column; B stores precision - 1 */
     int bytes_per_entry = 0;
     for (int j = 0; j < b->num_channel; j++) {
-        bytes_per_entry += (b->bit_depth[j] + 7) >> 3;
+        int depth = (b->bit_depth[j] & 0x7f) + 1;
+        bytes_per_entry += (depth + 7) >> 3;
     }
     uint64_t need = 11 + (uint64_t)b->num_channel +
                     (uint64_t)b->num_entry * bytes_per_entry;
@@ -193,7 +199,7 @@ read_jp2_pclr_box(FILE *f, struct jp2_pclr_box *b)
     }
     for (int i = 0; i < b->num_entry; i ++) {
         for (int j = 0; j < b->num_channel; j ++) {
-            int n = (b->bit_depth[j] + 7) >> 3;
+            int n = ((b->bit_depth[j] & 0x7f) + 1 + 7) >> 3;
             uint32_t v = 0;
             for (int k = 0; k < n; k++) {
                 v = (v << 8) | read_u8(f);

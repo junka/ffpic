@@ -1805,6 +1805,138 @@ dec_clamp(int v, int lo, int hi)
 }
 
 /* ------------------------------------------------------------------ */
+/* PCLR / CMAP palette mapping (ISO 15444-1 I.5.3.4 / I.5.3.5)         */
+/* ------------------------------------------------------------------ */
+
+/* one output channel: either a sample taken straight from a component or a
+ * colour looked up in the palette with that component as the index */
+struct jp2_chan {
+    int kind;   /* 0 = direct component, 1 = palette lookup */
+    int comp;   /* source component */
+    int pcol;   /* palette column, kind 1 only */
+    int shift;  /* DC level shift of the source component */
+    int max;    /* sample range of a direct component */
+};
+
+struct jp2_cmap_plan {
+    int n_out;              /* 1 or 3 channels, always emitted as RGB */
+    struct jp2_chan ch[3];
+};
+
+/* Resolve the palette and the component mapping once, before any decoding.
+ * Every value that will be indexed later is range checked here as well, so
+ * a malformed header is refused instead of producing wrong pixels. */
+static int
+cmap_plan(JP2 *j, struct jp2_cmap_plan *plan)
+{
+    struct siz *s = &j->main_h.siz;
+    struct jp2_pclr_box *pclr = &j->jp2h.pclr;
+    struct jp2_cmap_box *cmap = &j->jp2h.cmap;
+    uint8_t col_used[256];
+    int ncomp = (int)s->component_num;
+    int npc, nch, i, e;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(col_used, 0, sizeof(col_used));
+    /* I.5.3.5: a palette only has a meaning together with a mapping */
+    if (pclr->size == 0 || cmap->size == 0) {
+        return -EINVAL;
+    }
+    if (pclr->num_entry == 0 || pclr->num_channel == 0 ||
+        pclr->entries == NULL || pclr->bit_depth == NULL) {
+        return -EINVAL;
+    }
+    npc = (int)pclr->num_channel;
+    nch = (int)cmap->num_channel;
+    if (cmap->cmp == NULL || cmap->mtyp == NULL || cmap->pcol == NULL ||
+        nch != npc) {
+        return -EINVAL;
+    }
+    if (nch != 1 && nch != 3) {
+        /* RGB888 output: one colour channel or three, nothing else */
+        return -ENOTSUP;
+    }
+    if (j->main_h.cod.multiple_transform) {
+        /* MCT is applied before the mapping; this decoder does not mix them */
+        return -ENOTSUP;
+    }
+    for (i = 0; i < npc; i++) {
+        int d = (pclr->bit_depth[i] & 0x7f) + 1;
+
+        if (pclr->bit_depth[i] & 0x80) {
+            return -ENOTSUP;
+        }
+        if (d < 1 || d > 8) {
+            return -ENOTSUP;
+        }
+    }
+    for (i = 0; i < nch; i++) {
+        int cmp = (int)cmap->cmp[i];
+        int mtyp = (int)cmap->mtyp[i];
+        int pcol = (int)cmap->pcol[i];
+
+        if (cmp < 0 || cmp >= ncomp) {
+            return -EINVAL;
+        }
+        if (mtyp != 0 && mtyp != 1) {
+            return -EINVAL;
+        }
+        if (mtyp == 0) {
+            /* I.5.3.5: PCOL shall be zero for direct use */
+            if (pcol != 0) {
+                return -EINVAL;
+            }
+        } else {
+            if (pcol < 0 || pcol >= npc || col_used[pcol]) {
+                return -EINVAL;
+            }
+            col_used[pcol] = 1;
+        }
+        plan->ch[i].kind = mtyp;
+        plan->ch[i].comp = cmp;
+        plan->ch[i].pcol = pcol;
+    }
+    /* every palette column must feed exactly one output channel */
+    for (i = 0; i < npc; i++) {
+        if (!col_used[i]) {
+            return -EINVAL;
+        }
+    }
+    /* the index component must be an unsigned sample wide enough for the
+     * declared entry count */
+    for (i = 0; i < nch; i++) {
+        struct jp2_chan *ch = &plan->ch[i];
+        struct scomponent *sc = &s->comps[ch->comp];
+        int d = (int)(sc->depth & 0x7f) + 1;
+
+        if (sc->depth & 0x80) {
+            return -ENOTSUP;
+        }
+        if (d < 1 || d > 8) {
+            return -ENOTSUP;
+        }
+        ch->shift = 1 << (d - 1);
+        ch->max = (1 << d) - 1;
+        if (ch->kind == 1 && (int)pclr->num_entry > (1 << d)) {
+            return -EINVAL;
+        }
+    }
+    /* each stored colour must fit the bit depth declared for its column */
+    for (e = 0; e < (int)pclr->num_entry; e++) {
+        for (i = 0; i < npc; i++) {
+            int d = (pclr->bit_depth[i] & 0x7f) + 1;
+
+            if (pclr->entries[(size_t)e * npc + i] >
+                (uint32_t)((1u << d) - 1u)) {
+                return -EINVAL;
+            }
+        }
+    }
+    plan->n_out = nch;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* public entry point                                                   */
 /* ------------------------------------------------------------------ */
 
@@ -1817,7 +1949,8 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
     int32_t *planes[3] = {NULL, NULL, NULL};
     float *fplanes[3] = {NULL, NULL, NULL};
     int pw[3], ph[3], px0[3], py0[3];
-    int ncomp, W, H, pitch, ci, x, y, lossy;
+    struct jp2_cmap_plan plan;
+    int ncomp, W, H, pitch, ci, x, y, lossy, has_cmap = 0;
     long flen;
     int err = 0;
 
@@ -1878,6 +2011,15 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
     if (ncomp == 1 && cod->multiple_transform) {
         return -EINVAL;
     }
+    /* PCLR and CMAP only matter together, and both are rejected outright
+     * when malformed rather than decoding to the wrong colours */
+    if (j->jp2h.pclr.size != 0 || j->jp2h.cmap.size != 0) {
+        err = cmap_plan(j, &plan);
+        if (err) {
+            return err;
+        }
+        has_cmap = 1;
+    }
     W = (int)s->width;
     H = (int)s->height;
     if ((int64_t)W * H > (1 << 26)) {
@@ -1890,12 +2032,21 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
             sc->vertical_separation != 1) {
             return -ENOTSUP;
         }
-        if ((int)(sc->depth & 0x7f) + 1 != 8) {
-            return -ENOTSUP;
-        }
-        if (lossy && (sc->depth & 0x80)) {
-            /* the 9-7 path only covers unsigned samples */
-            return -ENOTSUP;
+        if (has_cmap) {
+            /* the palette plan already vetted the components it reads; for
+             * the rest an unsigned sample of at most 8 bits is enough */
+            if ((sc->depth & 0x80) ||
+                (int)(sc->depth & 0x7f) + 1 > 8) {
+                return -ENOTSUP;
+            }
+        } else {
+            if ((int)(sc->depth & 0x7f) + 1 != 8) {
+                return -ENOTSUP;
+            }
+            if (lossy && (sc->depth & 0x80)) {
+                /* the 9-7 path only covers unsigned samples */
+                return -ENOTSUP;
+            }
         }
         pw[ci] = W;
         ph[ci] = H;
@@ -1945,7 +2096,46 @@ jp2_decode(struct pic *p, JP2 *j, FILE *f)
             int r, g, b;
             size_t i = (size_t)y * W + x;
 
-            if (lossy) {
+            if (has_cmap) {
+                /* I.5.3.5: the mapping runs on the reconstructed samples
+                 * after the DC level shift (the shift is part of the wavelet
+                 * decode, the palette only sees the unsigned sample), so the
+                 * index is sample + 2^(depth - 1), not a raw coefficient */
+                int v[3] = {0, 0, 0};
+                int c;
+
+                for (c = 0; c < plan.n_out; c++) {
+                    const struct jp2_chan *ch = &plan.ch[c];
+                    int sample = lossy ? (int)lrintf(fplanes[ch->comp][i])
+                                       : planes[ch->comp][i];
+
+                    if (ch->kind == 0) {
+                        /* direct component after the DC level shift */
+                        v[c] = dec_clamp(sample + ch->shift, 0, ch->max);
+                    } else {
+                        int idx = sample + ch->shift;
+
+                        if (idx < 0 ||
+                            idx >= (int)j->jp2h.pclr.num_entry) {
+                            /* an index the palette cannot represent is an
+                             * error, never clamped to the last entry */
+                            free(p->pixels);
+                            p->pixels = NULL;
+                            err = -EINVAL;
+                            goto fail;
+                        }
+                        v[c] = (int)j->jp2h.pclr.entries[
+                            (size_t)idx * j->jp2h.pclr.num_channel + ch->pcol];
+                    }
+                }
+                if (plan.n_out == 1) {
+                    r = g = b = v[0];
+                } else {
+                    r = v[0];
+                    g = v[1];
+                    b = v[2];
+                }
+            } else if (lossy) {
                 if (ncomp == 1) {
                     r = g = b = dec_clamp(
                         (int)lrintf(fplanes[0][i]) + 128, 0, 255);

@@ -160,6 +160,7 @@ struct jp2_cmap_component {
 
 struct jp2_cmap_box {
     BOX_ST;
+    uint16_t num_channel;  /* one mapping entry per palette column */
     uint16_t* cmp;
     uint8_t* mtyp;
     uint8_t* pcol;
@@ -169,7 +170,7 @@ struct jp2_pclr_box {
     BOX_ST;
     uint16_t num_entry;
     uint8_t num_channel;
-    uint8_t *bit_depth;   /* number of bits per palette column */
+    uint8_t *bit_depth;   /* bit 7 sign, bits 6-0 precision - 1 (I.5.3.4) */
     uint32_t *entries;    /* num_entry * num_channel, one per column */
 };
 

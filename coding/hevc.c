@@ -3874,7 +3874,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
 }
 
 // see 8.6.4.2
-static void transformation(int nTbS, int trType, int32_t *x, int *y) {
+static void transformation(int nTbS, int trType, int32_t *x, int64_t *y) {
     const int8_t transMatrix[4][4] = {
         {29, 55, 74, 84},
         {74, 74, 0, -74},
@@ -3929,14 +3929,14 @@ static void transformation(int nTbS, int trType, int32_t *x, int *y) {
         for (int i = 0; i < nTbS; i++) {
             y[i] = 0;
             for (int j = 0; j <= last_nz; j++) {
-                y[i] += transMatrix[j][i] * x[j];
+                y[i] += (int64_t)transMatrix[j][i] * x[j];
             }
         }
     } else {
         for (int i = 0; i < nTbS; i++) {
             y[i] = 0;
             for (int j = 0; j <= last_nz; j++) {
-                y[i] += transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i] * x[j];
+                y[i] += (int64_t)transMatrixCol[j * (1 << (5 - log2floor(nTbS)))][i] * x[j];
             }
         }
     }
@@ -3970,7 +3970,7 @@ static int transform_scaled_coeffients(struct sps *sps, struct picture *p,
             tmp[y] = d[x+y*nTbS];
         }
         // invoke 8.6.4.2
-        int e[32];
+        int64_t e[32];
         transformation(nTbS, trType, tmp, e);
         for (int y = 0; y < nTbS; y++) {
             // HEVC spec does NOT clip intermediate transform results
@@ -3981,14 +3981,14 @@ static int transform_scaled_coeffients(struct sps *sps, struct picture *p,
     // Each (horizontal) row of the resulting array g[x][y] is transformed to
     // r[x][y] by invoking the one-dimensional transformation
     for (int y = 0; y < nTbS; y++) {
-        int out[32];
+        int64_t out[32];
         for (int x = 0; x < nTbS; x++) {
             tmp[x] = g[x][y];
         }
         // invoke 8.6.4.2
         transformation(nTbS, trType, tmp, out);
         for (int x = 0; x < nTbS; x++) {
-            r[x + y * nTbS] = (out[x] +(1 << (bdShift - 1))) >> bdShift;
+            r[x + y * nTbS] = (int32_t)((out[x] + (1 << (bdShift - 1))) >> bdShift);
         }
     }
 

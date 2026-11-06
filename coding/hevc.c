@@ -5211,12 +5211,13 @@ static void decode_cu_coded_intra_prediction_mode(
                 int yPb = yCb + (nCbS >> 1) * (blkIdx / 2);
                 // invoke 8.4.3
                 // process_chroma_intra_prediction_mode(slice, cu, hps, xPb, yPb);
-                // invoke 8.4.4.1
+                // invoke 8.4.4.1 — U plane (cIdx=1)
                 decode_intra_block(
                     slice, cu, hps, xPb, yPb, log2CbSizeC - 1, 1,
-                    get_IntraPredModeC(sps, p, xPb, yPb), 2,
+                    get_IntraPredModeC(sps, p, xPb, yPb), 1,
                     pps->pps_scc_ext.residual_adaptive_colour_transform_enabled_flag ? 2 : 0,
                     p);
+                // invoke 8.4.4.1 — V plane (cIdx=2)
                 decode_intra_block(
                     slice, cu, hps, xPb, yPb, log2CbSizeC - 1, 1,
                     get_IntraPredModeC(sps, p, xPb, yPb), 2,
@@ -7476,7 +7477,7 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                      struct hevc_param_set *hps,
                                      uint8_t *pixels, int buf_pitch,
                                      int buf_height, int out_bits) {
-    int ret;
+    int ret = 0;
     uint32_t SliceAddrRs;
     struct hevc_slice hslice = {
         .nalu = headr,
@@ -7598,7 +7599,9 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     /* the destination holds the display size, so check the cropped picture
      * fits before the colour conversion writes into it */
-    if (sps->chroma_format_idc == CHROMA_420) {
+    if (sps->chroma_format_idc == CHROMA_420 ||
+        sps->chroma_format_idc == CHROMA_422 ||
+        sps->chroma_format_idc == CHROMA_444) {
         hevc_conformance_crop(sps, &crop_x, &crop_y, &crop_w, &crop_h);
         out_pitch = ((crop_w + 15) >> 4) * 16 * (out_bits >> 3);
         if (crop_x < 0 || crop_y < 0 || crop_w <= 0 || crop_h <= 0 ||

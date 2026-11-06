@@ -7,7 +7,7 @@
 #if 1
 // got from hevc spec 8.6.4.2
 static void
-idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, int bdShift)
+idct_1d_4_16bit(const int32_t *in, int32_t out[4], int bdShift)
 {
     const int8_t transMatrix[4][4] = {
         {29, 55, 74, 84},
@@ -24,33 +24,32 @@ idct_1d_4_16bit(const int16_t *in, int16_t out[4], int mincoeff, int maxcoeff, i
         }
     }
     for (int i = 0; i < 4; i++) {
-        int tmp = 0;
+        int64_t tmp = 0;
         for (int j = 0; j <= last_nz; j++) {
-            tmp += transMatrix[j][i] * in[j];
+            tmp += (int64_t)transMatrix[j][i] * in[j];
         }
-        out[i] = clip3(mincoeff, maxcoeff, (tmp + (1 << (bdShift - 1))) >> bdShift);
+        // HEVC spec 8.6.4.2 does NOT clip intermediate transform results
+        out[i] = (int32_t)((tmp + (1 << (bdShift - 1))) >> bdShift);
     }
 }
 
 // hevc spec 8.6.4.1
-void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp)
+void idct_4x4_hevc(const int32_t *in, int32_t *out, int bitdepth, bool epp)
 {
     int bdShift = MAX(20 - bitdepth, (epp ? 11 : 0));
-    int mincoeff = -(1 << (epp ? MAX(15, bitdepth + 6) : 15));
-    int maxcoeff = (1 << (epp ? MAX(15, bitdepth + 6) : 15)) - 1;
-    int16_t tmp[4];
-    int16_t e[4][4];
+    int32_t tmp[4];
+    int32_t e[4][4];
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
             tmp[j] = in[i + j * 4];
         }
-        idct_1d_4_16bit(tmp, e[i], mincoeff, maxcoeff, 7);
+        idct_1d_4_16bit(tmp, e[i], 7);
     }
     for (int j = 0; j < 4; j ++) {
         for (int i = 0; i < 4; i ++) {
             tmp[i] = e[i][j];
         }
-        idct_1d_4_16bit(tmp, out + j * 4, mincoeff, maxcoeff, bdShift);
+        idct_1d_4_16bit(tmp, out + j * 4, bdShift);
     }
 }
 #endif

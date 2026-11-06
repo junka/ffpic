@@ -3816,37 +3816,25 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
                                          struct picture *p,
                                          int transform_skip_flag, int xTbY,
                                          int yTbY, int nTbS, int cIdx, int qP,
-                                         int16_t *d) {
+                                         int32_t *d) {
     const int levelScale[] = {40, 45, 51, 57, 64, 72};
-    int log2TransformRange, bdShift, coeffMin, coeffMax;
-    struct sps_range_extension *sre = &sps->sps_range_ext;
+    int log2TransformRange, bdShift;
     struct trans_tree *tt = &cu->tt;
     // see 7-27, 7-30
-    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15));
-    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15));
-    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15)) - 1;
-    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15)) - 1;
-
-    VDBG(hevc, "CoeffMinY %d, CoeffMaxY %d, CoeffMinC %d, CoeffMaxC %d",
-         CoeffMinY, CoeffMaxY, CoeffMinC, CoeffMaxC);
-    // see 8-300 , 8-307
+    // HEVC spec does NOT clip dequantized coefficients; d must hold values
+    // up to ~19 bits (for 10-bit, qP=37, nTbS=16) which far exceeds int16_t.
     if (cIdx == 0) {
         log2TransformRange =
             sps->sps_range_ext.extended_precision_processing_flag
                 ? MAX(15, sps->BitDepthY + 6)
                 : 15;
         bdShift = sps->BitDepthY + log2floor(nTbS) + 10 - log2TransformRange;
-        coeffMin = CoeffMinY;
-        coeffMax = CoeffMaxY;
     } else {
         log2TransformRange =
             sps->sps_range_ext.extended_precision_processing_flag
                 ? MAX(15, sps->BitDepthC + 6)
                 : 15;
         bdShift = sps->BitDepthC + log2floor(nTbS) + 10 - log2TransformRange;
-        coeffMin = CoeffMinC;
-        coeffMax = CoeffMaxC;
-        VDBG(hevc, "bdShift %d, ", bdShift);
     }
     // scaling factor
     VDBG(hevc, "nTbS %d, scaling_list_enabled_flag %d", nTbS, sps->scaling_list_enabled_flag);
@@ -3858,20 +3846,19 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
         (transform_skip_flag == 1 && nTbS > 4)) {
         for (int y = 0; y < nTbS; y++) {
             for (int x = 0; x < nTbS; x++) {
-                // scaled transform coefficient
-                d[x + y * nTbS] =
-                    clip3(coeffMin, coeffMax,
-                        ((tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0] *
-                        m * levelScale[qP % 6] * (1 << (qP / 6))) + (1 << (bdShift - 1))) >> bdShift);
+                // scaled transform coefficient (no clip per HEVC 8.6.3)
+                int64_t scaled = (int64_t)tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0]
+                                 * m * levelScale[qP % 6] * (1 << (qP / 6));
+                d[x + y * nTbS] = (int32_t)((scaled + (1 << (bdShift - 1))) >> bdShift);
             }
         }
     } else {
         for (int y = 0; y < nTbS; y++) {
             for (int x = 0; x < nTbS; x++) {
                 m = slice->ScalingFactor[sizeid][mid][x][y];
-                d[x + y * nTbS] = clip3(coeffMin, coeffMax,
-                          ((tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0] *
-                          m * levelScale[qP % 6] * (1 << (qP / 6))) + (1 << (bdShift - 1))) >> bdShift);
+                int64_t scaled = (int64_t)tt->TransCoeffLevel[cIdx][xTbY + x - tt->xT0][yTbY + y - tt->yT0]
+                                 * m * levelScale[qP % 6] * (1 << (qP / 6));
+                d[x + y * nTbS] = (int32_t)((scaled + (1 << (bdShift - 1))) >> bdShift);
             }
         }
     }
@@ -3887,7 +3874,7 @@ static void scale_transform_coefficients(struct sps *sps, struct cu *cu,
 }
 
 // see 8.6.4.2
-static void transformation(int nTbS, int trType, int16_t *x, int *y) {
+static void transformation(int nTbS, int trType, int32_t *x, int *y) {
     const int8_t transMatrix[4][4] = {
         {29, 55, 74, 84},
         {74, 74, 0, -74},
@@ -3958,49 +3945,36 @@ static void transformation(int nTbS, int trType, int16_t *x, int *y) {
 // see 8.6.4.1 Transformation process for scaled transform coefficients
 static int transform_scaled_coeffients(struct sps *sps, struct picture *p,
                                        int xTbY, int yTbY, int nTbS, int cIdx,
-                                       int16_t* d, int16_t* r) {
+                                       int32_t* d, int32_t* r) {
     int bitdepth = (cIdx == 0) ? sps->BitDepthY : sps->BitDepthC;
     struct sps_range_extension *sre = &sps->sps_range_ext;
     int bdShift = MAX(20 - bitdepth,(sre->extended_precision_processing_flag ? 11 : 0));
-
-    // see 7-27, 7-30
-    int CoeffMinY = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15));
-    int CoeffMinC = -(1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15));
-    int CoeffMaxY = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthY + 6) : 15)) - 1;
-    int CoeffMaxC = (1 << (sre->extended_precision_processing_flag ? MAX(15, sps->BitDepthC + 6) : 15)) - 1;
-    int coeffMin = CoeffMinY;
-    int coeffMax = CoeffMaxY;
-    if (cIdx > 0) {
-        coeffMin = CoeffMinC;
-        coeffMax = CoeffMaxC;
-    }
     int trType = 0;
     if (get_CuPredMode(sps, p, xTbY, yTbY) == MODE_INTRA && nTbS == 4 && cIdx == 0) {
         trType = 1;
-        VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
-             coeffMin, coeffMax);
+        VDBG(hevc, "trType %d, nTbS %d", trType, nTbS);
         /* the accelerated 4x4 transform in the accl ops is the vp8 butterfly,
          * not the hevc dst-vii, so stay on the scalar implementation */
         idct_4x4_hevc(d, r, sps->BitDepthY,
                       sre->extended_precision_processing_flag);
         return 0;
     }
-    VDBG(hevc, "trType %d, nTbS %d, coeffMin %d,coeffMax %d", trType, nTbS,
-         coeffMin, coeffMax);
+    VDBG(hevc, "trType %d, nTbS %d", trType, nTbS);
     // Each (vertical) column of scaled transform coefficients s d[x][y]  is
     // transformed by invoking the one-dimensional transformation process
-    int e[32];
-    int16_t tmp[32];
-    int16_t g[32][32];
+    int32_t tmp[32];
+    int32_t g[32][32];
 
     for (int x = 0; x < nTbS; x++) {
         for (int y = 0; y < nTbS; y++) {
             tmp[y] = d[x+y*nTbS];
         }
         // invoke 8.6.4.2
+        int e[32];
         transformation(nTbS, trType, tmp, e);
         for (int y = 0; y < nTbS; y++) {
-            g[x][y] = clip3(coeffMin, coeffMax, (e[y]+64)>>7);
+            // HEVC spec does NOT clip intermediate transform results
+            g[x][y] = (e[y]+64)>>7;
         }
     }
 
@@ -4023,7 +3997,7 @@ static int transform_scaled_coeffients(struct sps *sps, struct picture *p,
 
 // 8.6.5 Residual modification process for blocks using a transform bypass
 static void
-residual_modification_transform_bypass(int mDir, int nTbs, int16_t *r)
+residual_modification_transform_bypass(int mDir, int nTbs, int32_t *r)
 {
     if (mDir == 0) { // horizontal direction
         for (int y = 1; y < nTbs; y++) {
@@ -4043,7 +4017,7 @@ residual_modification_transform_bypass(int mDir, int nTbs, int16_t *r)
 // 8.6.6 Residual modification process for transform blocks using cross-component
 // prediction
 static void
-residual_modification_transform_cross_prediction(struct sps *sps,struct cu *cu, int xTbY, int yTbY, int nTbS, int cIdx, int16_t *rY, int16_t* r)
+residual_modification_transform_cross_prediction(struct sps *sps,struct cu *cu, int xTbY, int yTbY, int nTbS, int cIdx, int32_t *rY, int32_t* r)
 {
     int ResScaleVal = cu->ccp[xTbY][yTbY].ResScaleVal[cIdx];
     for (int y = 0; y < nTbS; y++) {
@@ -4241,7 +4215,7 @@ quatization_parameters(int xCb, int yCb,
 static int scale_and_transform(struct cu *cu, int transform_skip_flag,
                               struct hevc_param_set *hps,
                               struct slice_segment_header *slice, int xTbY, int yTbY,
-                              int cIdx, int nTbS, int16_t* r, struct picture *p) {
+                              int cIdx, int nTbS, int32_t* r, struct picture *p) {
 
     struct pps *pps = hps->pps[slice->slice_pic_parameter_set_id];
     struct sps *sps = hps->sps[pps->pps_seq_parameter_set_id];
@@ -4288,7 +4262,7 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
         }
     } else {
         int tsShift = 5 + log2floor(nTbS);
-        int16_t d[32*32];
+        int32_t d[32*32];
         // step 1, invoke 8.6.3
         scale_transform_coefficients(sps, cu, slice, p, transform_skip_flag, xTbY, yTbY, nTbS,
                                      cIdx, qP, d);
@@ -4323,7 +4297,7 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
 // 8.6.7
 static void
 construct_pic_pior_to_filtering(struct sps *sps, int xCurr, int yCurr, int nCurrSw, int nCurrSh,
-                                int cIdx, int16_t *predSamples, int16_t *resSamples,
+                                int cIdx, int16_t *predSamples, int32_t *resSamples,
                                 int16_t *recSamples, int stride) {
     if (cIdx == 0) {
         for (int i = 0; i < nCurrSw; i++) {
@@ -4767,7 +4741,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
             int yTbOffsetY = yTbOffset * sps->SubHeightC;
             int residualDpcm = 0;
             int16_t predSamples[64 * 64];
-            int16_t resSamples[32*32] = {0};
+            int32_t resSamples[32*32] = {0};
             struct trans_tree *tt = &cu->tt;
             int transform_skip_flag =
                 tt->transform_skip_flag[cIdx][xTbY-tt->xT0][yTbY + yTbOffsetY- tt->yT0];

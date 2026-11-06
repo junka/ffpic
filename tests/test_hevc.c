@@ -216,13 +216,13 @@ test_color_matrix(void)
 static int
 test_dst_scalar(void)
 {
-    static const int16_t dc_in[16] = {1000};
-    static const int16_t dc_out[16] = {2, 3, 4, 5, 3, 6, 8, 9,
+    static const int32_t dc_in[16] = {1000};
+    static const int32_t dc_out[16] = {2, 3, 4, 5, 3, 6, 8, 9,
                                        4, 8, 10, 12, 5, 9, 12, 13};
-    static const int16_t ac_out[16] = {-3, -3, 0, 3, -3, -3, 0, 3,
+    static const int32_t ac_out[16] = {-3, -3, 0, 3, -3, -3, 0, 3,
                                        0,  0,  0, 0, 3,  3,  0, -3};
-    int16_t in[16] = {0};
-    int16_t out[16];
+    int32_t in[16] = {0};
+    int32_t out[16];
 
     idct_4x4_hevc(dc_in, out, 8, false);
     if (memcmp(out, dc_out, sizeof(out))) {

@@ -22,7 +22,7 @@ struct dct_ops {
 
 const struct dct_ops *get_dct_ops(int component_bits);
 
-void idct_4x4_hevc(const int16_t *in, int16_t *out, int bitdepth, bool epp);
+void idct_4x4_hevc(const int32_t *in, int32_t *out, int bitdepth, bool epp);
 
 void dct_float(float *data);
 

@@ -137,7 +137,7 @@ test_conversion_bounds(void)
 
     YUV420_to_BGRA32_16bit(dst, pitch, planes, planes + size,
                            planes + size * 3 / 2, y_stride, uv_stride, WIDTH,
-                           HEIGHT, CTB, 0, 2);
+                           HEIGHT, CTB, 8, 0, 2);
 
     for (int i = pitch * HEIGHT; i < pitch * HEIGHT + GUARD; i++) {
         if (dst[i] != 0xAA) {
@@ -176,7 +176,7 @@ check_convert(const char *name, int y, int u, int v, int full_range,
     cr[0] = (int16_t)v;
 
     YUV420_to_BGRA32_16bit(dst, PITCH, luma, cb, cr, W, 1, W, H, 64,
-                           full_range, matrix);
+                           8, full_range, matrix);
     if (dst[0] != want_b || dst[1] != want_g || dst[2] != want_r ||
         dst[3] != 0xFF) {
         printf("%s: got %d,%d,%d,%d expected %d,%d,%d,255\n", name, dst[0],

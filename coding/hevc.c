@@ -7642,7 +7642,7 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         } else {
             YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
                     v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
-                    full_range, matrix_coeffs);
+                    sps->BitDepthY, full_range, matrix_coeffs);
         }
     } else if (sps->chroma_format_idc == CHROMA_422) {
         VDBG(hevc, "we got CHROMA_422");
@@ -7659,7 +7659,8 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         } else {
             YUV400_to_BGRA32_16bit(pixels, out_pitch,
                                    p.pixel + crop_y * y_stride + crop_x,
-                                   y_stride, crop_w, crop_h, ctu);
+                                   y_stride, crop_w, crop_h, ctu,
+                                   sps->BitDepthY);
         }
     }
 

@@ -44,6 +44,8 @@ struct picture {
     int size;
     int y_stride;
     int uv_stride;
+    int u_offset;   /* U plane starts at pixel + size for all formats */
+    int v_offset;   /* V plane: 4:2:0/4:2:2 at size*3/2, 4:4:4 at size*2 */
 
     uint8_t *IntraPredModeY;
     uint8_t *IntraPredModeC;
@@ -4622,7 +4624,7 @@ static void intra_sample_prediction(struct slice_segment_header *slice,
     int16_t *top = top_default + 1;
     int16_t *left = left_default;
     // int16_t *dst = (cIdx == 0) ? p->Y: ((cIdx == 1) ? p->U : p->V);
-    int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->size : p->pixel + p->size * 3/2);
+    int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->u_offset : p->pixel + p->v_offset);
     int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
 
     int xTbY = (cIdx == 0) ? xTbCmp : xTbCmp * sps->SubWidthC;
@@ -4812,7 +4814,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
             }
             // step 9
             // int16_t *dst = (cIdx == 0) ? p->Y : (cIdx == 1 ? p->U : p->V);
-            int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->size : p->pixel + p->size * 3/2);
+            int16_t *dst = (cIdx == 0) ? p->pixel: ((cIdx == 1) ? p->pixel + p->u_offset : p->pixel + p->v_offset);
             int stride = (cIdx == 0) ? p->y_stride : p->uv_stride;
             int xTbInCb, yTbInCb;
             if (controlParaAct != 0) {
@@ -5157,9 +5159,9 @@ static void decode_cu_coded_intra_prediction_mode(
             int PcmBitDepthC = sps->pcm->pcm_sample_bit_depth_chroma_minus1 + 1;
             for (int i = 0; i < nCbS / sps->SubWidthC - 1; i++) {
                 for (int j = 0; j < nCbS / sps->SubHeightC - 1; j++) {
-                    p->pixel[p->size + xCb / sps->SubWidthC + i+ (yCb / sps->SubHeightC + j)*p->uv_stride] =
+                    p->pixel[p->u_offset + xCb / sps->SubWidthC + i+ (yCb / sps->SubHeightC + j)*p->uv_stride] =
                         cu->pcm->pcm_sample_chroma[(nCbS / sps->SubWidthC * j) +i] << (sps->BitDepthC - PcmBitDepthC);
-                    p->pixel[p->size * 3/2 + xCb / sps->SubWidthC + i+(yCb / sps->SubHeightC + j)*p->uv_stride] =
+                    p->pixel[p->v_offset + xCb / sps->SubWidthC + i+(yCb / sps->SubHeightC + j)*p->uv_stride] =
                         cu->pcm->pcm_sample_chroma[(nCbS / sps->SubWidthC * ( j + nCbS / sps->SubHeightC)) +i] << (sps->BitDepthC - PcmBitDepthC);
                 }
             }
@@ -5175,14 +5177,14 @@ static void decode_cu_coded_intra_prediction_mode(
             if (cu->pc[xCb][yCb]->palette_transpose_flag == 1) {
                 for (int y = 0; y < nCbS / sps->SubHeightC; y++) {
                     for (int x = 0; x < nCbS / sps->SubWidthC; x++) {
-                        p->pixel[p->size * 3/2 + xCb / sps->SubWidthC + x+(yCb / sps->SubHeightC + y)*p->uv_stride] =
+                        p->pixel[p->v_offset + xCb / sps->SubWidthC + x+(yCb / sps->SubHeightC + y)*p->uv_stride] =
                                recSamples[y + x * nCbS];
                     }
                 }
             } else {
                 for (int y = 0; y < nCbS / sps->SubHeightC; y++) {
                     for (int x = 0; x < nCbS / sps->SubWidthC; x++) {
-                        p->pixel[p->size*3/2 + xCb / sps->SubWidthC + x+ (yCb / sps->SubHeightC + y)*p->uv_stride] =
+                        p->pixel[p->v_offset + xCb / sps->SubWidthC + x+ (yCb / sps->SubHeightC + y)*p->uv_stride] =
                             recSamples[x + nCbS * y];
                     }
                 }
@@ -7176,8 +7178,8 @@ void sao_filter(struct slice_segment_header *slice, struct pps *pps, struct sps 
             }
             if (sps->ChromaArrayType != 0 && slice->slice_sao_chroma_flag) {
                 //invoke 8.7.3.2 for Cb and Cr
-                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->size, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
-                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->size * 3/2, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
+                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->u_offset, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
+                sao_ctb_modification_process(slice, pps, sps, p, p->pixel + p->v_offset, p->uv_stride, ctu,  0, rx, ry, (1 << sps->CtbLog2SizeY)/sps->SubWidthC, (1 << sps->CtbLog2SizeY)/sps->SubHeightC);
             }
         }
     }
@@ -7371,7 +7373,7 @@ static void deblock_filter(struct slice_segment_header *slice, struct pps *pps,
         if (tcC > 0) {
             int tc2 = tcC * 2;
             for (int plane = 0; plane < 2; plane++) {
-                int16_t *crec = p->pixel + p->size + (plane ? p->size / 2 : 0);
+                int16_t *crec = p->pixel + (plane ? p->v_offset : p->u_offset);
 
                 /* Vertical chroma edges (border is vertical → scan along rows) */
                 for (int by = 0; by < ch; by += 8) {
@@ -7538,13 +7540,18 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         return -EINVAL;
     }
     int y_stride = ((width + 3) >> 2) << 2;
-    int uv_stride = y_stride >> 1;
+    int uv_stride = (sps->chroma_format_idc == CHROMA_444) ? y_stride : (y_stride >> 1);
     int ctu = 1 << sps->CtbLog2SizeY;
+    int pixel_multiplier = (sps->chroma_format_idc == CHROMA_444) ? 3 : 2;
     struct picture p = {
         .size = height * y_stride,
-        .pixel = calloc((size_t)height * y_stride * 2, sizeof(int16_t)),
+        .pixel = calloc((size_t)height * y_stride * pixel_multiplier, sizeof(int16_t)),
         .y_stride = y_stride,
         .uv_stride = uv_stride,
+        .u_offset = height * y_stride,
+        .v_offset = (sps->chroma_format_idc == CHROMA_444)
+                    ? height * y_stride * 2
+                    : height * y_stride * 3 / 2,
     };
     int Log2MinPUSize = sps->MinCbLog2SizeY - 1;
     int PicWidthInMinPUs = sps->PicWidthInCtbsY
@@ -7619,10 +7626,14 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
 
     inloop_filter(hslice.slice, pps, sps, &p);
 
-    if (sps->chroma_format_idc == CHROMA_420) {
+    if (sps->chroma_format_idc == CHROMA_420 ||
+        sps->chroma_format_idc == CHROMA_422 ||
+        sps->chroma_format_idc == CHROMA_444) {
         int16_t *y_plane, *u_plane, *v_plane;
         int full_range = 0;
         int matrix_coeffs = 2;
+        int sub_w = sps->SubWidthC;
+        int sub_h = sps->SubHeightC;
 
         if (sps->vui && sps->vui->video_signal_type_present_flag) {
             full_range = sps->vui->video_full_range_flag;
@@ -7631,25 +7642,38 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
             }
         }
         y_plane = p.pixel + crop_y * y_stride + crop_x;
-        u_plane = p.pixel + p.size +
-                  (crop_y / 2) * uv_stride + crop_x / 2;
-        v_plane = p.pixel + p.size * 3 / 2 +
-                  (crop_y / 2) * uv_stride + crop_x / 2;
-        if (out_bits > 32) {
-            YUV420_to_BGRA64(pixels, out_pitch, y_plane, u_plane, v_plane,
-                    y_stride, uv_stride, crop_w, crop_h, ctu, sps->BitDepthY,
-                    full_range, matrix_coeffs);
-        } else {
-            YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
-                    v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
-                    sps->BitDepthY, full_range, matrix_coeffs);
+        u_plane = p.pixel + p.u_offset +
+                  (crop_y / sub_h) * uv_stride + crop_x / sub_w;
+        v_plane = p.pixel + p.v_offset +
+                  (crop_y / sub_h) * uv_stride + crop_x / sub_w;
+
+        if (sps->chroma_format_idc == CHROMA_420) {
+            if (out_bits > 32) {
+                YUV420_to_BGRA64(pixels, out_pitch, y_plane, u_plane, v_plane,
+                        y_stride, uv_stride, crop_w, crop_h, ctu, sps->BitDepthY,
+                        full_range, matrix_coeffs);
+            } else {
+                YUV420_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
+                        v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                        sps->BitDepthY, full_range, matrix_coeffs);
+            }
+        } else if (sps->chroma_format_idc == CHROMA_422) {
+            if (out_bits > 32) {
+                VDBG(hevc, "CHROMA_422 16-bit BGRA output not yet implemented");
+            } else {
+                YUV422_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
+                        v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                        sps->BitDepthY, full_range, matrix_coeffs);
+            }
+        } else { /* CHROMA_444 */
+            if (out_bits > 32) {
+                VDBG(hevc, "CHROMA_444 16-bit BGRA output not yet implemented");
+            } else {
+                YUV444_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
+                        v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                        sps->BitDepthY, full_range, matrix_coeffs);
+            }
         }
-    } else if (sps->chroma_format_idc == CHROMA_422) {
-        VDBG(hevc, "we got CHROMA_422");
-
-    } else if (sps->chroma_format_idc == CHROMA_444) {
-        VDBG(hevc, "we got CHROMA_444");
-
     } else if (sps->chroma_format_idc == CHROMA_400) {
         VDBG(hevc, "we got CHROMA_400");
         if (out_bits > 32) {

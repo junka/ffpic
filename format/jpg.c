@@ -129,19 +129,21 @@ write_dqt(int id, const uint16_t *quant, FILE *f)
     }
 }
 
-static void
+/* read_dht: parse a DHT segment.  Returns 0 on success, -1 on a malformed
+ * table so the caller rejects the whole image. */
+static int
 read_dht(JPG* j, FILE *f)
 {
     uint16_t tlen;
     FFREAD_IGNORE(&tlen, 2, 1, f);
     tlen = SWAP(tlen);
     if (tlen < 2) {
-        return;
+        return 0;
     }
     tlen -= 2;
     /* safety cap: marker length fits in a uint16, cannot exceed 65533 */
     if (tlen > 65533) {
-        return;
+        return 0;
     }
     while (tlen > 0 && !feof(f) && !ferror(f))
     {
@@ -157,15 +159,15 @@ read_dht(JPG* j, FILE *f)
          * selector plus the sixteen code-length counters. */
         if (ac > 1) {
             VERR(jpg, "invalid DHT table class %u", (unsigned)ac);
-            break;
+            return -1;
         }
         if (id >= 16) {
             VERR(jpg, "invalid DHT table id %u", (unsigned)id);
-            break;
+            return -1;
         }
         if (tlen < 17) {
             VERR(jpg, "truncated DHT segment");
-            break;
+            return -1;
         }
         j->dht[ac][id].table_class = d.table_class;
         j->dht[ac][id].huffman_id = d.huffman_id;
@@ -178,7 +180,7 @@ read_dht(JPG* j, FILE *f)
         }
         /* the table data must fit within the remaining segment bytes */
         if (len < 0 || (uint32_t)len > (uint32_t)tlen) {
-            break;
+            return -1;
         }
         // a progressive image may redefine a table between scans
         free(j->dht[ac][id].data);
@@ -187,6 +189,7 @@ read_dht(JPG* j, FILE *f)
         j->dht[ac][id].len = len;
         tlen -= len;
     }
+    return 0;
 }
 
 // see ITU-T81 Table K.3 and K.5
@@ -966,6 +969,7 @@ JPG_load_one(FILE *f, int skip_flag)
     uint16_t soi, m, len;
     FFREAD_IGNORE(&soi, 2, 1, f);
     if (soi != SOI) {
+        JPG_free(p);
         return NULL;
     }
     m = read_marker_skip_null(f);
@@ -1070,7 +1074,11 @@ JPG_load_one(FILE *f, int skip_flag)
             break;
         case DHT:
             VDBG(jpg, "DHT");
-            read_dht(j, f);
+            if (read_dht(j, f) != 0) {
+                VERR(jpg, "malformed DHT segment");
+                JPG_free(p);
+                return NULL;
+            }
             break;
         case DQT:
             VDBG(jpg, "DQT");
@@ -1134,7 +1142,7 @@ JPG_load(const char *filename, int skip_flag)
     struct pic *p = NULL;
     int load_one_flag = (skip_flag >> 1);
     p = JPG_load_one(f, skip_flag);
-    while (!load_one_flag && ftell(f) < end) {
+    while (p && !load_one_flag && ftell(f) < end) {
         file_enqueue_pic(p);
         p = JPG_load_one(f, skip_flag);
         num ++;
@@ -1143,7 +1151,9 @@ JPG_load(const char *filename, int skip_flag)
     if (num == 1) {
         return p;
     } else {
-        file_enqueue_pic(p);
+        if (p) {
+            file_enqueue_pic(p);
+        }
     }
     return NULL;
 }

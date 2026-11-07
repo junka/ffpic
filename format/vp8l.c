@@ -1017,6 +1017,7 @@ static int vp8l_decode_substream(struct bits_vec *v, int width, int height,
                                    uint32_t **out_pixels) {
     VDBG(vp8l, "VP8L-SUBSTREAM: enter width=%d height=%d\n", width, height);
     vp8l_ctx_t ctx = {0};
+    int ret = -1;
 
     /* color cache */
     int color_cache_bits = 0;
@@ -1029,21 +1030,25 @@ static int vp8l_decode_substream(struct bits_vec *v, int width, int height,
     /* read huffman tables */
     if (vp8l_read_huffman_group(v, color_cache_bits, &ctx.huff) < 0) {
         VERR(vp8l, "VP8L-SUBSTREAM: read_huffman_group FAIL");
-        return -1;
+        goto out;
     }
     VDBG(vp8l, "VP8L-SUBSTREAM: huff OK, decode_pixels %dx%d\n", width, height);
     uint32_t *pixels = calloc((size_t)width * height, sizeof(uint32_t));
-    if (!pixels) return -1;
+    if (!pixels) goto out;
     if (vp8l_decode_pixels(v, &ctx, width, height, pixels) < 0) {
         VERR(vp8l, "VP8L-SUBSTREAM: decode_pixels FAIL");
         free(pixels);
-        return -1;
+        goto out;
     }
     VDBG(vp8l, "VP8L-SUBSTREAM: OK");
     *out_pixels = pixels;
-    return 0;
+    ret = 0;
+out:
+    for (int i = 0; i < HUFFMAN_CODES_PER_META_CODE; i++) {
+        vp8l_huff_table_free(&ctx.huff.tables[i]);
+    }
+    return ret;
 }
-
 /* Apply inverse transforms IN REVERSE ORDER.
  * buf initially contains cur_w × cur_h pixels (LZ77+Huffman output).
  * Output: canvas_width × canvas_height pixels in buf. */

@@ -543,7 +543,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
     int cw = g->ls_dsc.screen_witdh, ch = g->ls_dsc.screen_height;
     if (cw <= 0 || ch <= 0) {
         VERR(gif, "invalid canvas size");
-        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+        GIF_free(holder);
         return NULL;
     }
 
@@ -558,7 +558,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
 
         uint8_t *canvas = (uint8_t*)calloc((size_t)bytes, 1);
         if (!canvas) {
-            pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+            GIF_free(holder);
             return NULL;
         }
         gif_fill_background(canvas, pitch, g);
@@ -583,7 +583,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
     uint8_t *prev_before = (uint8_t*)calloc((size_t)bytes, 1);
     if (!canvas || !prev_before) {
         free(canvas); free(prev_before);
-        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+        GIF_free(holder);
         return NULL;
     }
 
@@ -648,7 +648,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
 
     if (last == NULL) {
         /* no valid frame produced — free GIF container ourselves */
-        pic_free(holder->pic); holder->pic = NULL; pic_free(holder);
+        GIF_free(holder);
         return NULL;
     }
 
@@ -832,6 +832,9 @@ void GIF_free(struct pic *p) {
         if (gif->ls_dsc.global_color_table_flag)
             free(gif->global_ct);
     }
+    /* pic_new_fullcanvas owns its pixel buffer directly */
+    free(p->pixels);
+    p->pixels = NULL;
     pic_free(p);
 }
 static struct file_ops gif_ops = {

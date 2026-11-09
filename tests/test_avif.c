@@ -418,6 +418,79 @@ test_animation(void)
     return rc;
 }
 
+/* tests/data/avif_anim_alpha.avif carries a second, auxv-handled AV1 track
+ * with the alpha plane.  The first frame is returned and the rest queued;
+ * every frame must have non-opaque alpha. */
+static int
+check_alpha_frame(const char *path, struct pic *p, int frame, int *rc)
+{
+    if (!p) {
+        printf("%s: frame %d is missing\n", path, frame);
+        *rc = -1;
+        return -1;
+    }
+    if (p->width != 64 || p->height != 48 || p->duration_ms != 125) {
+        printf("%s: frame %d is %dx%d duration %u\n", path, frame,
+               p->width, p->height, p->duration_ms);
+        *rc = -1;
+    }
+    int amin = 255, amax = 0;
+    long color = 0;
+    for (int y = 0; y < p->height; y++) {
+        uint8_t *row = (uint8_t *)p->pixels + (size_t)y * p->pitch;
+        for (int x = 0; x < p->width; x++) {
+            uint8_t *px = row + (size_t)x * 4;
+            if (px[0] || px[1] || px[2]) color++;
+            if (px[3] < amin) amin = px[3];
+            if (px[3] > amax) amax = px[3];
+        }
+    }
+    if (amin == amax || amin == 255) {
+        printf("%s: frame %d alpha is [%d,%d], the alpha track was not "
+               "composited\n", path, frame, amin, amax);
+        *rc = -1;
+    }
+    if (color == 0) {
+        printf("%s: frame %d has no colour samples\n", path, frame);
+        *rc = -1;
+    }
+    return 0;
+}
+
+static int
+test_animation_alpha(void)
+{
+    const char *path = TEST_DATA_DIR "/avif_anim_alpha.avif";
+    struct file_ops *ops = file_probe(path);
+    int rc = 0, frames = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "AVIF")) {
+        printf("%s: not detected as AVIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (!p) {
+        printf("%s: the first animation frame was not returned\n", path);
+        rc = -1;
+    }
+    while ((q = p ? p : file_dequeue_pic()) != NULL) {
+        frames++;
+        check_alpha_frame(path, q, frames, &rc);
+        file_free(ops, q);
+        p = NULL;
+    }
+    if (frames != 8) {
+        printf("%s: %d frames, expected 8\n", path, frames);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[avif_anim_alpha]: %d frames with composed alpha\n",
+               frames);
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -428,6 +501,9 @@ int main(void)
         return -1;
     }
     if (test_animation()) {
+        return -1;
+    }
+    if (test_animation_alpha()) {
         return -1;
     }
     if (test_protected()) {

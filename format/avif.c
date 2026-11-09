@@ -19,6 +19,10 @@ VLOG_REGISTER(avif, DEBUG)
 
 static void AVIF_free(struct pic *p);
 static int avif_item_protected(const AVIF *h, uint32_t item_id);
+static void avif_apply_alpha16(const struct av1_image *alpha, uint8_t *pixels,
+                               int pitch, int w, int h, int premultiplied);
+static void avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels,
+                             int pitch, int w, int h, int premultiplied);
 
 static int
 AVIF_probe(FILE *f)
@@ -650,84 +654,213 @@ static uint32_t avif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {
     return r;
 }
 
+struct avif_sample_ref {
+    uint64_t offset;
+    uint32_t size;
+    uint32_t duration_ms;
+};
+
+/* Locate the first av01 track whose handler is 'auxv' (alpha) or a colour
+ * video handler.  AVIF sequences signal the alpha plane as a second track. */
+static int
+avif_find_av01_track(const struct moov_box *moov, int want_aux,
+                     int *stsd_idx_out)
+{
+    for (int t = 0; t < moov->trak_num; t++) {
+        int is_aux = moov->trak[t].mdia.hdlr.handler_type ==
+                     FOURCC2UINT('a','u','x','v');
+        if (is_aux != want_aux)
+            continue;
+        struct stbl_box *stbl = &moov->trak[t].mdia.minf.stbl;
+        for (uint32_t s = 0; s < stbl->stsd.entry_count; s++) {
+            if (stbl->stsd.entries[s] &&
+                stbl->stsd.entries[s]->type == FOURCC2UINT('a','v','0','1')) {
+                *stsd_idx_out = (int)s;
+                return t;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Map every sample of a track to its file offset, size and presentation
+ * duration.  Chunks are contiguous and stsc gives the run lengths. */
+static int
+avif_collect_samples(struct trak_box *trak, int stsd_idx UNUSED,
+                     struct avif_sample_ref **out, int *count_out)
+{
+    struct stbl_box *stbl = &trak->mdia.minf.stbl;
+    struct mdhd_box *mdhd = &trak->mdia.mdhd;
+    int count = (int)stbl->stsz.sample_count;
+
+    *out = NULL;
+    *count_out = 0;
+    if (count <= 0 || stbl->stco.entry_count == 0)
+        return -EINVAL;
+    struct avif_sample_ref *tab = calloc((size_t)count, sizeof(*tab));
+    if (!tab)
+        return -ENOMEM;
+    uint32_t timescale = mdhd->timescale ? mdhd->timescale : 1;
+    uint32_t ei = 0;
+    uint32_t erem = stbl->stts.entry_count ? stbl->stts.sample_count[0] : 0;
+    int si = 0;
+
+    for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < count; ci++) {
+        uint64_t cum = stbl->stco.chunk_offset[ci];
+        uint32_t spc = avif_stsc_spc(&stbl->stsc, ci);
+
+        if (spc == 0)
+            spc = (uint32_t)(count - si);
+        for (uint32_t k = 0; k < spc && si < count; k++, si++) {
+            uint32_t dt = 0;
+            tab[si].offset = cum;
+            tab[si].size = stbl->stsz.entry_size[si];
+            if (ei < stbl->stts.entry_count) {
+                dt = stbl->stts.sample_delta[ei];
+                if (erem > 0 && --erem == 0 &&
+                    ei + 1 < stbl->stts.entry_count) {
+                    ei++;
+                    erem = stbl->stts.sample_count[ei];
+                }
+            }
+            tab[si].duration_ms =
+                (uint32_t)(((uint64_t)dt * 1000 + timescale / 2) / timescale);
+            cum += tab[si].size;
+        }
+    }
+    if (si != count) {
+        free(tab);
+        return -EINVAL;
+    }
+    *out = tab;
+    *count_out = count;
+    return 0;
+}
+
+static uint8_t *
+avif_read_sample(FILE *f, const struct avif_sample_ref *s)
+{
+    uint8_t *data = malloc(s->size ? s->size : 1);
+
+    if (!data)
+        return NULL;
+    if (s->size > 0) {
+        fseek(f, (long)s->offset, SEEK_SET);
+        if (fread(data, 1, s->size, f) != s->size) {
+            free(data);
+            return NULL;
+        }
+    }
+    return data;
+}
+
 static int
 avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_out)
 {
     if (first_pic_out)
         *first_pic_out = NULL;
-    int trak_idx = -1, stsd_idx = -1;
-    for (int t = 0; t < moov->trak_num && trak_idx < 0; t++) {
-        struct stbl_box *stbl = &moov->trak[t].mdia.minf.stbl;
-        if (moov->trak[t].mdia.hdlr.handler_type == FOURCC2UINT('a','u','x','v'))
-            continue;   /* alpha plane, not a colour frame */
-        for (uint32_t s = 0; s < stbl->stsd.entry_count; s++)
-            if (stbl->stsd.entries[s] && stbl->stsd.entries[s]->type == FOURCC2UINT('a','v','0','1')) {
-                trak_idx = t; stsd_idx = (int)s; break;
-            }
-    }
-    if (trak_idx < 0) return 0;
-    struct trak_box *trak = &moov->trak[trak_idx];
-    struct stbl_box *stbl = &trak->mdia.minf.stbl;
-    struct mdhd_box *mdhd = &trak->mdia.mdhd;
-    struct AV1SampleEntry *entry = (struct AV1SampleEntry *)stbl->stsd.entries[stsd_idx];
-    if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0)
+    int cstsd = -1, astsd = -1;
+    int ct = avif_find_av01_track(moov, 0, &cstsd);
+    if (ct < 0)
         return 0;
-    uint32_t timescale = mdhd->timescale ? mdhd->timescale : 1;
-    int decoded = 0; uint32_t si = 0;
-    for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < stbl->stsz.sample_count; ci++) {
-        uint64_t chunk_off = stbl->stco.chunk_offset[ci];
-        uint32_t spc = avif_stsc_spc(&stbl->stsc, ci);
-        if (spc == 0) spc = stbl->stsz.sample_count - si;
-        uint64_t cum = chunk_off;
-        for (uint32_t k = 0; k < spc && si < stbl->stsz.sample_count; k++) {
-            uint32_t sz = stbl->stsz.entry_size[si];
-            fseek(f, cum, SEEK_SET);
-            uint8_t *data = malloc(sz ? sz : 1);
-            if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
-            struct av1_image img;
-            memset(&img, 0, sizeof(img));
-            int rc = av1_decode_track_sample(data, sz, &entry->config, &img);
-            free(data);
-            if (rc != 0) {
-                VERR(avif, "track sample %u failed: %d; AVIF animation "
-                     "requires all-intra samples", si, rc);
-                av1_image_free(&img);
-                si = stbl->stsz.sample_count;
-                break;
-            }
-            if (rc == 0) {
-                int wide = img.bitdepth > 8;
-                struct pic *p = pic_alloc(sizeof(AVIF));
-                p->width = img.width; p->height = img.height;
-                p->depth = wide ? 64 : 32;
-                p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
-                p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_BGRA_BYTES;
-                p->pixels = malloc((size_t)p->pitch * p->height);
-                if (p->pixels) {
-                    if (wide) av1_image_to_rgba16(&img, p->pixels, p->pitch);
-                    else av1_image_to_bgra(&img, p->pixels, p->pitch);
-                }
-                uint64_t dt = 0;
-                if (stbl->stts.entry_count > 0) {
-                    uint32_t a = 0;
-                    for (uint32_t ei = 0; ei < stbl->stts.entry_count; ei++) {
-                        a += stbl->stts.sample_count[ei];
-                        if (si < a) { dt = stbl->stts.sample_delta[ei]; break; }
-                    }
-                }
-                uint32_t dms = (uint32_t)((dt * 1000 + timescale/2) / timescale);
-                pic_set_duration(p, dms);
-                if (decoded == 0 && first_pic_out) *first_pic_out = p;
-                else file_enqueue_pic(p);
-                decoded++;
-                av1_image_free(&img);
-            }
-            cum += sz; si++;
-        }
+    int at = avif_find_av01_track(moov, 1, &astsd);
+    struct avif_sample_ref *ctab = NULL, *atab = NULL;
+    int cn = 0, an = 0;
+
+    if (avif_collect_samples(&moov->trak[ct], cstsd, &ctab, &cn) != 0)
+        return 0;
+    if (at >= 0 &&
+        avif_collect_samples(&moov->trak[at], astsd, &atab, &an) != 0) {
+        atab = NULL;
+        an = 0;
     }
+    struct AV1SampleEntry *ce = (struct AV1SampleEntry *)
+        moov->trak[ct].mdia.minf.stbl.stsd.entries[cstsd];
+    struct AV1SampleEntry *ae = at >= 0 ? (struct AV1SampleEntry *)
+        moov->trak[at].mdia.minf.stbl.stsd.entries[astsd] : NULL;
+    if (an > cn)
+        an = cn;                /* the alpha track may be shorter */
+
+    int decoded = 0;
+    for (int i = 0; i < cn; i++) {
+        uint8_t *cdata = avif_read_sample(f, &ctab[i]);
+        struct av1_image img;
+        memset(&img, 0, sizeof(img));
+        if (!cdata ||
+            av1_decode_track_sample(cdata, ctab[i].size, &ce->config,
+                                    &img) != 0) {
+            VERR(avif, "track sample %d failed; AVIF animation requires "
+                 "all-intra samples", i);
+            free(cdata);
+            av1_image_free(&img);
+            break;
+        }
+        free(cdata);
+
+        struct av1_image alpha;
+        int has_alpha = 0;
+        memset(&alpha, 0, sizeof(alpha));
+        if (ae && i < an) {
+            uint8_t *adata = avif_read_sample(f, &atab[i]);
+            if (adata &&
+                av1_decode_track_sample(adata, atab[i].size, &ae->config,
+                                        &alpha) == 0) {
+                has_alpha = 1;
+            } else {
+                VWARN(avif, "alpha frame %d failed to decode", i);
+                av1_image_free(&alpha);
+            }
+            free(adata);
+        }
+
+        int wide = img.bitdepth > 8;
+        struct pic *p = pic_alloc(sizeof(AVIF));
+        p->width = img.width;
+        p->height = img.height;
+        p->depth = wide ? 64 : 32;
+        p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+        p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_BGRA_BYTES;
+        p->pixels = malloc((size_t)p->pitch * p->height);
+        if (!p->pixels) {
+            pic_free(p);
+            av1_image_free(&img);
+            if (has_alpha)
+                av1_image_free(&alpha);
+            break;
+        }
+        if (wide)
+            av1_image_to_rgba16(&img, p->pixels, p->pitch);
+        else
+            av1_image_to_bgra(&img, p->pixels, p->pitch);
+        if (has_alpha) {
+            if (alpha.width == img.width && alpha.height == img.height) {
+                if (wide)
+                    avif_apply_alpha16(&alpha, p->pixels, p->pitch,
+                                       img.width, img.height, 0);
+                else
+                    avif_apply_alpha(&alpha, p->pixels, p->pitch,
+                                     img.width, img.height, 0);
+            } else {
+                VWARN(avif, "alpha frame is %dx%d, picture is %dx%d",
+                      alpha.width, alpha.height, img.width, img.height);
+            }
+        }
+        pic_set_duration(p, ctab[i].duration_ms);
+        if (decoded == 0 && first_pic_out) {
+            *first_pic_out = p;
+        } else if (!file_enqueue_pic(p)) {
+            VERR(avif, "animation queue is full at frame %d", i);
+            pic_free(p);
+        }
+        decoded++;
+        av1_image_free(&img);
+        if (has_alpha)
+            av1_image_free(&alpha);
+    }
+    free(ctab);
+    free(atab);
     return decoded;
 }
-
 
 
 void decode_av01(uint8_t *data, uint64_t len, uint8_t **pixels UNUSED)

@@ -1102,70 +1102,222 @@ static uint32_t heif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {
     return r;
 }
 
+struct heif_sample_ref {
+    uint64_t offset;
+    uint32_t size;
+    uint32_t duration_ms;
+};
+
+/* Map every sample of a track to its file offset, size and duration. */
+static int
+heif_collect_samples(struct stbl_box *stbl, uint32_t timescale,
+                     struct heif_sample_ref **out, int *count_out)
+{
+    int count = (int)stbl->stsz.sample_count;
+
+    *out = NULL;
+    *count_out = 0;
+    if (count <= 0 || stbl->stco.entry_count == 0)
+        return -EINVAL;
+    struct heif_sample_ref *tab = calloc((size_t)count, sizeof(*tab));
+    if (!tab)
+        return -ENOMEM;
+    if (timescale == 0)
+        timescale = 1;
+    uint32_t ei = 0;
+    uint32_t erem = stbl->stts.entry_count ? stbl->stts.sample_count[0] : 0;
+    int si = 0;
+
+    for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < count; ci++) {
+        uint64_t cum = stbl->stco.chunk_offset[ci];
+        uint32_t spc = heif_stsc_spc(&stbl->stsc, ci);
+
+        if (spc == 0)
+            spc = (uint32_t)(count - si);
+        for (uint32_t k = 0; k < spc && si < count; k++, si++) {
+            uint32_t dt = 0;
+            tab[si].offset = cum;
+            tab[si].size = stbl->stsz.entry_size[si];
+            if (ei < stbl->stts.entry_count) {
+                dt = stbl->stts.sample_delta[ei];
+                if (erem > 0 && --erem == 0 &&
+                    ei + 1 < stbl->stts.entry_count) {
+                    ei++;
+                    erem = stbl->stts.sample_count[ei];
+                }
+            }
+            tab[si].duration_ms =
+                (uint32_t)(((uint64_t)dt * 1000 + timescale / 2) / timescale);
+            cum += tab[si].size;
+        }
+    }
+    if (si != count) {
+        free(tab);
+        return -EINVAL;
+    }
+    *out = tab;
+    *count_out = count;
+    return 0;
+}
+
+static int
+heif_trak_supported(const struct trak_box *trak, int *stsd_idx)
+{
+    const struct stbl_box *stbl = &trak->mdia.minf.stbl;
+
+    for (uint32_t s = 0; s < stbl->stsd.entry_count; s++) {
+        const struct SampleEntry *e = stbl->stsd.entries[s];
+        if (e && (e->type == FOURCC2UINT('h','v','c','1') ||
+                  e->type == FOURCC2UINT('h','e','v','1'))) {
+            if (stsd_idx)
+                *stsd_idx = (int)s;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Find an unused auxiliary (alpha) video track with the same sample count. */
+static int
+heif_find_alpha_track(const struct moov_box *b, int color_trak, int count,
+                      int *used)
+{
+    for (int t = 0; t < b->trak_num; t++) {
+        if (t == color_trak || used[t])
+            continue;
+        if (b->trak[t].mdia.hdlr.handler_type != FOURCC2UINT('a','u','x','v'))
+            continue;
+        if ((int)b->trak[t].mdia.minf.stbl.stsz.sample_count != count)
+            continue;
+        if (!heif_trak_supported(&b->trak[t], NULL))
+            continue;
+        return t;
+    }
+    return -1;
+}
+
 static int
 decode_moov(FILE *f, struct moov_box *b)
 {
     int total = 0;
+    int *used = calloc((size_t)(b->trak_num > 0 ? b->trak_num : 1),
+                       sizeof(*used));
+    if (!used)
+        return 0;
+
     for (int t = 0; t < b->trak_num; t++) {
         struct trak_box *trak = &b->trak[t];
         struct stbl_box *stbl = &trak->mdia.minf.stbl;
         struct mdhd_box *mdhd = &trak->mdia.mdhd;
-        if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0) continue;
-        /* an alpha track is an auxiliary plane of the colour track, not a
-         * frame of its own */
-        if (trak->mdia.hdlr.handler_type == FOURCC2UINT('a','u','x','v')) {
-            VDBG(heif, "skipping auxiliary video track %d", t);
+        /* an alpha track is handled together with its colour track */
+        if (trak->mdia.hdlr.handler_type == FOURCC2UINT('a','u','x','v'))
             continue;
-        }
+        if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0)
+            continue;
+        int stsd_idx = -1;
+        if (!heif_trak_supported(trak, &stsd_idx))
+            continue;
+        struct HEVCSampleEntry *ce = (struct HEVCSampleEntry *)
+            stbl->stsd.entries[stsd_idx];
+        struct hevc_param_set *hps = &ce->config.hps;
+        int out_bits = heif_output_bits(&ce->config);
         int width = (int)fix16_16(trak->tkhd.width);
         int height = (int)fix16_16(trak->tkhd.height);
-        struct hevc_param_set *hps = NULL; int out_bits = 8; int stsd_idx = -1;
-        for (uint32_t s = 0; s < stbl->stsd.entry_count; s++) {
-            struct SampleEntry *e = stbl->stsd.entries[s];
-            if (e && (e->type == FOURCC2UINT('h','v','c','1') || e->type == FOURCC2UINT('h','e','v','1'))) {
-                hps = &((struct HEVCSampleEntry*)e)->config.hps;
-                out_bits = heif_output_bits(&((struct HEVCSampleEntry*)e)->config);
-                stsd_idx = (int)s; break;
+        if (width <= 0 || height <= 0) {
+            VERR(heif, "track %d has no usable size", t);
+            continue;
+        }
+
+        int count = (int)stbl->stsz.sample_count;
+        struct heif_sample_ref *ctab = NULL;
+        int cn = 0;
+        if (heif_collect_samples(stbl, mdhd->timescale, &ctab, &cn) != 0)
+            continue;
+
+        int at = heif_find_alpha_track(b, t, count, used);
+        struct heif_sample_ref *atab = NULL;
+        struct HEVCSampleEntry *ae = NULL;
+        int aw = width, ah = height, an = 0;
+        if (at >= 0) {
+            struct trak_box *atrak = &b->trak[at];
+            int astsd = -1;
+
+            heif_trak_supported(atrak, &astsd);
+            ae = (struct HEVCSampleEntry *)
+                atrak->mdia.minf.stbl.stsd.entries[astsd];
+            if (heif_collect_samples(&atrak->mdia.minf.stbl,
+                                     atrak->mdia.mdhd.timescale,
+                                     &atab, &an) != 0) {
+                atab = NULL;
+                ae = NULL;
+                an = 0;
+            } else {
+                int w = (int)fix16_16(atrak->tkhd.width);
+                int h = (int)fix16_16(atrak->tkhd.height);
+                if (w > 0) aw = w;
+                if (h > 0) ah = h;
+                used[at] = 1;
+                VDBG(heif, "compositing alpha track %d onto colour track %d",
+                     at, t);
             }
         }
-        if (stsd_idx < 0) continue;
-        uint32_t timescale = mdhd->timescale ? mdhd->timescale : 1;
-        uint32_t si = 0;
-        for (uint32_t ci = 0; ci < stbl->stco.entry_count && si < stbl->stsz.sample_count; ci++) {
-            uint64_t chunk_off = stbl->stco.chunk_offset[ci];
-            uint32_t spc = heif_stsc_spc(&stbl->stsc, ci);
-            if (spc == 0) spc = stbl->stsz.sample_count - si;
-            uint64_t cum = chunk_off;
-            for (uint32_t k = 0; k < spc && si < stbl->stsz.sample_count; k++) {
-                uint32_t sz = stbl->stsz.entry_size[si];
-                fseek(f, cum, SEEK_SET);
-                uint8_t *data = malloc(sz ? sz : 1);
-                if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
-                struct pic *p1 = HEIF_load_one(width, height, data, sz, hps, out_bits);
-                free(data);
-                if (!p1) {
-                    VERR(heif, "track %d sample %u failed to decode; "
-                         "animation requires all-intra samples", t, si);
-                    si = stbl->stsz.sample_count;
-                    break;
+        if (an > cn)
+            an = cn;
+
+        for (int i = 0; i < cn; i++) {
+            uint8_t *cdata = malloc(ctab[i].size ? ctab[i].size : 1);
+            struct pic *p1 = NULL;
+
+            if (cdata && ctab[i].size > 0) {
+                fseek(f, (long)ctab[i].offset, SEEK_SET);
+                if (fread(cdata, 1, ctab[i].size, f) != ctab[i].size) {
+                    free(cdata);
+                    cdata = NULL;
                 }
-                if (p1) {
-                    uint64_t dt = 0;
-                    if (stbl->stts.entry_count > 0) {
-                        uint32_t a = 0;
-                        for (uint32_t ei = 0; ei < stbl->stts.entry_count; ei++) {
-                            a += stbl->stts.sample_count[ei];
-                            if (si < a) { dt = stbl->stts.sample_delta[ei]; break; }
-                        }
+            }
+            if (cdata)
+                p1 = HEIF_load_one(width, height, cdata, ctab[i].size, hps,
+                                   out_bits);
+            free(cdata);
+            if (!p1) {
+                VERR(heif, "track %d sample %d failed to decode; animation "
+                     "requires all-intra samples", t, i);
+                break;
+            }
+            if (atab && i < an) {
+                uint8_t *adata = malloc(atab[i].size ? atab[i].size : 1);
+                struct pic *pa = NULL;
+
+                if (adata && atab[i].size > 0) {
+                    fseek(f, (long)atab[i].offset, SEEK_SET);
+                    if (fread(adata, 1, atab[i].size, f) != atab[i].size) {
+                        free(adata);
+                        adata = NULL;
                     }
-                    uint32_t dms = (uint32_t)((dt * 1000 + timescale/2) / timescale);
-                    pic_set_duration(p1, dms);
-                    file_enqueue_pic(p1); total++;
                 }
-                cum += sz; si++;
+                if (adata)
+                    pa = HEIF_load_one(aw, ah, adata, atab[i].size,
+                                       &ae->config.hps, p1->depth);
+                free(adata);
+                if (pa) {
+                    heif_apply_alpha(p1, pa, false);
+                    heif_pic_free(pa);
+                } else {
+                    VWARN(heif, "alpha frame %d failed to decode", i);
+                }
             }
+            pic_set_duration(p1, ctab[i].duration_ms);
+            if (!file_enqueue_pic(p1)) {
+                VERR(heif, "animation queue is full at frame %d", i);
+                heif_pic_free(p1);
+                break;
+            }
+            total++;
         }
+        free(ctab);
+        free(atab);
     }
+    free(used);
     return total;
 }
 

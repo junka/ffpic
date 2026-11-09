@@ -93,6 +93,10 @@ struct hvcC_box {
 struct HEVCSampleEntry {
     struct VisualSampleEntry sample;
     struct hvcC_box config;
+    struct colr_box colr;       /* optional nclx/ICC colour information */
+    struct clap_box clap;       /* optional clean aperture */
+    int has_colr;
+    int has_clap;
     //MPEG4ExtensionDescriptorsBox; // optional
 };
 

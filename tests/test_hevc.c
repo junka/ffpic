@@ -647,6 +647,178 @@ test_animation_alpha(void)
     return rc;
 }
 
+static struct pic *
+first_animation_frame(const char *name, struct file_ops **ops_out)
+{
+    char path[512];
+
+    snprintf(path, sizeof(path), "%s/%s", TEST_DATA_DIR, name);
+    *ops_out = file_probe(path);
+    if (!*ops_out)
+        return NULL;
+    struct pic *p = file_load(*ops_out, path, 0);
+    if (!p) {
+        p = file_dequeue_pic();
+    }
+    return p;
+}
+
+static void
+free_animation_queue(struct file_ops *ops)
+{
+    struct pic *q;
+
+    while ((q = file_dequeue_pic()) != NULL) {
+        file_free(ops, q);
+    }
+}
+
+static int
+check_animation_dims(const char *name, int want_w, int want_h)
+{
+    struct file_ops *ops = NULL;
+    struct pic *p = first_animation_frame(name, &ops);
+    int frames = 1, rc = 0;
+
+    if (!p) {
+        printf("%s: no frame decoded\n", name);
+        free_animation_queue(ops);
+        return -1;
+    }
+    for (;;) {
+        if (p->width != want_w || p->height != want_h ||
+            p->duration_ms != 125) {
+            printf("%s: frame %d is %dx%d duration %u, want %dx%d 125\n",
+                   name, frames, p->width, p->height, p->duration_ms,
+                   want_w, want_h);
+            rc = -1;
+        }
+        file_free(ops, p);
+        p = file_dequeue_pic();
+        if (!p)
+            break;
+        frames++;
+    }
+    if (frames != 8) {
+        printf("%s: %d frames, expected 8\n", name, frames);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[%s]: 8 frames, %dx%d, 125 ms\n", name, want_w, want_h);
+    }
+    return rc;
+}
+
+/* The display matrix must rotate the frame, not just change its reported
+ * size: compare a few samples against the unrotated image. */
+static int
+check_animation_rotation(void)
+{
+    struct file_ops *bops = NULL, *rops = NULL;
+    struct pic *base = first_animation_frame("hevc_anim.heic", &bops);
+    /* drain the rest of the first sequence before loading the second, or
+     * its frames would be handed out as the rotated file's first frame */
+    if (base) free_animation_queue(bops);
+    struct pic *rot = first_animation_frame("hevc_anim_rot.heic", &rops);
+    int rc = 0;
+
+    if (!base || !rot || base->width != 64 || base->height != 48 ||
+        rot->width != 48 || rot->height != 64) {
+        printf("rotation: unexpected frame sizes base=%dx%d rot=%dx%d\n",
+               base?base->width:-1, base?base->height:-1,
+               rot?rot->width:-1, rot?rot->height:-1);
+        rc = -1;
+        goto out;
+    }
+    for (int y = 0; y < 64 && !rc; y += 7) {
+        for (int x = 0; x < 48 && !rc; x += 5) {
+            const uint8_t *a = (uint8_t *)rot->pixels +
+                               (size_t)y * rot->pitch + (size_t)x * 4;
+            const uint8_t *b = (uint8_t *)base->pixels +
+                               (size_t)(47 - x) * base->pitch +
+                               (size_t)y * 4;
+            if (memcmp(a, b, 4) != 0) {
+                printf("rotation: pixel %d,%d does not match the "
+                       "unrotated frame\n", x, y);
+                rc = -1;
+            }
+        }
+    }
+    if (!rc) {
+        printf("OK[hevc_anim_rot]: 90 degree display matrix applied\n");
+    }
+out:
+    if (base) file_free(bops, base);
+    if (rot) file_free(rops, rot);
+    free_animation_queue(bops ? bops : rops);
+    return rc;
+}
+
+static int
+test_animation_variants(void)
+{
+    int rc = 0;
+
+    if (check_animation_dims("hevc_anim_odd.heic", 62, 48))
+        rc = -1;
+    if (check_animation_dims("hevc_anim_colr.heic", 64, 48))
+        rc = -1;
+    if (check_animation_dims("hevc_anim_rot.heic", 48, 64))
+        rc = -1;
+    if (check_animation_rotation())
+        rc = -1;
+    return rc;
+}
+
+/* A file with both a primary still item and an image sequence: the still is
+ * the first frame, the track frames follow it. */
+static int
+test_animation_primary(void)
+{
+    const char *path = TEST_DATA_DIR "/heic_anim_primary.heic";
+    struct file_ops *ops = file_probe(path);
+    int rc = 0, frames = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: expected the frames to be queued\n", path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    q = file_dequeue_pic();
+    if (!q || q->width != 32 || q->height != 32) {
+        printf("%s: the primary still is not the first queued frame\n",
+               path);
+        rc = -1;
+        if (q)
+            file_free(ops, q);
+    } else {
+        file_free(ops, q);
+    }
+    while ((q = file_dequeue_pic()) != NULL) {
+        frames++;
+        if (q->width != 64 || q->height != 48 || q->duration_ms != 125) {
+            printf("%s: track frame %d is %dx%d duration %u\n", path, frames,
+                   q->width, q->height, q->duration_ms);
+            rc = -1;
+        }
+        file_free(ops, q);
+    }
+    if (frames != 8) {
+        printf("%s: %d track frames, expected 8\n", path, frames);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[heic_anim_primary]: still first, then 8 track frames\n");
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -683,6 +855,12 @@ int main(void)
         return -1;
     }
     if (test_animation_alpha()) {
+        return -1;
+    }
+    if (test_animation_variants()) {
+        return -1;
+    }
+    if (test_animation_primary()) {
         return -1;
     }
     return 0;

@@ -457,7 +457,7 @@ read_pixi_box(FILE *f, struct pixi_box *b)
     return b->size;
 }
 
-static int
+int
 read_colr_box(FILE *f, struct colr_box *b)
 {
     FFREAD_BOX_ST(b, f, FOURCC2UINT('c', 'o', 'l', 'r'));
@@ -1605,6 +1605,57 @@ packed_frame_transform(struct packed_frame *im, int kind, int nw, int nh,
     im->height = nh;
     im->pitch = nw * im->bpp;
     return 0;
+}
+
+/* Decode the tkhd 3x3 display matrix.  Only the 2x2 rotation/mirror part is
+ * used; the translation column is a presentation offset, not a pixel
+ * transform. */
+int
+tkhd_matrix_transforms(const struct tkhd_box *t, int kinds[2])
+{
+    int32_t m[9];
+    int a, b, c, d, sa, sb, sc, sd;
+
+    for (int i = 0; i < 9; i++)
+        m[i] = (int32_t)SWAP(t->matrix[i]);
+    a = m[0]; b = m[1]; c = m[3]; d = m[4];
+#define SIGN16(v) ((v) > 32768 ? 1 : (v) < -32768 ? -1 : 0)
+    sa = SIGN16(a); sb = SIGN16(b); sc = SIGN16(c); sd = SIGN16(d);
+#undef SIGN16
+
+    if (sa == 1 && sb == 0 && sc == 0 && sd == 1)
+        return 0;
+    if (sa == -1 && sb == 0 && sc == 0 && sd == -1) {
+        kinds[0] = PACKED_ROT180;
+        return 1;
+    }
+    if (sa == 0 && sb == 1 && sc == -1 && sd == 0) {
+        kinds[0] = PACKED_ROT270;
+        return 1;
+    }
+    if (sa == 0 && sb == -1 && sc == 1 && sd == 0) {
+        kinds[0] = PACKED_ROT90;
+        return 1;
+    }
+    if (sa == -1 && sb == 0 && sc == 0 && sd == 1) {
+        kinds[0] = PACKED_HFLIP;
+        return 1;
+    }
+    if (sa == 1 && sb == 0 && sc == 0 && sd == -1) {
+        kinds[0] = PACKED_VFLIP;
+        return 1;
+    }
+    if (sa == 0 && sb == 1 && sc == 1 && sd == 0) {
+        kinds[0] = PACKED_ROT270;
+        kinds[1] = PACKED_HFLIP;
+        return 2;
+    }
+    if (sa == 0 && sb == -1 && sc == -1 && sd == 0) {
+        kinds[0] = PACKED_ROT270;
+        kinds[1] = PACKED_VFLIP;
+        return 2;
+    }
+    return 0;                     /* unrecognised matrix: leave as-is */
 }
 
 /* The clean aperture is centred on the image centre displaced by the

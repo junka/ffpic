@@ -149,8 +149,34 @@ int read_HEVCSampleEntry(FILE *f, struct SampleEntry **b)
     read_VisualSampleEntry(f, &e->sample);
     assert(e->sample.entry.type == FOURCC2UINT('h', 'v', 'c', '1') ||
            e->sample.entry.type == FOURCC2UINT('h', 'e', 'v', '1'));
-    read_hvcc_box(f, (struct box **)(&e->config));
-    fseek(f, entry_start + (long)e->sample.entry.size, SEEK_SET);
+    /* read_hvcc_box() expects a pointer slot, but config is inline here:
+     * parse into a temporary and copy the struct so lengthSizeMinusOne and
+     * the parameter sets actually land in e->config. */
+    struct hvcC_box *hb = NULL;
+    read_hvcc_box(f, (struct box **)&hb);
+    if (hb) {
+        e->config = *hb;
+        free(hb);
+    }
+    long entry_end = entry_start + (long)e->sample.entry.size;
+    long pos = ftell(f);
+    while (pos + 8 <= entry_end) {
+        struct box pb;
+        uint32_t ty = probe_box(f, &pb);
+        if (!ty || pb.size < 8 || pos + (long)pb.size > entry_end)
+            break;
+        if (ty == FOURCC2UINT('c','o','l','r')) {
+            read_colr_box(f, &e->colr);
+            e->has_colr = 1;
+        } else if (ty == FOURCC2UINT('c','l','a','p')) {
+            read_clap_box(f, &e->clap);
+            e->has_clap = 1;
+        } else {
+            fseek(f, (long)pb.size, SEEK_CUR);
+        }
+        pos = ftell(f);
+    }
+    fseek(f, entry_end, SEEK_SET);
     return 0;
 }
 
@@ -372,13 +398,18 @@ fail:
 }
 
 int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
-                int height, struct hevc_param_set *hps, int out_bits) {
+                int height, struct hevc_param_set *hps, int out_bits,
+                int length_size) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
-    while (len >= 4) {
-        uint32_t sample_len = (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3];
-        p += 4;
-        len -= 4;
+    if (length_size < 1 || length_size > 4)
+        length_size = 4;
+    while (len >= (uint64_t)length_size) {
+        uint32_t sample_len = 0;
+        for (int i = 0; i < length_size; i++)
+            sample_len = (sample_len << 8) | p[i];
+        p += length_size;
+        len -= length_size;
         if (sample_len > len) {
             VERR(heif, "sample length %u runs past the item", sample_len);
             return -EINVAL;
@@ -494,10 +525,11 @@ heif_pic_alloc(int width, int height, int bits)
         return NULL;
     }
     struct pic *p = pic_alloc(sizeof(HEIF));
-    p->width = ((width + 3) >> 2) << 2;
+    int alloc_w = ((width + 3) >> 2) << 2;
+    p->width = width;
     p->height = height;
     p->depth = bits;
-    p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+    p->pitch = ((alloc_w + 15) >> 4) * 16 * (p->depth >> 3);
     /* the width is padded to a multiple of four, so zero the padding too */
     p->pixels = calloc(1, (size_t)p->pitch * p->height);
     p->format = bits > 32 ? CS_PIXELFORMAT_BGRA64
@@ -511,12 +543,13 @@ heif_pic_alloc(int width, int height, int bits)
 
 static struct pic *
 HEIF_load_one(int width, int height, uint8_t *data, int length,
-              struct hevc_param_set *hps, int bits) {
+              struct hevc_param_set *hps, int bits, int length_size) {
     struct pic *p = heif_pic_alloc(width, height, bits);
     if (!p) {
         return NULL;
     }
-    if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps, bits) < 0) {
+    if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps, bits,
+                    length_size) < 0) {
         VERR(heif, "failed to decode a %dx%d item", p->width, p->height);
         heif_pic_free(p);
         return NULL;
@@ -603,7 +636,8 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
                                              (int)ispe->image_height,
                                              item->data, item->length,
                                              &conf->hps,
-                                             heif_output_bits(conf));
+                                             heif_output_bits(conf),
+                                             conf->lengthSizeMinusOne + 1);
             if (!tile) {
                 VERR(heif, "failed to decode grid tile %d", j);
                 continue;
@@ -691,7 +725,8 @@ decode_primary_item(HEIF *h, struct pic *p)
             return 0;
         }
         if (decode_hvc1(pri_item->data, pri_item->length, p->pixels, p->pitch,
-                        p->height, &conf->hps, p->depth) < 0) {
+                        p->height, &conf->hps, p->depth,
+                        conf->lengthSizeMinusOne + 1) < 0) {
             VERR(heif, "failed to decode the primary item");
             return 0;
         }
@@ -893,7 +928,8 @@ decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p)
                              prem ? " (premultiplied)" : "");
                         struct pic *p1 = HEIF_load_one(aw, ah, r->data,
                                                        r->length, &conf->hps,
-                                                       p->depth);
+                                                       p->depth,
+                                                       conf->lengthSizeMinusOne + 1);
                         if (!p1) {
                             VWARN(heif, "cannot decode the alpha item");
                             continue;
@@ -1058,7 +1094,8 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             VINFO(heif, "decoding sub items, width %u, height %u", ispe->image_width, ispe->image_height);
             struct pic *p1 = HEIF_load_one((int)ispe->image_width, (int)ispe->image_height,
                                            h->items[i].data, h->items[i].length,
-                                           &conf->hps, heif_output_bits(conf));
+                                           &conf->hps, heif_output_bits(conf),
+                                           conf->lengthSizeMinusOne + 1);
             if (!p1) {
                 continue;
             }
@@ -1196,6 +1233,78 @@ heif_find_alpha_track(const struct moov_box *b, int color_trak, int count,
     return -1;
 }
 
+/* Colour information carried by the sample entry (nclx or ICC). */
+static void
+heif_apply_entry_colr(const struct colr_box *colr, struct pic *p)
+{
+    struct cs_profile *cp = NULL;
+
+    if (colr->icc_data && colr->icc_len)
+        cp = cs_profile_from_icc(colr->icc_data, colr->icc_len);
+    if (!cp && colr->color_type == FOURCC2UINT('n','c','l','x'))
+        cp = cs_profile_from_cicp(colr->color_primaries,
+                                  colr->transfer_characteristics);
+    if (!cp)
+        return;
+    if (p->depth > 32)
+        cs_profile_apply_bgra16(cp, p->pixels, p->width, p->height, p->pitch);
+    else
+        cs_profile_apply_bgra(cp, p->pixels, p->width, p->height, p->pitch);
+    cs_profile_free(cp);
+}
+
+/* Clean aperture from the sample entry. */
+static void
+heif_apply_entry_clap(const struct clap_box *c, struct pic *p)
+{
+    int ox, oy, cw, ch;
+
+    if (packed_clap_rect(c, p->width, p->height, &ox, &oy, &cw, &ch) != 0)
+        return;
+    struct packed_frame f = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+    if (packed_frame_transform(&f, PACKED_CROP, cw, ch, ox, oy) < 0)
+        return;
+    p->pixels = f.pixels;
+    p->width = f.width;
+    p->height = f.height;
+    p->pitch = f.pitch;
+}
+
+/* Apply the track display matrix (rotation/mirror) to a decoded frame. */
+static void
+heif_apply_tkhd_transform(const struct trak_box *trak, struct pic *p)
+{
+    int kinds[2];
+    int n = tkhd_matrix_transforms(&trak->tkhd, kinds);
+
+    if (n <= 0)
+        return;
+    struct packed_frame f = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+    for (int i = 0; i < n; i++) {
+        int rot = kinds[i] == PACKED_ROT90 || kinds[i] == PACKED_ROT270;
+        if (packed_frame_transform(&f, kinds[i],
+                                   rot ? f.height : f.width,
+                                   rot ? f.width : f.height, 0, 0) < 0)
+            break;
+    }
+    p->pixels = f.pixels;
+    p->width = f.width;
+    p->height = f.height;
+    p->pitch = f.pitch;
+}
+
 static int
 decode_moov(FILE *f, struct moov_box *b)
 {
@@ -1277,13 +1386,16 @@ decode_moov(FILE *f, struct moov_box *b)
             }
             if (cdata)
                 p1 = HEIF_load_one(width, height, cdata, ctab[i].size, hps,
-                                   out_bits);
+                                   out_bits,
+                                   ce->config.lengthSizeMinusOne + 1);
             free(cdata);
             if (!p1) {
                 VERR(heif, "track %d sample %d failed to decode; animation "
                      "requires all-intra samples", t, i);
                 break;
             }
+            if (ce->has_colr)
+                heif_apply_entry_colr(&ce->colr, p1);
             if (atab && i < an) {
                 uint8_t *adata = malloc(atab[i].size ? atab[i].size : 1);
                 struct pic *pa = NULL;
@@ -1297,7 +1409,8 @@ decode_moov(FILE *f, struct moov_box *b)
                 }
                 if (adata)
                     pa = HEIF_load_one(aw, ah, adata, atab[i].size,
-                                       &ae->config.hps, p1->depth);
+                                       &ae->config.hps, p1->depth,
+                                       ae->config.lengthSizeMinusOne + 1);
                 free(adata);
                 if (pa) {
                     heif_apply_alpha(p1, pa, false);
@@ -1306,6 +1419,9 @@ decode_moov(FILE *f, struct moov_box *b)
                     VWARN(heif, "alpha frame %d failed to decode", i);
                 }
             }
+            if (ce->has_clap)
+                heif_apply_entry_clap(&ce->clap, p1);
+            heif_apply_tkhd_transform(trak, p1);
             pic_set_duration(p1, ctab[i].duration_ms);
             if (!file_enqueue_pic(p1)) {
                 VERR(heif, "animation queue is full at frame %d", i);
@@ -1319,6 +1435,23 @@ decode_moov(FILE *f, struct moov_box *b)
     }
     free(used);
     return total;
+}
+
+/* Does any moov carry a colour track with samples? */
+static int
+heif_has_sequence_frames(const HEIF *h)
+{
+    for (int i = 0; i < h->moov_num; i++) {
+        const struct moov_box *m = &h->moov[i];
+        for (int t = 0; t < m->trak_num; t++) {
+            if (m->trak[t].mdia.hdlr.handler_type ==
+                FOURCC2UINT('a','u','x','v'))
+                continue;
+            if (m->trak[t].mdia.minf.stbl.stsz.sample_count > 0)
+                return 1;
+        }
+    }
+    return 0;
 }
 
 static struct pic*
@@ -1402,7 +1535,7 @@ HEIF_load(const char *filename, int skip_flag)
         return NULL;
     }
 
-    p->width = ((p->width + 3) >> 2) << 2;
+    int alloc_w = ((p->width + 3) >> 2) << 2;
     p->depth = 32;
     if (has_primary_item(h)) {
         uint32_t pid = get_primary_item_id(h);
@@ -1411,15 +1544,25 @@ HEIF_load(const char *filename, int skip_flag)
         p->depth = conf ? heif_output_bits(conf)
                         : heif_grid_output_bits(h, pid);
     }
-    p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+    /* width is the display width; only the pitch is aligned */
+    p->pitch = ((alloc_w + 15) >> 4) * 16 * (p->depth >> 3);
     p->pixels = calloc(1, (size_t)p->pitch * p->height);
     p->format = p->depth > 32 ? CS_PIXELFORMAT_BGRA64
                               : CS_PIXELFORMAT_BGRA_BYTES;
     heif_collect_metadata(h, has_primary_item(h) ? get_primary_item_id(h) : 0,
                           f);
     int n = 0;
+    int seq_frames = heif_has_sequence_frames(h);
+    int p_queued = 0;
     if (!skip_flag) {
         n = decode_items(h, f, p);
+        /* if the file has both a primary still and a sequence, the still
+         * is the first frame; queue it before the track frames */
+        if (has_primary_item(h) && seq_frames && n >= 1) {
+            if (file_enqueue_pic(p)) {
+                p_queued = 1;
+            }
+        }
 
         for (int i = 0; i < h->moov_num; i++) {
             n += decode_moov(f, h->moov + i);
@@ -1432,12 +1575,17 @@ HEIF_load(const char *filename, int skip_flag)
      * the container, so it must not be freed after being handed to the
      * queue. */
     if (has_primary_item(h)) {
-        if (n == 1) {
-            return p;
-        }
-        if (n > 1) {
-            file_enqueue_pic(p);
+        if (p_queued) {
             return NULL;
+        }
+        if (!seq_frames) {
+            if (n == 1) {
+                return p;
+            }
+            if (n > 1) {
+                file_enqueue_pic(p);
+                return NULL;
+            }
         }
         /* A protected primary cannot be decrypted, so the container view
          * (zeroed pixels at the ispe size) is all that can be returned. */

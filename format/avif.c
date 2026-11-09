@@ -614,8 +614,32 @@ int read_AV1SampleEntry(FILE *f, struct SampleEntry **b)
     long entry_start = ftell(f);
     read_VisualSampleEntry(f, &e->sample);
     assert(e->sample.entry.type == FOURCC2UINT('a', 'v', '0', '1'));
-    read_av1c_box(f, (struct box **)(&e->config));
-    fseek(f, entry_start + (long)e->sample.entry.size, SEEK_SET);
+    /* read_av1c_box() expects a pointer slot, but config is inline here */
+    struct av1C_box *ab = NULL;
+    read_av1c_box(f, (struct box **)&ab);
+    if (ab) {
+        e->config = *ab;
+        free(ab);
+    }
+    long entry_end = entry_start + (long)e->sample.entry.size;
+    long pos = ftell(f);
+    while (pos + 8 <= entry_end) {
+        struct box pb;
+        uint32_t ty = probe_box(f, &pb);
+        if (!ty || pb.size < 8 || pos + (long)pb.size > entry_end)
+            break;
+        if (ty == FOURCC2UINT('c','o','l','r')) {
+            read_colr_box(f, &e->colr);
+            e->has_colr = 1;
+        } else if (ty == FOURCC2UINT('c','l','a','p')) {
+            read_clap_box(f, &e->clap);
+            e->has_clap = 1;
+        } else {
+            fseek(f, (long)pb.size, SEEK_CUR);
+        }
+        pos = ftell(f);
+    }
+    fseek(f, entry_end, SEEK_SET);
     return 0;
 }
 
@@ -754,6 +778,78 @@ avif_read_sample(FILE *f, const struct avif_sample_ref *s)
     return data;
 }
 
+/* Colour information carried by the sample entry (nclx or ICC). */
+static void
+avif_apply_entry_colr(const struct colr_box *colr, struct pic *p)
+{
+    struct cs_profile *cp = NULL;
+
+    if (colr->icc_data && colr->icc_len)
+        cp = cs_profile_from_icc(colr->icc_data, colr->icc_len);
+    if (!cp && colr->color_type == FOURCC2UINT('n','c','l','x'))
+        cp = cs_profile_from_cicp(colr->color_primaries,
+                                  colr->transfer_characteristics);
+    if (!cp)
+        return;
+    if (p->depth > 32)
+        cs_profile_apply_bgra16(cp, p->pixels, p->width, p->height, p->pitch);
+    else
+        cs_profile_apply_bgra(cp, p->pixels, p->width, p->height, p->pitch);
+    cs_profile_free(cp);
+}
+
+/* Clean aperture from the sample entry. */
+static void
+avif_apply_entry_clap(const struct clap_box *c, struct pic *p)
+{
+    int ox, oy, cw, ch;
+
+    if (packed_clap_rect(c, p->width, p->height, &ox, &oy, &cw, &ch) != 0)
+        return;
+    struct packed_frame f = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+    if (packed_frame_transform(&f, PACKED_CROP, cw, ch, ox, oy) < 0)
+        return;
+    p->pixels = f.pixels;
+    p->width = f.width;
+    p->height = f.height;
+    p->pitch = f.pitch;
+}
+
+/* Apply the track display matrix (rotation/mirror) to a decoded frame. */
+static void
+avif_apply_tkhd_transform(const struct trak_box *trak, struct pic *p)
+{
+    int kinds[2];
+    int n = tkhd_matrix_transforms(&trak->tkhd, kinds);
+
+    if (n <= 0)
+        return;
+    struct packed_frame f = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+    for (int i = 0; i < n; i++) {
+        int rot = kinds[i] == PACKED_ROT90 || kinds[i] == PACKED_ROT270;
+        if (packed_frame_transform(&f, kinds[i],
+                                   rot ? f.height : f.width,
+                                   rot ? f.width : f.height, 0, 0) < 0)
+            break;
+    }
+    p->pixels = f.pixels;
+    p->width = f.width;
+    p->height = f.height;
+    p->pitch = f.pitch;
+}
+
 static int
 avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_out)
 {
@@ -832,6 +928,8 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             av1_image_to_rgba16(&img, p->pixels, p->pitch);
         else
             av1_image_to_bgra(&img, p->pixels, p->pitch);
+        if (ce->has_colr && p->pixels)
+            avif_apply_entry_colr(&ce->colr, p);
         if (has_alpha) {
             if (alpha.width == img.width && alpha.height == img.height) {
                 if (wide)
@@ -845,6 +943,9 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
                       alpha.width, alpha.height, img.width, img.height);
             }
         }
+        if (ce->has_clap)
+            avif_apply_entry_clap(&ce->clap, p);
+        avif_apply_tkhd_transform(&moov->trak[ct], p);
         pic_set_duration(p, ctab[i].duration_ms);
         if (decoded == 0 && first_pic_out) {
             *first_pic_out = p;

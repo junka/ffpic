@@ -762,6 +762,8 @@ void free_meta_box(struct meta_box *b);
 void free_moov_box(struct moov_box *b);
 
 int read_VisualSampleEntry(FILE *f, struct VisualSampleEntry *e);
+int read_colr_box(FILE *f, struct colr_box *b);
+int read_clap_box(FILE *f, struct clap_box *b);
 
 /* A packed RGBA picture that transformative properties rewrite in place. */
 struct packed_frame {
@@ -788,6 +790,10 @@ int packed_clap_rect(const struct clap_box *c, int w, int h,
 /* Apply the irot, imir and clap properties of item_id in ipma order. */
 int packed_apply_transforms(const struct iprp_box *iprp, uint32_t item_id,
                             struct packed_frame *im);
+
+/* Decode the tkhd display matrix into up to two packed_frame_transform
+ * operations (rotation plus mirror) in application order. */
+int tkhd_matrix_transforms(const struct tkhd_box *t, int kinds[2]);
 
 /* Orientation tag of the Exif item payload; 0 when absent. */
 int media_exif_orientation(const uint8_t *data, size_t len);

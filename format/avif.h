@@ -401,6 +401,10 @@ struct avif_item {
 struct AV1SampleEntry {
     struct VisualSampleEntry sample;
     struct av1C_box config;
+    struct colr_box colr;       /* optional nclx/ICC colour information */
+    struct clap_box clap;       /* optional clean aperture */
+    int has_colr;
+    int has_clap;
 };
 
 /* Decode one AV1 track sample, joining configOBUs when present. */

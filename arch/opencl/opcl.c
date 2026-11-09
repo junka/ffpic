@@ -123,7 +123,7 @@ void opcl_amd_init(void) {
     char dname[512];
     cl_int err = clGetPlatformIDs(8, platform_ids, &num_platforms);
     if (err != CL_SUCCESS) {
-        fprintf(stderr, "clGetPlatformIDs failed (error %d)\n", err);
+        VDBG(opcl, "clGetPlatformIDs failed (error %d)", err);
         return ;
     }
     for (cl_uint i = 0; i < num_platforms; i++) {
@@ -139,26 +139,24 @@ void opcl_amd_init(void) {
         clGetDeviceIDs(pid, CL_DEVICE_TYPE_GPU, 8, dev_ids,
                                         &num_devices);
         if (err != CL_SUCCESS) {
-            fprintf(stderr, "clGetDeviceIDs failed (error %d)\n", err);
-            return;
-        } else {
-            for (cl_uint j = 0; j < num_devices; j++) {
+            VDBG(opcl, "clGetDeviceIDs failed (error %d)", err);
+            continue;
+        }
+        for (cl_uint j = 0; j < num_devices; j++) {
+            clGetDeviceInfo(dev_ids[j], CL_DEVICE_NAME, sizeof(dname),
+                            dname, NULL);
+            if (strstr(dname, "AMD")) {
+                /* the IDCT kernel is only exercised on AMD devices */
+                VINFO(opcl, "Device #%u: Name: %s", j + 1, dname);
                 did = dev_ids[j];
-
-                clGetDeviceInfo(did, CL_DEVICE_NAME, sizeof(dname), dname, NULL);
                 priv.device_id = did;
-                if (strstr(dname, "AMD")) {
-                    // choose high-performace gpu automatically
-                    VINFO(opcl, "Device #%u: Name: %s", j + 1, dname);
-                    priv.device_id = did;
-                    break;
-                }
+                break;
             }
         }
     }
 
     if (did == NULL) {
-        fprintf(stderr, "no OpenCL device found\n");
+        VDBG(opcl, "no AMD OpenCL device, using the CPU path");
         return;
     }
 
@@ -181,14 +179,14 @@ void opcl_amd_init(void) {
     VINFO(opcl, "Constant Memory Size: %" PRIu64, const_mem_size);
     priv.context = clCreateContext(NULL, 1, &priv.device_id, NULL, NULL, &ret);
     if (ret != CL_SUCCESS) {
-        fprintf(stderr, "clCreateContext failed (error %d)\n", err);
+        VWARN(opcl, "clCreateContext failed (error %d)", ret);
         return ;
     }
 
     priv.queue = clCreateCommandQueue(priv.context, priv.device_id, 0, &ret);
     if (ret != CL_SUCCESS) {
         clReleaseContext(priv.context);
-        fprintf(stderr, "clCreateCommandQueue failed (error %d)\n", ret);
+        VWARN(opcl, "clCreateCommandQueue failed (error %d)", ret);
         return;
     }
     size_t len = srcstr_len;
@@ -196,35 +194,37 @@ void opcl_amd_init(void) {
     priv.program = clCreateProgramWithSource(priv.context, 1, &prog_src,
                                              (const size_t *)&len, &ret);
     if (ret != CL_SUCCESS) {
-        printf("clCreateProgramWithSource failed err %d\n", ret);
+        VWARN(opcl, "clCreateProgramWithSource failed (error %d)", ret);
         clReleaseCommandQueue(priv.queue);
         clReleaseContext(priv.context);
-        assert(ret == CL_SUCCESS);
         return;
     }
     ret = clBuildProgram(priv.program, 1, &priv.device_id, NULL, NULL, NULL);
     if (ret != CL_SUCCESS) {
-        size_t len;
+        size_t len = 0;
         clGetProgramBuildInfo(priv.program, priv.device_id,
                               CL_PROGRAM_BUILD_LOG, 0, NULL, &len);
-        char *buffer = (char *)malloc(sizeof(char) * (len + 1));
-        clGetProgramBuildInfo(priv.program, priv.device_id,
-                              CL_PROGRAM_BUILD_LOG, len, buffer, &len);
-        printf("Build log is %s\n", buffer);
+        char *buffer = calloc(1, len + 1);
+        if (buffer && len > 0) {
+            clGetProgramBuildInfo(priv.program, priv.device_id,
+                                  CL_PROGRAM_BUILD_LOG, len, buffer, &len);
+            VDBG(opcl, "OpenCL build log: %s", buffer);
+        }
         free(buffer);
+        VWARN(opcl, "OpenCL IDCT disabled: kernel build failed (error %d), "
+              "falling back to the CPU path", ret);
         clReleaseProgram(priv.program);
         clReleaseCommandQueue(priv.queue);
         clReleaseContext(priv.context);
-        assert(ret == CL_SUCCESS);
         return;
     }
 
     priv.kernel4 = clCreateKernel(priv.program, "idct_4x4", &ret);
     if (ret != CL_SUCCESS) {
+        VWARN(opcl, "clCreateKernel failed (error %d)", ret);
         clReleaseProgram(priv.program);
         clReleaseCommandQueue(priv.queue);
         clReleaseContext(priv.context);
-        assert(ret == CL_SUCCESS);
         return;
     }
 

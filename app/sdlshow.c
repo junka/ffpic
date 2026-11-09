@@ -56,7 +56,7 @@ display_main(void *arg)
             left = left ? left : 480 / 2 - p->width / 2;
         }
         pic_poll_block(true);
-        SDL_Delay(10);
+        SDL_Delay(p->duration_ms ? p->duration_ms : 10);
         display_show(d, p->pixels, left, top, p->width, p->height, p->depth,
                     p->pitch, p->format);
         if (ret) {
@@ -141,7 +141,7 @@ main(int argc, const char *argv[])
     }
     while ((p = file_dequeue_pic())) {
         pic_poll_block(true);
-        SDL_Delay(10);
+        SDL_Delay(p->duration_ms ? p->duration_ms : 10);
         display_show(d, p->pixels, left, top, p->width, p->height, p->depth,
                      p->pitch, p->format);
         if (ret) {

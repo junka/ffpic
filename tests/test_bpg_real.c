@@ -14,7 +14,22 @@
  *      claims more HEVC than fits in the container (parsing layer catches it).
  *   5. BPG_load rejects a magic-valid file whose HEVC payload contains no start
  *      codes at all (zero NALs → zero slices → clean refusal, no crash).
- *   6. alpha1 / alpha2 flags → BPG_load refuses.
+ *   6. alpha1 (auxiliary HEVC plane, nuh_layer_id == 1) is decoded and merged
+ *      into the alpha channel; RGB must match a colour-only decode of the same
+ *      stream and the alpha channel must match a monochrome-only decode of the
+ *      auxiliary stream.  Covered for 8-bit (BGRA) and 10-bit (BGRA64).
+ *   7. alpha1 && alpha2 (premultiplied) un-divides RGB by alpha exactly as
+ *      libbpg's alpha_divide8 does; the alpha channel is unchanged.
+ *   8. alpha2 without alpha1 (the "W plane") is refused cleanly.
+ *   9. alpha1 signalled but no alpha plane present in the stream → refused.
+ *
+ * The alpha fixtures (tests/data/bpg_alpha*.bpg) are a genuine *synthetic*
+ * alpha1 file: the colour NALs come from bpg_grad420.bpg and the auxiliary
+ * plane is a real monochrome HEVC stream with its nuh_layer_id set to 1, which
+ * is exactly the BPG alpha1 signalling (libbpg build_modified_hevc sets the
+ * same bit).  They are NOT bpgenc output: bpgenc moves VPS/SPS into the
+ * hevc_header "modified SPS" blob, which this loader does not reconstruct, so
+ * plain bpgenc files (with or without alpha) remain unsupported.
  *
  * The bad fixtures are built in-test so tests/data stays under 50 KB per file.
  */
@@ -168,6 +183,17 @@ build_tmp_bpg(const char *suffix, int pixel_format, int bit_depth,
         memset(buf + used, 0, hevc_hdr_len);
         used += hevc_hdr_len;
     }
+    /* alpha files carry a second hevc_header block (BPG spec
+     * hevc_header_and_data: one for the alpha plane, one for the colour). */
+    if (alpha1 || alpha2) {
+        n = write_ue7(buf + used, sizeof(buf) - used, hevc_hdr_len);
+        if (n < 0) { return NULL; }
+        used += n;
+        if (hevc_hdr_len > 0) {
+            memset(buf + used, 0, hevc_hdr_len);
+            used += hevc_hdr_len;
+        }
+    }
     if (hevc_len > 0) {
         memcpy(buf + used, hevc_data, hevc_len);
         used += (int)hevc_len;
@@ -238,6 +264,223 @@ check_extra_fixture(const char *name, int want_depth)
     }
 out:
     file_free(ops, p);
+    return rc;
+}
+
+/* ---- alpha1 decode/merge regression helpers ---- */
+
+struct bpg_loaded {
+    struct file_ops *ops;
+    struct pic *p;
+};
+
+static int
+load_fixture(const char *name, struct bpg_loaded *out)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", TEST_DATA_DIR, name);
+    out->ops = file_probe(path);
+    if (!out->ops) { printf("FAIL[%s]: probe refused\n", name); return -1; }
+    out->p = file_load(out->ops, path, 0);
+    if (!out->p) { printf("FAIL[%s]: load returned NULL\n", name); return -1; }
+    return 0;
+}
+
+static void
+unload_fixture(struct bpg_loaded *f)
+{
+    if (f->p)
+        file_free(f->ops, f->p);
+    f->p = NULL;
+}
+
+/* libbpg alpha_divide8 (see libbpg.c comp_divide8/alpha_divide8) */
+static int
+ref_divide8(unsigned v, unsigned a)
+{
+    unsigned inv;
+    if (a == 0)
+        return 255;
+    if (v >= a)
+        return 255;
+    inv = ((255u << 16) + a / 2 + 128) / a;
+    return (int)((v * inv + (1u << 15)) >> 16);
+}
+
+/* Straight alpha: colour bytes must equal the colour-only reference decode,
+ * alpha channel must equal channel 0 of the monochrome-only reference. */
+static int
+check_straight_alpha(const char *name, const char *rgb_ref, const char *gray_ref)
+{
+    struct bpg_loaded a = {0}, c = {0}, g = {0};
+    int rc = 0;
+    if (load_fixture(name, &a) || load_fixture(rgb_ref, &c) ||
+        load_fixture(gray_ref, &g)) {
+        rc = -1; goto out;
+    }
+    if (a.p->depth != 32 || a.p->format != CS_PIXELFORMAT_BGRA_BYTES) {
+        printf("FAIL[%s]: depth %d format %d, want 8-bit BGRA\n", name,
+               a.p->depth, a.p->format);
+        rc = -1; goto out;
+    }
+    if (a.p->width != c.p->width || a.p->height != c.p->height ||
+        a.p->width != g.p->width || a.p->height != g.p->height) {
+        printf("FAIL[%s]: size mismatch\n", name);
+        rc = -1; goto out;
+    }
+    long rgb_bad = 0, alpha_bad = 0, alpha_nz = 0, rgb_nz = 0;
+    int amin = 999, amax = -1;
+    for (int y = 0; y < a.p->height; y++) {
+        uint8_t *pa = (uint8_t *)a.p->pixels + (size_t)y * a.p->pitch;
+        uint8_t *pc = (uint8_t *)c.p->pixels + (size_t)y * c.p->pitch;
+        uint8_t *pg = (uint8_t *)g.p->pixels + (size_t)y * g.p->pitch;
+        for (int x = 0; x < a.p->width; x++) {
+            if (pa[x*4+0] != pc[x*4+0] || pa[x*4+1] != pc[x*4+1] ||
+                pa[x*4+2] != pc[x*4+2])
+                rgb_bad++;
+            if (pa[x*4+3] != pg[x*4+0])
+                alpha_bad++;
+            if (pa[x*4+3]) alpha_nz++;
+            if (pa[x*4+0] || pa[x*4+1] || pa[x*4+2]) rgb_nz++;
+            if (pa[x*4+3] < amin) amin = pa[x*4+3];
+            if (pa[x*4+3] > amax) amax = pa[x*4+3];
+        }
+    }
+    if (rgb_bad || alpha_bad || alpha_nz == 0 || rgb_nz == 0 ||
+        amin >= amax) {
+        printf("FAIL[%s]: rgb_bad=%ld alpha_bad=%ld alpha_nz=%ld rgb_nz=%ld "
+               "alpha %d..%d\n", name, rgb_bad, alpha_bad, alpha_nz, rgb_nz,
+               amin, amax);
+        rc = -1;
+    } else {
+        printf("OK[%s]: alpha1 merged, rgb==%s, alpha==%s (alpha %d..%d)\n",
+               name, rgb_ref, gray_ref, amin, amax);
+    }
+out:
+    unload_fixture(&a); unload_fixture(&c); unload_fixture(&g);
+    return rc;
+}
+
+/* Premultiplied: alpha must match the straight decode, RGB must equal the
+ * straight RGB un-divided by alpha with libbpg's rounding. */
+static int
+check_premul_alpha(const char *name, const char *straight)
+{
+    struct bpg_loaded a = {0}, s = {0};
+    int rc = 0;
+    if (load_fixture(name, &a) || load_fixture(straight, &s)) { rc = -1; goto out; }
+    long bad = 0, a0 = 0;
+    for (int y = 0; y < a.p->height; y++) {
+        uint8_t *pa = (uint8_t *)a.p->pixels + (size_t)y * a.p->pitch;
+        uint8_t *ps = (uint8_t *)s.p->pixels + (size_t)y * s.p->pitch;
+        for (int x = 0; x < a.p->width; x++) {
+            unsigned av = ps[x*4+3];
+            if (av == 0) a0++;
+            if (pa[x*4+3] != av) bad++;
+            for (int ch = 0; ch < 3; ch++) {
+                int exp = ref_divide8(ps[x*4+ch], av);
+                if (pa[x*4+ch] != exp) bad++;
+            }
+        }
+    }
+    if (bad) {
+        printf("FAIL[%s]: %ld mismatches vs %s un-divided\n", name, bad, straight);
+        rc = -1;
+    } else {
+        printf("OK[%s]: premultiplied RGB un-divided by alpha (%ld zero-alpha px)\n",
+               name, a0);
+    }
+out:
+    unload_fixture(&a); unload_fixture(&s);
+    return rc;
+}
+
+/* >8 bit alpha1: BGRA64, RGB must equal the colour-only reference, alpha must
+ * equal channel 0 of the monochrome-only reference. */
+static int
+check_alpha16(const char *name, const char *rgb_ref, const char *gray_ref)
+{
+    struct bpg_loaded a = {0}, c = {0}, g = {0};
+    int rc = 0;
+    if (load_fixture(name, &a) || load_fixture(rgb_ref, &c) ||
+        load_fixture(gray_ref, &g)) {
+        rc = -1; goto out;
+    }
+    if (a.p->depth != 64 || a.p->format != CS_PIXELFORMAT_BGRA64) {
+        printf("FAIL[%s]: depth %d format %d, want BGRA64\n", name,
+               a.p->depth, a.p->format);
+        rc = -1; goto out;
+    }
+    long rgb_bad = 0, alpha_bad = 0;
+    uint16_t amin = 0xffff, amax = 0;
+    for (int y = 0; y < a.p->height; y++) {
+        uint16_t *pa = (uint16_t *)((uint8_t *)a.p->pixels + (size_t)y * a.p->pitch);
+        uint16_t *pc = (uint16_t *)((uint8_t *)c.p->pixels + (size_t)y * c.p->pitch);
+        uint16_t *pg = (uint16_t *)((uint8_t *)g.p->pixels + (size_t)y * g.p->pitch);
+        for (int x = 0; x < a.p->width; x++) {
+            if (pa[x*4+0] != pc[x*4+0] || pa[x*4+1] != pc[x*4+1] ||
+                pa[x*4+2] != pc[x*4+2])
+                rgb_bad++;
+            if (pa[x*4+3] != pg[x*4+0])
+                alpha_bad++;
+            if (pa[x*4+3] < amin) amin = pa[x*4+3];
+            if (pa[x*4+3] > amax) amax = pa[x*4+3];
+        }
+    }
+    if (rgb_bad || alpha_bad || amin >= amax) {
+        printf("FAIL[%s]: rgb_bad=%ld alpha_bad=%ld range %u..%u\n", name,
+               rgb_bad, alpha_bad, amin, amax);
+        rc = -1;
+    } else {
+        printf("OK[%s]: alpha1 merged at 10-bit (range %u..%u)\n", name, amin, amax);
+    }
+out:
+    unload_fixture(&a); unload_fixture(&c); unload_fixture(&g);
+    return rc;
+}
+
+/* libbpg alpha_divide16 (see libbpg.c comp_divide16/alpha_divide16) */
+static int
+ref_divide16(unsigned v, unsigned a)
+{
+    unsigned inv;
+    if (a == 0)
+        return 65535;
+    if (v >= a)
+        return 65535;
+    inv = ((65535u << 15) + a / 2) / a;
+    return (int)((v * inv + (1u << 14)) >> 15);
+}
+
+static int
+check_premul_alpha16(const char *name, const char *straight)
+{
+    struct bpg_loaded a = {0}, s = {0};
+    int rc = 0;
+    if (load_fixture(name, &a) || load_fixture(straight, &s)) { rc = -1; goto out; }
+    long bad = 0, a0 = 0;
+    for (int y = 0; y < a.p->height; y++) {
+        uint16_t *pa = (uint16_t *)((uint8_t *)a.p->pixels + (size_t)y * a.p->pitch);
+        uint16_t *ps = (uint16_t *)((uint8_t *)s.p->pixels + (size_t)y * s.p->pitch);
+        for (int x = 0; x < a.p->width; x++) {
+            unsigned av = ps[x*4+3];
+            if (av == 0) a0++;
+            if (pa[x*4+3] != av) bad++;
+            for (int ch = 0; ch < 3; ch++) {
+                int exp = ref_divide16(ps[x*4+ch], av);
+                if (pa[x*4+ch] != exp) bad++;
+            }
+        }
+    }
+    if (bad) {
+        printf("FAIL[%s]: %ld mismatches vs %s un-divided\n", name, bad, straight);
+        rc = -1;
+    } else {
+        printf("OK[%s]: premultiplied BGRA64 un-divided (%ld zero-alpha px)\n",
+               name, a0);
+    }
+out:
+    unload_fixture(&a); unload_fixture(&s);
     return rc;
 }
 
@@ -354,28 +597,67 @@ free_real:
     }
 
     /* ============================================================== *
-     * TEST 4: alpha1 / alpha2 flags → load must refuse                *
+     * TEST 4a: alpha1 signalled but no alpha plane in the stream      *
+     *          → load must refuse (do not silently drop alpha)        *
      * ============================================================== */
     {
         uint8_t fake_hevc[] = { 0x00, 0x00, 0x00, 0x01, 0x40, 0x01 };
-        char *bad = build_tmp_bpg("alpha", 1, 8, 16, 16, 0, 0, 1, 0,
+        char *bad = build_tmp_bpg("alpha_no_plane", 1, 8, 16, 16, 0, 0, 1, 0,
                                   fake_hevc, sizeof(fake_hevc));
         if (!bad) { rc = -1; goto out; }
         ops = file_probe(bad);
         if (!ops) {
-            printf("FAIL[alpha]: probe should accept magic\n");
+            printf("FAIL[alpha_no_plane]: probe should accept magic\n");
             rc = -1;
         } else {
             struct pic *pb = file_load(ops, bad, 0);
             if (pb) {
-                printf("FAIL[alpha]: load should refuse alpha1_flag\n");
+                printf("FAIL[alpha_no_plane]: load must refuse when no alpha plane decodes\n");
                 pic_free(pb); rc = -1;
             } else {
-                printf("OK[alpha]: load refuses alpha1_flag cleanly\n");
+                printf("OK[alpha_no_plane]: alpha1 without an alpha plane refused\n");
             }
         }
         unlink(bad);
     }
+
+    /* ============================================================== *
+     * TEST 4b: W plane (alpha2 without alpha1) → load must refuse     *
+     * ============================================================== */
+    {
+        uint8_t fake_hevc[] = { 0x00, 0x00, 0x00, 0x01, 0x40, 0x01 };
+        char *bad = build_tmp_bpg("wplane", 1, 8, 16, 16, 0, 0, 0, 1,
+                                  fake_hevc, sizeof(fake_hevc));
+        if (!bad) { rc = -1; goto out; }
+        ops = file_probe(bad);
+        if (!ops) {
+            printf("FAIL[wplane]: probe should accept magic\n");
+            rc = -1;
+        } else {
+            struct pic *pb = file_load(ops, bad, 0);
+            if (pb) {
+                printf("FAIL[wplane]: load must refuse the W plane\n");
+                pic_free(pb); rc = -1;
+            } else {
+                printf("OK[wplane]: alpha2 without alpha1 (W plane) refused\n");
+            }
+        }
+        unlink(bad);
+    }
+
+    /* ============================================================== *
+     * TEST 4c: alpha1 fixtures (synthetic, see the file header)       *
+     * ============================================================== */
+    if (check_straight_alpha("bpg_alpha.bpg", "bpg_grad420.bpg",
+                             "bpg_alpha_ref_gray.bpg") != 0)
+        rc = -1;
+    if (check_premul_alpha("bpg_alpha_premul.bpg", "bpg_alpha.bpg") != 0)
+        rc = -1;
+    if (check_alpha16("bpg_alpha10.bpg", "bpg_alpha10_ref.bpg",
+                      "bpg_alpha10_ref_gray.bpg") != 0)
+        rc = -1;
+    if (check_premul_alpha16("bpg_alpha10_premul.bpg", "bpg_alpha10.bpg") != 0)
+        rc = -1;
 
     /* ============================================================== *
      * TEST 5: Truncated header → probe may still pass magic, but      *

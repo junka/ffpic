@@ -23,12 +23,23 @@
  * 现有 parse_nalu.  这让我们完全复用 coding/hevc.c 的参数集解析、slice
  * 解码和 YUV→BGRA 路径, 不复制解码器, 也不改动 hevc.c 的既有语义.
  *
- * alpha 暂不支持 (alpha1_flag / alpha2_flag 任一置位即拒绝). alpha1 是
- * 同一 Annex-B 流里 nuh_layer_id==1 的辅助 HEVC 平面, 需要把两层码流分开
- * 解码并按 premultiplied 语义合并; alpha2 单独置位时是 W 平面. 两者都
- * 需要额外工程量和真实样本. 遇到 alpha 文件直接返回 NULL, 明确告知拒绝,
- * 避免输出不透明图丢 alpha 而静默失真.  (extension tag 5 是动画控制,
- * 不是 alpha.)
+ * alpha 支持:
+ *   alpha1_flag=1: alpha 是同一 Annex-B 流里 nuh_layer_id==1 的辅助单色
+ *     HEVC 平面. 我们把 layer_id==1 的 NAL 路由到第二个 hevc_param_set 和
+ *     第二个像素缓冲, 解码该平面 (单色), 再把它的 luma 写进彩色缓冲的
+ *     alpha 通道. 与 libbpg 一样, 送进 decoder 之前先清掉 layer 位
+ *     (libbpg 的 nal_buf[4] &= 0x7), 因为 hevc.c 只处理 base-layer NAL.
+ *     alpha1 && alpha2 表示 premultiplied alpha: 合并时按 libbpg 的
+ *     alpha_divide8/16 语义把彩色分量除回直通 alpha.
+ *   alpha1_flag=0, alpha2_flag=1: 这是独立的 "W 平面" (libbpg has_w_plane),
+ *     不是 alpha, 而是给 CMYK 用的第四个分量. ffpic 的 BGRA/BGRA64 没有
+ *     多余的平面来承载它, 所以直接返回 NULL 并给出明确的 VERR, 而不是把它
+ *     当成 alpha 静默误用.  (extension tag 5 是动画控制, 不是 alpha.)
+ *   若 alpha1 但 alpha 平面解码失败, 也返回 NULL: 静默输出不透明会丢 alpha.
+ *
+ * 注意: 真正 bpgenc 产出的 BPG 把 SPS/VPS 放在 hevc_header (modified SPS)
+ * 里、hevc_data 里没有参数集; 本加载器不解 modified SPS, 因此这类文件
+ * (无论有无 alpha) 都仍无法解码, 这与已有行为一致.
  */
 
 #include <errno.h>
@@ -185,15 +196,26 @@ BPG_parse_header(const uint8_t *buf, size_t buf_len, bpg_header_info *info)
         idx = ext_end;
     }
 
-    v = read_ue7_buf(buf, buf_len, &idx);
-    if (v < 0) return -EINVAL;
-    uint64_t hevc_hdr_len = (uint64_t)v;
-    VDBG(bpg, "hevc_header_length=%" PRIu64, hevc_hdr_len);
-    if (idx + (size_t)hevc_hdr_len > buf_len) {
-        VERR(bpg, "hevc_header runs past EOF");
-        return -EINVAL;
+    /* BPG spec hevc_header_and_data():
+     *   if (alpha1_flag || alpha2_flag) hevc_header();
+     *   hevc_header();
+     *   hevc_data();
+     * An alpha file therefore carries TWO length-prefixed hevc_header blocks
+     * (the alpha one first).  We do not decode the modified SPS in them -- the
+     * streams we accept keep their parameter sets inline -- but we must skip
+     * both to land on hevc_data. */
+    int n_headers = (info->alpha1_flag || info->alpha2_flag) ? 2 : 1;
+    for (int h = 0; h < n_headers; h++) {
+        v = read_ue7_buf(buf, buf_len, &idx);
+        if (v < 0) return -EINVAL;
+        uint64_t hevc_hdr_len = (uint64_t)v;
+        VDBG(bpg, "hevc_header[%d]_length=%" PRIu64, h, hevc_hdr_len);
+        if (idx + (size_t)hevc_hdr_len > buf_len) {
+            VERR(bpg, "hevc_header runs past EOF");
+            return -EINVAL;
+        }
+        idx += (size_t)hevc_hdr_len;
     }
-    idx += (size_t)hevc_hdr_len;
 
     info->hevc_data_off = idx;
     if (picture_data_len == 0) {
@@ -208,6 +230,81 @@ BPG_parse_header(const uint8_t *buf, size_t buf_len, bpg_header_info *info)
     VDBG(bpg, "hevc_data off=%zu len=%zu", info->hevc_data_off, info->hevc_data_len);
 
     return 0;
+}
+
+/* ---- alpha merge -------------------------------------------------------- *
+ *
+ * The alpha1 plane is a monochrome HEVC picture decoded into its own BGRA
+ * buffer: coding/hevc.c's YUV400 path replicates the luma into B/G/R and sets
+ * alpha to opaque, exactly like libbpg's gray_to_gray path.  We therefore read
+ * the plane's luma back out of channel 0 (B) and store it in the colour
+ * buffer's channel 3 (A).
+ *
+ * libbpg's premultiplied_alpha semantics (alpha1_flag && alpha2_flag): the
+ * colour samples are stored multiplied by alpha, so an output that carries
+ * straight alpha has to divide them back.  comp_divide8/16 and the reciprocal
+ * tables are copied from libbpg (alpha_divide8/alpha_divide16), including the
+ * "alpha == 0 -> white" rule, so the numbers match the reference decoder.
+ */
+static inline int
+bpg_comp_divide8(unsigned val, unsigned alpha, unsigned alpha_inv)
+{
+    if (val >= alpha)
+        return 255;
+    return (int)((val * alpha_inv + (1u << 15)) >> 16);
+}
+
+static inline int
+bpg_comp_divide16(unsigned val, unsigned alpha, unsigned alpha_inv)
+{
+    if (val >= alpha)
+        return 65535;
+    return (int)((val * alpha_inv + (1u << 14)) >> 15);
+}
+
+static void
+bpg_merge_alpha(uint8_t *dst, const uint8_t *alpha, int pitch,
+                int w, int h, int out_bits, int premultiplied)
+{
+    if (out_bits > 32) {
+        for (int y = 0; y < h; y++) {
+            uint16_t *d = (uint16_t *)(dst + (size_t)y * pitch);
+            const uint16_t *a = (const uint16_t *)(alpha + (size_t)y * pitch);
+            for (int x = 0; x < w; x++) {
+                uint16_t av = a[x * 4 + 0];
+                d[x * 4 + 3] = av;
+                if (premultiplied) {
+                    if (av == 0) {
+                        d[x * 4 + 0] = d[x * 4 + 1] = d[x * 4 + 2] = 65535;
+                    } else {
+                        unsigned inv = ((65535u << 15) + av / 2) / av;
+                        d[x * 4 + 0] = (uint16_t)bpg_comp_divide16(d[x * 4 + 0], av, inv);
+                        d[x * 4 + 1] = (uint16_t)bpg_comp_divide16(d[x * 4 + 1], av, inv);
+                        d[x * 4 + 2] = (uint16_t)bpg_comp_divide16(d[x * 4 + 2], av, inv);
+                    }
+                }
+            }
+        }
+    } else {
+        for (int y = 0; y < h; y++) {
+            uint8_t *d = dst + (size_t)y * pitch;
+            const uint8_t *a = alpha + (size_t)y * pitch;
+            for (int x = 0; x < w; x++) {
+                uint8_t av = a[x * 4 + 0];
+                d[x * 4 + 3] = av;
+                if (premultiplied) {
+                    if (av == 0) {
+                        d[x * 4 + 0] = d[x * 4 + 1] = d[x * 4 + 2] = 255;
+                    } else {
+                        unsigned inv = ((255u << 16) + av / 2 + 128) / av;
+                        d[x * 4 + 0] = (uint8_t)bpg_comp_divide8(d[x * 4 + 0], av, inv);
+                        d[x * 4 + 1] = (uint8_t)bpg_comp_divide8(d[x * 4 + 1], av, inv);
+                        d[x * 4 + 2] = (uint8_t)bpg_comp_divide8(d[x * 4 + 2], av, inv);
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct pic *
@@ -242,11 +339,17 @@ BPG_load(const char *filename, int skip_flag UNUSED)
         free(file_buf); pic_free(p); return NULL;
     }
 
-    if (info.alpha1_flag || info.alpha2_flag) {
-        VERR(bpg, "alpha not supported (alpha1=%d alpha2=%d), refusing",
-             info.alpha1_flag, info.alpha2_flag);
+    /* alpha2 without alpha1 is the "W plane" (libbpg has_w_plane): it is not
+     * alpha, it carries a fourth colour/opacity component for CMYK.  This
+     * loader has no W-plane output contract (ffpic's packed BGRA/BGRA64 has
+     * no spare plane), so refuse it explicitly rather than folding it into
+     * the alpha channel and losing its meaning.  See the file header comment. */
+    if (!info.alpha1_flag && info.alpha2_flag) {
+        VERR(bpg, "BPG W plane (alpha2 without alpha1) is not supported");
         free(file_buf); pic_free(p); return NULL;
     }
+    int has_alpha = info.alpha1_flag;
+    int premultiplied = info.alpha1_flag && info.alpha2_flag;
 
     /* hevc_data 前补 4 字节起始码 00 00 00 01 — 恢复完整 Annex-B. */
     if (info.hevc_data_len < 2) {
@@ -318,7 +421,8 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     }
     VDBG(bpg, "found %d NALs in hevc_data", n_nals);
 
-    struct hevc_param_set hps = {0};
+    struct hevc_param_set hps = {0};   /* colour plane (nuh_layer_id 0) */
+    struct hevc_param_set ahps = {0};  /* alpha plane  (nuh_layer_id 1) */
 
     /* 先分配 pixels (BPG 头已给出 width/height), 一遍喂所有 NAL
      * (与 test_hevc_tiles_real 同模式: 参数集 NAL 传 pixels=NULL, slice NAL 传 pixels) */
@@ -327,12 +431,21 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     int pitch = ((display_w + 15) >> 4) * 16 * (out_bits >> 3);
     if (pitch <= 0) pitch = display_w * (out_bits >> 3);
     uint8_t *pixels = malloc((size_t)pitch * (size_t)display_h);
-    if (!pixels) {
+    /* the auxiliary alpha plane is monochrome but has the same display size,
+     * so it gets its own buffer at the same pitch (channel 0 holds its luma) */
+    uint8_t *alpha_pixels = NULL;
+    if (pixels && has_alpha) {
+        alpha_pixels = malloc((size_t)pitch * (size_t)display_h);
+    }
+    if (!pixels || (has_alpha && !alpha_pixels)) {
+        free(pixels); free(alpha_pixels);
         for (int k = 0; k < n_nals; k++) free(nals[k]);
         free(nals); free(nal_lens); free(annex_b); free(file_buf);
         free_hevc_param_set(&hps); pic_free(p); return NULL;
     }
     memset(pixels, 0, (size_t)pitch * display_h);
+    if (alpha_pixels)
+        memset(alpha_pixels, 0, (size_t)pitch * display_h);
 
     /* BPG keeps the colour matrix and range in its own header; the HEVC
      * stream may carry no VUI at all.  BPG colour space values follow
@@ -360,7 +473,8 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     }
 
     int slice_count = 0;
-    int seen_first_slice = 0;
+    int alpha_slice_count = 0;
+    int seen_first_slice[2] = {0, 0};
     for (int k = 0; k < n_nals; k++) {
         uint8_t *nal = nals[k];
         int nut = (nal[0] & 0x7E) >> 1;
@@ -370,34 +484,69 @@ BPG_load(const char *filename, int skip_flag UNUSED)
          * unbounded VPS layer-set loops off the end of the RBSP. */
         if (nal_lens[k] < 3)
             continue;
+        /* alpha1: the auxiliary plane lives in the same Annex-B stream with
+         * nuh_layer_id == 1.  Route those NALs to the second decoder. */
+        int lid = ((nal[0] & 1) << 5) | (nal[1] >> 3);
+        int plane = (has_alpha && lid == 1) ? 1 : 0;
         /* In an animation the following pictures carry their own
          * first_slice_segment_in_pic_flag; stop before overwriting the
-         * frame we have already composited. */
-        if (info.animation_flag && is_slice && seen_first_slice &&
+         * frame we have already composited.  Tracked per plane so the alpha
+         * and colour pictures do not cut each other short. */
+        if (info.animation_flag && is_slice && seen_first_slice[plane] &&
             (nal[2] & 0x80))
             break;
-        int ret = parse_nalu_ex(nal, nal_lens[k], is_slice ? pixels : NULL,
-                                pitch, display_h, NULL, &hps, out_bits,
-                                have_color_override ? &color_override : NULL);
+        if (plane == 1) {
+            /* Strip the layer id the way libbpg does (nal_buf[4] &= 0x7):
+             * hevc.c only decodes base-layer NALs, and a non-zero
+             * nuh_layer_id would send the slice header down the multilayer
+             * path. */
+            nal[0] &= (uint8_t)~0x01;
+            nal[1] &= (uint8_t)~0xF8;
+        }
+        int ret = parse_nalu_ex(nal, nal_lens[k],
+                                is_slice ? (plane ? alpha_pixels : pixels) : NULL,
+                                pitch, display_h, NULL, plane ? &ahps : &hps,
+                                out_bits,
+                                (plane == 0 && have_color_override)
+                                    ? &color_override : NULL);
         if (is_slice && ret > 0) {
-            slice_count++;
+            if (plane)
+                alpha_slice_count++;
+            else
+                slice_count++;
             if (nal[2] & 0x80)
-                seen_first_slice = 1;
+                seen_first_slice[plane] = 1;
         }
     }
 
     if (slice_count == 0) {
         VERR(bpg, "no slice decoded");
-        free(pixels);
+        free(pixels); free(alpha_pixels);
         for (int k = 0; k < n_nals; k++) free(nals[k]);
         free(nals); free(nal_lens); free(annex_b); free(file_buf);
-        free_hevc_param_set(&hps); pic_free(p); return NULL;
+        free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
+        pic_free(p); return NULL;
+    }
+    /* alpha1 was signalled, so silently dropping the alpha plane would be a
+     * lossy surprise: require that it decoded too. */
+    if (has_alpha && alpha_slice_count == 0) {
+        VERR(bpg, "alpha1 signalled but the alpha plane did not decode");
+        free(pixels); free(alpha_pixels);
+        for (int k = 0; k < n_nals; k++) free(nals[k]);
+        free(nals); free(nal_lens); free(annex_b); free(file_buf);
+        free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
+        pic_free(p); return NULL;
+    }
+    if (has_alpha) {
+        bpg_merge_alpha(pixels, alpha_pixels, pitch, display_w, display_h,
+                        out_bits, premultiplied);
     }
 
     /* 清理 */
     for (int k = 0; k < n_nals; k++) free(nals[k]);
     free(nals); free(nal_lens); free(annex_b); free(file_buf);
-    free_hevc_param_set(&hps);
+    free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
+    free(alpha_pixels);
 
     p->width  = display_w;
     p->height = display_h;

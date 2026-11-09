@@ -204,7 +204,7 @@ skip_err:
 static int
 model_read(const uint8_t *data, int len, long pos, int n, int msb)
 {
-    int ret = 0;
+    uint32_t ret = 0;
     for (int i = 0; i < n; i++) {
         long p = pos + i;
         int bit = 0;
@@ -213,12 +213,12 @@ model_read(const uint8_t *data, int len, long pos, int n, int msb)
             bit = (data[p / 8] >> shift) & 1;
         }
         if (msb) {
-            ret = (ret << 1) | bit;
+            ret = (ret << 1) | (uint32_t)bit;
         } else {
-            ret |= (bit << i);
+            ret |= (uint32_t)bit << i;
         }
     }
-    return ret;
+    return (int)ret;
 }
 
 static int

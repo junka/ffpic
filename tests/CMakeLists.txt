@@ -126,3 +126,11 @@ target_compile_definitions(test_gif PRIVATE
     TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 target_link_libraries(test_gif ffpic m)
 add_test(NAME test_gif COMMAND test_gif)
+
+set(BPG_REAL_TEST ${CMAKE_CURRENT_SOURCE_DIR}/test_bpg_real.c)
+add_executable(test_bpg_real ${BPG_REAL_TEST})
+target_include_directories(test_bpg_real PRIVATE ${FFPIC_DIRS})
+target_compile_definitions(test_bpg_real PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+target_link_libraries(test_bpg_real ffpic m)
+add_test(NAME test_bpg_real COMMAND test_bpg_real)

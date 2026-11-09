@@ -1832,6 +1832,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
     //the cropped height
     size_t data_size = (size_t)pitch * mbrows * 16;
     w->data = malloc(data_size);
+    w->data_len = w->data ? data_size : 0;
     /* intra prediction reads the row above and the column to the left of a
      * macro block, so every plane needs one extra row and column of border.
      * They are filled with the neutral values VP8 uses for unavailable
@@ -1848,6 +1849,7 @@ vp8_decode(WEBP *w, bool_dec *br, bool_dec *btree[4])
         free(V_buf);
         free(w->data);
         w->data = NULL;
+        w->data_len = 0;
         return;
     }
     memset(Y_buf, 127, y_size);
@@ -2032,6 +2034,7 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
     w->fi.width = width;
     w->fi.height = height;
     w->data = malloc((size_t)width * height * 4);
+    w->data_len = w->data ? (size_t)width * height * 4 : 0;
     if (!w->data) {
         bits_vec_free(v);
         VERR(webp, "malloc failed for VP8L pixels");
@@ -2041,6 +2044,7 @@ int WEBP_read_lossless(WEBP *w, FILE *f)
                           (uint32_t *)w->data) < 0) {
         free(w->data);
         w->data = NULL;
+        w->data_len = 0;
         bits_vec_free(v);
         VERR(webp, "vp8l_decode_image failed");
         return -1;
@@ -2142,6 +2146,17 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
         p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     }
     VDBG(webp, "decoded with width %d, pitch %d\n", p->width, p->pitch);
+    /* The container may carry a canvas (VP8X) that disagrees with the frame
+     * the payload decodes to, and every consumer walks p->height rows of
+     * p->pitch bytes.  Anything that does not fit the pixels we actually have
+     * would read past the end of the buffer, so refuse it. */
+    if ((size_t)p->pitch * (size_t)p->height > w->data_len) {
+        VERR(webp, "canvas %dx%d does not fit the %zu decoded bytes\n",
+             p->width, p->height, w->data_len);
+        free(w->data);
+        pic_free(p);
+        return NULL;
+    }
     p->pixels = w->data;
     p->format = CS_PIXELFORMAT_RGB888;
 

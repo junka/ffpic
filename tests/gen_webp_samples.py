@@ -74,6 +74,36 @@ def make_source(kind, w, h):
     return bytes(out)
 
 
+def make_bad_canvas(name, w, h, canvas_w, canvas_h, kind):
+    """A container whose VP8X canvas is larger than the image it carries.
+
+    The payload is a real lossless image, so only the canvas disagrees; the
+    reader has to refuse it rather than hand out a picture whose rows run past
+    the decoded pixels."""
+    from PIL import Image
+
+    img = Image.frombytes("RGB", (w, h), make_source(kind, w, h))
+    tmp = os.path.join(DATA, f"webp_{name}_tmp.webp")
+    img.save(tmp, lossless=True, quality=100, method=4, exact=True)
+    raw = open(tmp, "rb").read()
+    os.remove(tmp)
+    # lift the VP8L chunk out of the file Pillow wrote
+    off = raw.index(b"VP8L")
+    size = int.from_bytes(raw[off + 4:off + 8], "little")
+    vp8l = raw[off:off + 8 + size]
+    if size % 2:
+        vp8l += b"\x00"        # RIFF chunks are padded to an even size
+    vp8x = (b"VP8X" + (10).to_bytes(4, "little") + b"\x00\x00\x00\x00" +
+            (canvas_w - 1).to_bytes(3, "little") +
+            (canvas_h - 1).to_bytes(3, "little"))
+    body = vp8x + vp8l
+    with open(os.path.join(DATA, f"webp_{name}.webp"), "wb") as f:
+        f.write(b"RIFF" + (4 + len(body)).to_bytes(4, "little") + b"WEBP" +
+                body)
+    print(f"{name}: canvas {canvas_w}x{canvas_h} over a {w}x{h} payload "
+          f"({len(body)} byte payload area)")
+
+
 def run(cmd):
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -106,6 +136,8 @@ def main():
             f.write(refdata)
         print(f"{name}: {os.path.getsize(webp)} bytes webp, "
               f"{len(refdata)} bytes ref")
+
+    make_bad_canvas("lossless_badcanvas", 24, 16, 64, 64, "manycolours")
 
 
 if __name__ == "__main__":

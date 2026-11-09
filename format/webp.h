@@ -5,6 +5,7 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
 #include <stdint.h>
 #include "byteorder.h"
 
@@ -308,6 +309,7 @@ typedef struct {
     struct vp8_filter filters[NUM_MB_SEGMENTS][2];
 
     uint8_t *data;
+    size_t data_len;  /* bytes actually allocated for data */
 } WEBP;
 
 void WEBP_init(void);

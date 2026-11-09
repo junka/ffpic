@@ -3213,6 +3213,35 @@ check_webp_lossless_file(const char *name, int want_w, int want_h)
     return rc;
 }
 
+/* A VP8X canvas larger than the VP8L image under it: every consumer walks
+ * p->height rows of p->pitch bytes, so the reader has to refuse the container
+ * instead of handing out rows that run past the decoded pixels.  The fixture
+ * comes from tests/gen_webp_samples.py; copy it here so check_reject can
+ * remove it. */
+static int
+emit_webp_badcanvas(void)
+{
+    char path[512];
+    uint8_t buf[4096];
+    FILE *f;
+    size_t n;
+
+    snprintf(path, sizeof(path), "%s/webp_lossless_badcanvas.webp",
+             TEST_DATA_DIR);
+    f = fopen(path, "rb");
+    if (!f) {
+        printf("cannot open %s\n", path);
+        return -1;
+    }
+    n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    if (n == 0 || n == sizeof(buf)) {
+        printf("%s: unexpected size\n", path);
+        return -1;
+    }
+    return write_file("webp_badcanvas.webp", buf, n);
+}
+
 /* RIFF/WEBP container whose vp8 chunk size promises 104 bytes that are not
  * there, the frame header read has to fail instead of decoding stale memory */
 static int
@@ -3938,6 +3967,10 @@ int main(void)
         failed++;
     }
     if (emit_webp_truncated() || check_reject("webp_short.webp", "WEBP")) {
+        failed++;
+    }
+    if (emit_webp_badcanvas() ||
+        check_reject("webp_badcanvas.webp", "WEBP")) {
         failed++;
     }
 

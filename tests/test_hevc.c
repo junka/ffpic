@@ -296,6 +296,11 @@ test_real_samples(void)
         {"hevc_tenbit", 96, 96, 1024, 0, 0, 1},
         {"hevc_twelvebit", 96, 96, 1024, 0, 0, 1},
         {"hevc_tenbit_mono", 96, 96, 512, 1, 0, 1},
+        /* derived images: identity and overlay (the overlay carries a
+         * non-opaque canvas and a semitransparent child) */
+        {"hevc_iden", 24, 24, 6, 0, 1, 0},
+        {"hevc_iovl", 40, 36, 6, 0, 1, 0},
+        {"hevc_iovl32", 40, 36, 6, 0, 1, 0},
     };
     int rc = 0;
 
@@ -904,6 +909,178 @@ out:
     return rc;
 }
 
+/* One BGRA sample with a tolerance; the HEVC path stores 8 bit channels for
+ * these fixtures. */
+static int
+check_pixel(const char *name, const struct pic *p, int x, int y,
+            int b, int g, int r, int a, int tol)
+{
+    const uint8_t *px;
+
+    if (x >= p->width || y >= p->height || p->depth != 32) {
+        printf("%s: pixel %d,%d is outside the %dx%d picture\n", name, x, y,
+               p->width, p->height);
+        return -1;
+    }
+    px = (const uint8_t *)p->pixels + (size_t)y * p->pitch + (size_t)x * 4;
+    if (abs(px[0] - b) > tol || abs(px[1] - g) > tol ||
+        abs(px[2] - r) > tol || abs(px[3] - a) > tol) {
+        printf("%s: pixel %d,%d is %d,%d,%d,%d, expected %d,%d,%d,%d\n",
+               name, x, y, px[0], px[1], px[2], px[3], b, g, r, a);
+        return -1;
+    }
+    return 0;
+}
+
+/* 'iden' returns the picture of the item it references; 'iovl' composites
+ * its children onto a filled canvas.  Check child placement, the fill where
+ * no child covers the canvas, and source-over blending where the children
+ * overlap and where the semitransparent child sits on the fill. */
+static int
+test_derived_images(void)
+{
+    const char *iden_path = TEST_DATA_DIR "/hevc_iden.heic";
+    const char *iovl_path = TEST_DATA_DIR "/hevc_iovl.heic";
+    const char *iovl32_path = TEST_DATA_DIR "/hevc_iovl32.heic";
+    struct file_ops *iops = file_probe(iden_path);
+    struct file_ops *oops = file_probe(iovl_path);
+    struct file_ops *o32ops = file_probe(iovl32_path);
+    struct pic *iden = NULL, *iovl = NULL, *iovl32 = NULL;
+    int rc = 0;
+
+    if (!iops || strcmp(iops->name, "HEIF") ||
+        !oops || strcmp(oops->name, "HEIF") ||
+        !o32ops || strcmp(o32ops->name, "HEIF")) {
+        printf("derived: probe failed\n");
+        return -1;
+    }
+    iden = file_load(iops, iden_path, 0);
+    if (!iden) {
+        printf("%s: identity derived image did not decode\n", iden_path);
+        rc = -1;
+        goto out;
+    }
+    if (iden->width != 24 || iden->height != 24) {
+        printf("%s: identity is %dx%d, expected 24x24\n", iden_path,
+               iden->width, iden->height);
+        rc = -1;
+    } else if (check_pixel(iden_path, iden, 12, 12, 20, 40, 200, 128, 2) ||
+               check_pixel(iden_path, iden, 0, 0, 20, 40, 200, 128, 2)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the primary identity item queued an extra frame\n",
+               iden_path);
+        rc = -1;
+    }
+
+    iovl = file_load(oops, iovl_path, 0);
+    if (!iovl) {
+        printf("%s: overlay derived image did not decode\n", iovl_path);
+        rc = -1;
+        goto out;
+    }
+    if (iovl->width != 40 || iovl->height != 36) {
+        printf("%s: overlay is %dx%d, expected 40x36\n", iovl_path,
+               iovl->width, iovl->height);
+        rc = -1;
+        goto out;
+    }
+    /* fill outside both children: (0,0) and the bottom right corner */
+    if (check_pixel(iovl_path, iovl, 0, 0, 30, 90, 0, 128, 1) ||
+        check_pixel(iovl_path, iovl, 39, 35, 30, 90, 0, 128, 1) ||
+        /* child A alone at its top-left corner */
+        check_pixel(iovl_path, iovl, 2, 3, 18, 39, 200, 255, 4) ||
+        /* child B over the canvas fill */
+        check_pixel(iovl_path, iovl, 30, 20, 143, 71, 13, 192, 4) ||
+        /* child B over child A, straight-alpha source-over */
+        check_pixel(iovl_path, iovl, 13, 13, 109, 51, 108, 255, 4) ||
+        check_pixel(iovl_path, iovl, 20, 20, 109, 51, 108, 255, 4)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the primary overlay item queued an extra frame\n",
+               iovl_path);
+        rc = -1;
+    }
+
+    /* 32 bit fields, a child starting outside the canvas and one running
+     * past its right and bottom edges. */
+    iovl32 = file_load(o32ops, iovl32_path, 0);
+    if (!iovl32) {
+        printf("%s: 32 bit overlay did not decode\n", iovl32_path);
+        rc = -1;
+        goto out;
+    }
+    if (iovl32->width != 40 || iovl32->height != 36) {
+        printf("%s: overlay is %dx%d, expected 40x36\n", iovl32_path,
+               iovl32->width, iovl32->height);
+        rc = -1;
+        goto out;
+    }
+    if (check_pixel(iovl32_path, iovl32, 0, 0, 18, 39, 200, 255, 4) ||
+        check_pixel(iovl32_path, iovl32, 20, 20, 30, 90, 0, 128, 1) ||
+        check_pixel(iovl32_path, iovl32, 26, 26, 30, 90, 0, 128, 1) ||
+        check_pixel(iovl32_path, iovl32, 35, 33, 143, 71, 13, 192, 4) ||
+        check_pixel(iovl32_path, iovl32, 39, 35, 143, 71, 13, 192, 4)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the 32 bit overlay queued an extra frame\n",
+               iovl32_path);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[hevc_derived]: iden and iovl compose as expected\n");
+    }
+out:
+    if (iden) file_free(iops, iden);
+    if (iovl) file_free(oops, iovl);
+    if (iovl32) file_free(o32ops, iovl32);
+    return rc;
+}
+
+/* Without pitm every top level picture is queued.  The iden item must be
+ * decoded and the hvc1 item it references must not be queued as well. */
+static int
+test_no_primary_iden(void)
+{
+    const char *path = TEST_DATA_DIR "/hevc_iden_nopitm.heic";
+    struct file_ops *ops = file_probe(path);
+    struct pic *p, *q;
+    int rc = 0;
+
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: returned a primary picture without a pitm\n", path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    q = file_dequeue_pic();
+    if (!q) {
+        printf("%s: the iden item was not queued\n", path);
+        return -1;
+    }
+    if (q->width != 24 || q->height != 24 ||
+        check_pixel(path, q, 12, 12, 20, 40, 200, 128, 2)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the referenced item was queued as a second picture\n",
+               path);
+        rc = -1;
+    }
+    file_free(ops, q);
+    if (!rc) {
+        printf("OK[hevc_iden_nopitm]: iden decoded in the no-primary path\n");
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -952,6 +1129,12 @@ int main(void)
         return -1;
     }
     if (test_colr_fallback()) {
+        return -1;
+    }
+    if (test_derived_images()) {
+        return -1;
+    }
+    if (test_no_primary_iden()) {
         return -1;
     }
     return 0;

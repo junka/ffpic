@@ -96,6 +96,10 @@ test_real_samples(void)
         {"avif_hlg10", 96, 96, 2048, 0, 0, 1},
         /* an explicit BT.709 matrix, not the unspecified fallback */
         {"avif_bt709", 96, 96, 8, 0, 0, 0},
+        /* derived images: identity and overlay (non-opaque canvas plus a
+         * semitransparent child) */
+        {"avif_iden", 24, 24, 6, 0, 1, 0},
+        {"avif_iovl", 40, 36, 6, 0, 1, 0},
     };
     int rc = 0;
 
@@ -641,6 +645,101 @@ test_animation_inter(void)
     return rc;
 }
 
+/* One BGRA sample with a tolerance; the derived fixtures are 8 bit. */
+static int
+check_derived_pixel(const char *name, const struct pic *p, int x, int y,
+                    int b, int g, int r, int a, int tol)
+{
+    const uint8_t *px;
+
+    if (x >= p->width || y >= p->height || p->depth != 32) {
+        printf("%s: pixel %d,%d is outside the %dx%d picture\n", name, x, y,
+               p->width, p->height);
+        return -1;
+    }
+    px = (const uint8_t *)p->pixels + (size_t)y * p->pitch + (size_t)x * 4;
+    if (abs(px[0] - b) > tol || abs(px[1] - g) > tol ||
+        abs(px[2] - r) > tol || abs(px[3] - a) > tol) {
+        printf("%s: pixel %d,%d is %d,%d,%d,%d, expected %d,%d,%d,%d\n",
+               name, x, y, px[0], px[1], px[2], px[3], b, g, r, a);
+        return -1;
+    }
+    return 0;
+}
+
+/* avif_iden.avif is an iden primary over a solid av01 item; avif_iovl.avif
+ * overlays two children at non-zero offsets on a semitransparent canvas. */
+static int
+test_derived_images(void)
+{
+    const char *iden_path = TEST_DATA_DIR "/avif_iden.avif";
+    const char *iovl_path = TEST_DATA_DIR "/avif_iovl.avif";
+    struct file_ops *iops = file_probe(iden_path);
+    struct file_ops *oops = file_probe(iovl_path);
+    struct pic *iden = NULL, *iovl = NULL;
+    int rc = 0;
+
+    if (!iops || strcmp(iops->name, "AVIF") ||
+        !oops || strcmp(oops->name, "AVIF")) {
+        printf("derived: probe failed\n");
+        return -1;
+    }
+    iden = file_load(iops, iden_path, 0);
+    if (!iden) {
+        printf("%s: identity derived image did not decode\n", iden_path);
+        rc = -1;
+        goto out;
+    }
+    if (iden->width != 24 || iden->height != 24) {
+        printf("%s: identity is %dx%d, expected 24x24\n", iden_path,
+               iden->width, iden->height);
+        rc = -1;
+    } else if (check_derived_pixel(iden_path, iden, 12, 12,
+                                   20, 40, 200, 128, 2) ||
+               check_derived_pixel(iden_path, iden, 0, 0,
+                                   20, 40, 200, 128, 2)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the primary identity item queued an extra frame\n",
+               iden_path);
+        rc = -1;
+    }
+
+    iovl = file_load(oops, iovl_path, 0);
+    if (!iovl) {
+        printf("%s: overlay derived image did not decode\n", iovl_path);
+        rc = -1;
+        goto out;
+    }
+    if (iovl->width != 40 || iovl->height != 36) {
+        printf("%s: overlay is %dx%d, expected 40x36\n", iovl_path,
+               iovl->width, iovl->height);
+        rc = -1;
+        goto out;
+    }
+    if (check_derived_pixel(iovl_path, iovl, 0, 0, 30, 90, 0, 128, 1) ||
+        check_derived_pixel(iovl_path, iovl, 39, 35, 30, 90, 0, 128, 1) ||
+        check_derived_pixel(iovl_path, iovl, 2, 3, 18, 39, 200, 255, 4) ||
+        check_derived_pixel(iovl_path, iovl, 30, 20, 143, 71, 13, 192, 4) ||
+        check_derived_pixel(iovl_path, iovl, 13, 13, 109, 51, 108, 255, 4) ||
+        check_derived_pixel(iovl_path, iovl, 20, 20, 109, 51, 108, 255, 4)) {
+        rc = -1;
+    }
+    if (file_dequeue_pic()) {
+        printf("%s: the primary overlay item queued an extra frame\n",
+               iovl_path);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[avif_derived]: iden and iovl compose as expected\n");
+    }
+out:
+    if (iden) file_free(iops, iden);
+    if (iovl) file_free(oops, iovl);
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -663,6 +762,9 @@ int main(void)
         return -1;
     }
     if (test_protected()) {
+        return -1;
+    }
+    if (test_derived_images()) {
         return -1;
     }
     return 0;

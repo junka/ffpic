@@ -23,6 +23,14 @@ static void HEIF_free(struct pic *p);
 static int heif_colr_override(const struct colr_box *colr,
                               struct hevc_color_override *ov);
 
+/* Derived images can reference each other; refuse reference cycles instead
+ * of recursing forever. */
+#define HEIF_MAX_DERIVED_DEPTH 8
+
+static struct pic *heif_decode_item(HEIF *h, uint32_t id, int depth);
+static void heif_apply_output_color(HEIF *h, uint32_t id, struct pic *p);
+static int heif_grid_output_bits(HEIF *h, uint32_t grid_id);
+
 static int
 HEIF_probe(FILE *f)
 {
@@ -718,6 +726,28 @@ decode_primary_item(HEIF *h, struct pic *p)
         VWARN(heif, "item %u is protected, not decoding", primary_id);
         return 0;
     }
+    /* 'iden' and 'iovl' are derived images: they have no coded payload of
+     * their own, so decode the referenced items and adopt the result. */
+    if (pri_item->type == TYPE2UINT("iden") ||
+        pri_item->type == TYPE2UINT("iovl")) {
+        struct pic *d = heif_decode_item(h, primary_id, 0);
+        if (!d) {
+            VERR(heif, "failed to decode the derived primary item %u",
+                 primary_id);
+            return 0;
+        }
+        heif_apply_output_color(h, primary_id, d);
+        free(p->pixels);
+        p->pixels = d->pixels;
+        p->width = d->width;
+        p->height = d->height;
+        p->pitch = d->pitch;
+        p->depth = d->depth;
+        p->format = d->format;
+        d->pixels = NULL;
+        heif_pic_free(d);
+        return 1;
+    }
     if (!pri_item->data || pri_item->length == 0) {
         VERR(heif, "primary item %u has no payload", primary_id);
         return 0;
@@ -1038,6 +1068,474 @@ heif_apply_transforms(HEIF *h, uint32_t item_id, struct pic *p)
     p->pitch = frame.pitch;
 }
 
+/* -------------------------------------------------------------------------
+ * Derived image items: 'iden' (identity) and 'iovl' (overlay).
+ * ---------------------------------------------------------------------- */
+
+/* The first dimg reference of an item, which lists its derived children in
+ * the order the item payload expects them. */
+static int
+heif_dimg_target(HEIF *h, uint32_t id, uint32_t *target)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+
+        if (r->type != TYPE2UINT("dimg") || r->from_item_id != id) {
+            continue;
+        }
+        if (r->ref_count == 0) {
+            return -1;
+        }
+        *target = r->to_item_ids[0];
+        return 0;
+    }
+    return -1;
+}
+
+static int
+heif_item_has_color(HEIF *h, uint32_t id)
+{
+    return get_ipma_item_from_item_id(h, id, FOURCC2UINT('c','o','l','r')) ||
+           get_hvcc_from_item_id(h, id);
+}
+
+/* Apply the alpha auxiliary plane referenced by color_id.  The reference is
+ * an auxl edge from the alpha item to the picture item it belongs to. */
+static void
+heif_apply_item_alpha(HEIF *h, uint32_t color_id, struct pic *p)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        struct itemtype_ref_box *ref = &h->meta.iref.refs[i];
+        struct heif_item *r;
+        struct hvcC_box *conf;
+        struct auxC_box *auxc;
+
+        if (ref->type != TYPE2UINT("auxl") ||
+            !heif_ref_targets(ref, color_id)) {
+            continue;
+        }
+        r = find_item_by_id(h, ref->from_item_id);
+        if (!r || r->type != TYPE2UINT("hvc1")) {
+            continue;
+        }
+        conf = get_hvcc_from_item_id(h, r->item->item_id);
+        auxc = get_auxc_from_item_id(h, r->item->item_id);
+        if (!conf || !auxc || !auxc->aux_type) {
+            continue;
+        }
+        if (!heif_aux_is_alpha(auxc->aux_type)) {
+            if (heif_aux_is_depth(auxc->aux_type)) {
+                VDBG(heif, "skipping auxl image: depth plane");
+            } else {
+                VDBG(heif, "skipping auxl image of type %s", auxc->aux_type);
+            }
+            continue;
+        }
+        if (heif_item_protected(h, r->item->item_id)) {
+            VWARN(heif, "alpha item %u is protected, skipping",
+                  r->item->item_id);
+            continue;
+        }
+        if (!r->data || r->length == 0) {
+            VWARN(heif, "alpha item %u has no payload", r->item->item_id);
+            continue;
+        }
+        bool prem = heif_alpha_is_premultiplied(h, color_id,
+                                                r->item->item_id);
+        struct ispe_box *ispe = get_ispe_by_item_id(h, r->item->item_id);
+        int aw = ispe ? (int)ispe->image_width : p->width;
+        int ah = ispe ? (int)ispe->image_height : p->height;
+        struct pic *alpha = HEIF_load_one(aw, ah, r->data, r->length,
+                                          &conf->hps, p->depth,
+                                          conf->lengthSizeMinusOne + 1, NULL);
+        if (!alpha) {
+            VWARN(heif, "cannot decode the alpha item");
+            continue;
+        }
+        heif_apply_alpha(p, alpha, prem);
+        heif_pic_free(alpha);
+    }
+}
+
+/* Apply the colour profile that describes the output of a derived item.  An
+ * iden item without its own colr inherits the profile of the item it
+ * references; an overlay is colour-converted child by child while it is
+ * composed, so it has nothing left to do here. */
+static void
+heif_apply_output_color_depth(HEIF *h, uint32_t id, struct pic *p, int depth)
+{
+    struct heif_item *it = find_item_by_id(h, id);
+    uint32_t target;
+
+    if (!it || depth > HEIF_MAX_DERIVED_DEPTH) {
+        return;
+    }
+    if (it->type == TYPE2UINT("iovl")) {
+        return;
+    }
+    if (heif_item_has_color(h, id)) {
+        heif_apply_color(h, id, p);
+        return;
+    }
+    if (it->type == TYPE2UINT("iden") &&
+        heif_dimg_target(h, id, &target) == 0) {
+        heif_apply_output_color_depth(h, target, p, depth + 1);
+    }
+}
+
+static void
+heif_apply_output_color(HEIF *h, uint32_t id, struct pic *p)
+{
+    heif_apply_output_color_depth(h, id, p, 0);
+}
+
+static uint16_t
+heif_be16(const uint8_t *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static uint32_t
+heif_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+
+struct heif_iovl_header {
+    uint16_t fill[4];           /* R, G, B, A (straight alpha) */
+    uint32_t width, height;
+    int field_len;              /* 2 or 4 bytes per value */
+};
+
+/* ISO/IEC 23008-12 overlay derived image payload:
+ *   u8 version, u8 flags, 4 x u16 fill, output size, 2 offsets per child.
+ * The 16 bit values of an 8 bit output are left-aligned, so the high byte
+ * carries the sample. */
+static int
+heif_parse_iovl(const struct heif_item *it, uint16_t ref_count,
+                struct heif_iovl_header *ov, size_t *offsets_at)
+{
+    const uint8_t *d = it->data;
+    size_t len = (size_t)it->length;
+    size_t pos;
+
+    if (!d || len < 12 || d[0] != 0) {
+        return -EINVAL;
+    }
+    ov->field_len = (d[1] & 1) ? 4 : 2;
+    pos = 2;
+    for (int i = 0; i < 4; i++) {
+        ov->fill[i] = heif_be16(d + pos);
+        pos += 2;
+    }
+    if (pos + (size_t)2 * ov->field_len +
+            (size_t)ref_count * 2 * ov->field_len > len) {
+        return -EINVAL;
+    }
+    if (ov->field_len == 2) {
+        ov->width = heif_be16(d + pos);
+        ov->height = heif_be16(d + pos + 2);
+    } else {
+        ov->width = heif_be32(d + pos);
+        ov->height = heif_be32(d + pos + 4);
+    }
+    pos += (size_t)2 * ov->field_len;
+    *offsets_at = pos;
+    /* A sanity bound keeps the pitch arithmetic and the allocation inside
+     * the range of int; real overlay canvases are far smaller. */
+    return ov->width && ov->height && ov->width <= 65535 &&
+           ov->height <= 65535 ? 0 : -EINVAL;
+}
+
+/* Source-over composite of one straight-alpha BGRA pixel. */
+static void
+heif_blend8(uint8_t *dst, const uint8_t *src)
+{
+    unsigned sa = src[3], da = dst[3], da2, oa;
+
+    if (sa == 0) {
+        return;
+    }
+    if (sa == 255) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = 255;
+        return;
+    }
+    da2 = (da * (255 - sa) + 127) / 255;
+    oa = sa + da2;
+    for (int c = 0; c < 3; c++) {
+        dst[c] = (uint8_t)((src[c] * sa + dst[c] * da2 + oa / 2) / oa);
+    }
+    dst[3] = (uint8_t)oa;
+}
+
+static void
+heif_blend16(uint16_t *dst, const uint16_t *src)
+{
+    uint32_t sa = src[3], da = dst[3];
+    uint64_t da2, oa;
+
+    if (sa == 0) {
+        return;
+    }
+    if (sa == 65535) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = 65535;
+        return;
+    }
+    da2 = ((uint64_t)da * (65535 - sa) + 32767) / 65535;
+    oa = sa + da2;
+    for (int c = 0; c < 3; c++) {
+        dst[c] = (uint16_t)(((uint64_t)src[c] * sa +
+                             (uint64_t)dst[c] * da2 + oa / 2) / oa);
+    }
+    dst[3] = (uint16_t)oa;
+}
+
+static void
+heif_fill_canvas(struct pic *canvas, const uint16_t fill[4])
+{
+    int wide = canvas->depth > 32;
+
+    for (int y = 0; y < canvas->height; y++) {
+        uint8_t *row = (uint8_t *)canvas->pixels +
+                       (size_t)y * canvas->pitch;
+        for (int x = 0; x < canvas->width; x++) {
+            if (wide) {
+                uint16_t *px = (uint16_t *)row + (size_t)x * 4;
+
+                px[0] = fill[2];
+                px[1] = fill[1];
+                px[2] = fill[0];
+                px[3] = fill[3];
+            } else {
+                uint8_t *px = row + (size_t)x * 4;
+
+                px[0] = (uint8_t)(fill[2] >> 8);
+                px[1] = (uint8_t)(fill[1] >> 8);
+                px[2] = (uint8_t)(fill[0] >> 8);
+                px[3] = (uint8_t)(fill[3] >> 8);
+            }
+        }
+    }
+}
+
+/* Place src at (dx,dy), clipping everything that falls outside the canvas. */
+static void
+heif_overlay_blit(struct pic *canvas, const struct pic *src, int dx, int dy)
+{
+    int wide = canvas->depth > 32;
+    int bpp = wide ? 8 : 4;
+    long long x0 = dx < 0 ? 0 : dx;
+    long long y0 = dy < 0 ? 0 : dy;
+    long long x1 = (long long)dx + src->width;
+    long long y1 = (long long)dy + src->height;
+
+    if (x1 > canvas->width) {
+        x1 = canvas->width;
+    }
+    if (y1 > canvas->height) {
+        y1 = canvas->height;
+    }
+    for (long long y = y0; y < y1; y++) {
+        for (long long x = x0; x < x1; x++) {
+            const uint8_t *sp = (const uint8_t *)src->pixels +
+                                (size_t)(y - dy) * src->pitch +
+                                (size_t)(x - dx) * bpp;
+            uint8_t *dp = (uint8_t *)canvas->pixels +
+                          (size_t)y * canvas->pitch + (size_t)x * bpp;
+
+            if (wide) {
+                heif_blend16((uint16_t *)dp, (const uint16_t *)sp);
+            } else {
+                heif_blend8(dp, sp);
+            }
+        }
+    }
+}
+
+static struct pic *
+heif_decode_overlay(HEIF *h, struct heif_item *it, uint32_t id, int depth)
+{
+    const struct itemtype_ref_box *ref = NULL;
+    struct heif_iovl_header ov;
+    struct pic *canvas = NULL;
+    size_t pos;
+    int use_outer_color;
+
+    if (depth > HEIF_MAX_DERIVED_DEPTH) {
+        VERR(heif, "derived image nesting is too deep at item %u", id);
+        return NULL;
+    }
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        if (h->meta.iref.refs[i].type == TYPE2UINT("dimg") &&
+            h->meta.iref.refs[i].from_item_id == id) {
+            ref = &h->meta.iref.refs[i];
+            break;
+        }
+    }
+    if (!ref || ref->ref_count == 0) {
+        VERR(heif, "overlay item %u has no dimg reference", id);
+        return NULL;
+    }
+    if (heif_parse_iovl(it, ref->ref_count, &ov, &pos) < 0) {
+        VERR(heif, "malformed overlay item %u", id);
+        return NULL;
+    }
+
+    use_outer_color = heif_item_has_color(h, id);
+    for (int j = 0; j < ref->ref_count; j++) {
+        uint32_t child = ref->to_item_ids[j];
+        int dx, dy;
+        struct pic *cp;
+
+        if (ov.field_len == 2) {
+            dx = (int16_t)heif_be16(it->data + pos);
+            dy = (int16_t)heif_be16(it->data + pos + 2);
+        } else {
+            dx = (int32_t)heif_be32(it->data + pos);
+            dy = (int32_t)heif_be32(it->data + pos + 4);
+        }
+        pos += (size_t)2 * ov.field_len;
+
+        cp = heif_decode_item(h, child, depth + 1);
+        if (!cp) {
+            VERR(heif, "overlay child %d (item %u) is not decodable", j,
+                 child);
+            goto fail;
+        }
+        /* The overlay item's colour profile describes the output; without
+         * one each child contributes its own. */
+        if (use_outer_color) {
+            heif_apply_color(h, id, cp);
+        } else {
+            heif_apply_output_color_depth(h, child, cp, depth + 1);
+        }
+        if (!canvas) {
+            if (cp->depth != 32 && cp->depth != 64) {
+                VERR(heif, "overlay child has an unsupported depth");
+                heif_pic_free(cp);
+                goto fail;
+            }
+            canvas = heif_pic_alloc((int)ov.width, (int)ov.height,
+                                    cp->depth);
+            if (!canvas) {
+                heif_pic_free(cp);
+                goto fail;
+            }
+            heif_fill_canvas(canvas, ov.fill);
+        }
+        if (cp->depth != canvas->depth) {
+            VERR(heif, "overlay children mix %d and %d bit samples",
+                 cp->depth, canvas->depth);
+            heif_pic_free(cp);
+            goto fail;
+        }
+        heif_overlay_blit(canvas, cp, dx, dy);
+        heif_pic_free(cp);
+    }
+    heif_apply_item_alpha(h, id, canvas);
+    heif_apply_transforms(h, id, canvas);
+    return canvas;
+
+fail:
+    if (canvas) {
+        heif_pic_free(canvas);
+    }
+    return NULL;
+}
+
+/* Decode one item and apply the properties that belong to it.  Colour
+ * management for the output is left to heif_apply_output_color(), because an
+ * overlay converts each child into the colour space of its canvas while it
+ * composes. */
+static struct pic *
+heif_decode_item(HEIF *h, uint32_t id, int depth)
+{
+    struct heif_item *it;
+
+    if (depth > HEIF_MAX_DERIVED_DEPTH) {
+        VERR(heif, "derived image nesting is too deep at item %u", id);
+        return NULL;
+    }
+    it = find_item_by_id(h, id);
+    if (!it) {
+        return NULL;
+    }
+    if (it->type == TYPE2UINT("hvc1")) {
+        struct hvcC_box *conf = get_hvcc_from_item_id(h, id);
+        struct ispe_box *ispe = get_ispe_by_item_id(h, id);
+        struct hevc_color_override ov;
+        int have;
+        struct pic *p;
+
+        if (!conf || !ispe || !it->data || it->length == 0) {
+            VERR(heif, "item %u is not a complete hvc1 item", id);
+            return NULL;
+        }
+        have = heif_colr_override((struct colr_box *)
+            get_ipma_item_from_item_id(h, id, FOURCC2UINT('c','o','l','r')),
+            &ov);
+        p = HEIF_load_one((int)ispe->image_width,
+                          (int)ispe->image_height, it->data, it->length,
+                          &conf->hps, heif_output_bits(conf),
+                          conf->lengthSizeMinusOne + 1, have ? &ov : NULL);
+        if (!p) {
+            return NULL;
+        }
+        heif_apply_item_alpha(h, id, p);
+        heif_apply_transforms(h, id, p);
+        return p;
+    }
+    if (it->type == TYPE2UINT("grid")) {
+        struct grid ig;
+        struct pic *p;
+
+        if (read_grid_header(it, &ig) < 0) {
+            VERR(heif, "malformed grid item %u", id);
+            return NULL;
+        }
+        p = heif_pic_alloc((int)ig.output_width, (int)ig.output_height,
+                           heif_grid_output_bits(h, id));
+        if (!p) {
+            return NULL;
+        }
+        if (!decode_grid_items(h, it, p)) {
+            heif_pic_free(p);
+            return NULL;
+        }
+        heif_apply_item_alpha(h, id, p);
+        heif_apply_transforms(h, id, p);
+        return p;
+    }
+    if (it->type == TYPE2UINT("iden")) {
+        uint32_t target;
+        struct pic *p;
+
+        if (heif_dimg_target(h, id, &target) < 0) {
+            VERR(heif, "identity item %u has no dimg reference", id);
+            return NULL;
+        }
+        p = heif_decode_item(h, target, depth + 1);
+        if (!p) {
+            return NULL;
+        }
+        heif_apply_item_alpha(h, id, p);
+        heif_apply_transforms(h, id, p);
+        return p;
+    }
+    if (it->type == TYPE2UINT("iovl")) {
+        return heif_decode_overlay(h, it, id, depth);
+    }
+    VERR(heif, "item %u has an unsupported derived type", id);
+    return NULL;
+}
+
 /* A thumbnail is referenced by the picture it depicts, not a picture of its
  * own to show. */
 static bool
@@ -1085,14 +1583,21 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
 
     if (has_primary_item(h)) {
         uint32_t primary_id = get_primary_item_id(h);
+        struct heif_item *pri = find_item_by_id(h, primary_id);
+        int derived = pri && (pri->type == TYPE2UINT("iden") ||
+                              pri->type == TYPE2UINT("iovl"));
 
         num = decode_primary_item(h, p);
         if (!num) {
             return 0;
         }
-        heif_apply_color(h, primary_id, p);
-        num += decode_reference_items_for_primary(h, primary_id, p);
-        heif_apply_transforms(h, primary_id, p);
+        /* A derived item already applied its own colour profile, alpha and
+         * transforms while it was composed. */
+        if (!derived) {
+            heif_apply_color(h, primary_id, p);
+            num += decode_reference_items_for_primary(h, primary_id, p);
+            heif_apply_transforms(h, primary_id, p);
+        }
         return num;
     }
     // we may have no primary id
@@ -1156,6 +1661,23 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             } else {
                 heif_pic_free(p1);
             }
+        } else if (h->items[i].type == TYPE2UINT("iden") ||
+                   h->items[i].type == TYPE2UINT("iovl")) {
+            uint32_t id = h->items[i].item->item_id;
+
+            /* A derived item referenced by another one is a part of that
+             * picture, not a picture of its own. */
+            if (is_grid_tile(h, id) || is_thumbnail(h, id) ||
+                heif_item_protected(h, id)) {
+                continue;
+            }
+            struct pic *p1 = heif_decode_item(h, id, 0);
+            if (!p1) {
+                continue;
+            }
+            heif_apply_output_color(h, id, p1);
+            file_enqueue_pic(p1);
+            num++;
         }
     }
     return num;

@@ -1606,12 +1606,12 @@ avif_collect_metadata(AVIF *h, uint32_t primary, FILE *f, uint64_t file_size)
 }
 
 /* Pack one decoded image into p (BGRA / 16 bit BGRA), then apply the
- * container colour profile, the alpha auxiliary plane and the iprp
- * transforms.  Consumes img and alpha. */
-static struct pic *
-avif_build_picture(AVIF *h, struct pic *p, uint32_t color_id,
-                   struct av1_image *img, struct av1_image *alpha,
-                   int has_alpha)
+ * container colour profile and the alpha auxiliary plane.  The iprp
+ * transforms are applied separately.  Consumes img and alpha. */
+static int
+avif_pack_image(AVIF *h, struct pic *p, uint32_t color_id,
+                struct av1_image *img, struct av1_image *alpha,
+                int has_alpha)
 {
     avif_colr_override_image(avif_item_colr(h, color_id), img);
     int wide = img->bitdepth > 8;
@@ -1659,24 +1659,44 @@ avif_build_picture(AVIF *h, struct pic *p, uint32_t color_id,
                      alpha->width, alpha->height, img->width, img->height);
             }
         }
-        struct packed_frame frame = {
-            .pixels = p->pixels,
-            .width = p->width,
-            .height = p->height,
-            .pitch = p->pitch,
-            .bpp = p->depth >> 3,
-        };
-
-        packed_apply_transforms(&h->meta.iprp, color_id, &frame);
-        p->pixels = frame.pixels;
-        p->width = frame.width;
-        p->height = frame.height;
-        p->pitch = frame.pitch;
     }
     av1_image_free(img);
     if (has_alpha) {
         av1_image_free(alpha);
     }
+    return p->pixels ? 0 : -ENOMEM;
+}
+
+/* Apply the item's irot/imir/clap properties in ipma order. */
+static void
+avif_apply_transforms_pic(AVIF *h, uint32_t item_id, struct pic *p)
+{
+    struct packed_frame frame = {
+        .pixels = p->pixels,
+        .width = p->width,
+        .height = p->height,
+        .pitch = p->pitch,
+        .bpp = p->depth >> 3,
+    };
+
+    if (packed_apply_transforms(&h->meta.iprp, item_id, &frame) < 0) {
+        return;
+    }
+    p->pixels = frame.pixels;
+    p->width = frame.width;
+    p->height = frame.height;
+    p->pitch = frame.pitch;
+}
+
+static struct pic *
+avif_build_picture(AVIF *h, struct pic *p, uint32_t color_id,
+                   struct av1_image *img, struct av1_image *alpha,
+                   int has_alpha)
+{
+    if (avif_pack_image(h, p, color_id, img, alpha, has_alpha) < 0) {
+        return NULL;
+    }
+    avif_apply_transforms_pic(h, color_id, p);
     return p->pixels ? p : NULL;
 }
 
@@ -1821,6 +1841,447 @@ fail:
     return -EINVAL;
 }
 
+/* -------------------------------------------------------------------------
+ * Derived image items: 'iden' (identity) and 'iovl' (overlay).
+ * ---------------------------------------------------------------------- */
+
+#define AVIF_MAX_DERIVED_DEPTH 8
+
+static int
+avif_dimg_target(const AVIF *h, uint32_t id, uint32_t *target)
+{
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+
+        if (r->type != FOURCC2UINT('d','i','m','g') ||
+            r->from_item_id != id) {
+            continue;
+        }
+        if (r->ref_count == 0) {
+            return -1;
+        }
+        *target = r->to_item_ids[0];
+        return 0;
+    }
+    return -1;
+}
+
+static uint16_t
+avif_be16(const uint8_t *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static uint32_t
+avif_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+
+struct avif_iovl_header {
+    uint16_t fill[4];           /* R, G, B, A (straight alpha) */
+    uint32_t width, height;
+    int field_len;
+};
+
+/* ISO/IEC 23008-12 overlay derived image payload; see the matching parser
+ * in format/heif.c.  For an 8 bit canvas the 16 bit fill values are
+ * left-aligned, so the high byte is the sample. */
+static int
+avif_parse_iovl(const struct avif_item *it, uint16_t ref_count,
+                struct avif_iovl_header *ov, size_t *offsets_at)
+{
+    const uint8_t *d = it->data;
+    size_t len = (size_t)it->length;
+    size_t pos;
+
+    if (!d || len < 12 || d[0] != 0) {
+        return -EINVAL;
+    }
+    ov->field_len = (d[1] & 1) ? 4 : 2;
+    pos = 2;
+    for (int i = 0; i < 4; i++) {
+        ov->fill[i] = avif_be16(d + pos);
+        pos += 2;
+    }
+    if (pos + (size_t)2 * ov->field_len +
+            (size_t)ref_count * 2 * ov->field_len > len) {
+        return -EINVAL;
+    }
+    if (ov->field_len == 2) {
+        ov->width = avif_be16(d + pos);
+        ov->height = avif_be16(d + pos + 2);
+    } else {
+        ov->width = avif_be32(d + pos);
+        ov->height = avif_be32(d + pos + 4);
+    }
+    pos += (size_t)2 * ov->field_len;
+    if (!ov->width || !ov->height || ov->width > 65535 ||
+        ov->height > 65535) {
+        return -EINVAL;
+    }
+    *offsets_at = pos;
+    return 0;
+}
+
+static void
+avif_blend8(uint8_t *dst, const uint8_t *src)
+{
+    unsigned sa = src[3], da = dst[3], da2, oa;
+
+    if (sa == 0) {
+        return;
+    }
+    if (sa == 255) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = 255;
+        return;
+    }
+    da2 = (da * (255 - sa) + 127) / 255;
+    oa = sa + da2;
+    for (int c = 0; c < 3; c++) {
+        dst[c] = (uint8_t)((src[c] * sa + dst[c] * da2 + oa / 2) / oa);
+    }
+    dst[3] = (uint8_t)oa;
+}
+
+static void
+avif_blend16(uint16_t *dst, const uint16_t *src)
+{
+    uint32_t sa = src[3], da = dst[3];
+    uint64_t da2, oa;
+
+    if (sa == 0) {
+        return;
+    }
+    if (sa == 65535) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = 65535;
+        return;
+    }
+    da2 = ((uint64_t)da * (65535 - sa) + 32767) / 65535;
+    oa = sa + da2;
+    for (int c = 0; c < 3; c++) {
+        dst[c] = (uint16_t)(((uint64_t)src[c] * sa +
+                             (uint64_t)dst[c] * da2 + oa / 2) / oa);
+    }
+    dst[3] = (uint16_t)oa;
+}
+
+static void
+avif_fill_canvas(struct pic *canvas, const uint16_t fill[4])
+{
+    int wide = canvas->depth > 32;
+
+    for (int y = 0; y < canvas->height; y++) {
+        uint8_t *row = (uint8_t *)canvas->pixels +
+                       (size_t)y * canvas->pitch;
+        for (int x = 0; x < canvas->width; x++) {
+            if (wide) {
+                uint16_t *px = (uint16_t *)row + (size_t)x * 4;
+
+                px[0] = fill[2];
+                px[1] = fill[1];
+                px[2] = fill[0];
+                px[3] = fill[3];
+            } else {
+                uint8_t *px = row + (size_t)x * 4;
+
+                px[0] = (uint8_t)(fill[2] >> 8);
+                px[1] = (uint8_t)(fill[1] >> 8);
+                px[2] = (uint8_t)(fill[0] >> 8);
+                px[3] = (uint8_t)(fill[3] >> 8);
+            }
+        }
+    }
+}
+
+static void
+avif_overlay_blit(struct pic *canvas, const struct pic *src, int dx, int dy)
+{
+    int wide = canvas->depth > 32;
+    int bpp = wide ? 8 : 4;
+    long long x0 = dx < 0 ? 0 : dx;
+    long long y0 = dy < 0 ? 0 : dy;
+    long long x1 = (long long)dx + src->width;
+    long long y1 = (long long)dy + src->height;
+
+    if (x1 > canvas->width) {
+        x1 = canvas->width;
+    }
+    if (y1 > canvas->height) {
+        y1 = canvas->height;
+    }
+    for (long long y = y0; y < y1; y++) {
+        for (long long x = x0; x < x1; x++) {
+            const uint8_t *sp = (const uint8_t *)src->pixels +
+                                (size_t)(y - dy) * src->pitch +
+                                (size_t)(x - dx) * bpp;
+            uint8_t *dp = (uint8_t *)canvas->pixels +
+                          (size_t)y * canvas->pitch + (size_t)x * bpp;
+
+            if (wide) {
+                avif_blend16((uint16_t *)dp, (const uint16_t *)sp);
+            } else {
+                avif_blend8(dp, sp);
+            }
+        }
+    }
+}
+
+/* Resolve a derived item to the av01 or grid item that carries its coded
+ * samples. */
+static int
+avif_resolve_payload(const AVIF *h, uint32_t id, int depth, uint32_t *payload)
+{
+    int idx;
+    uint32_t type, target;
+
+    if (depth > AVIF_MAX_DERIVED_DEPTH) {
+        return -EINVAL;
+    }
+    idx = avif_item_index(h, id);
+    if (idx < 0) {
+        return -EINVAL;
+    }
+    type = h->items[idx].type;
+    if (type == TYPE2UINT("av01") || type == TYPE2UINT("grid")) {
+        *payload = id;
+        return 0;
+    }
+    if (type == TYPE2UINT("iden") &&
+        avif_dimg_target(h, id, &target) == 0) {
+        return avif_resolve_payload(h, target, depth + 1, payload);
+    }
+    return -EINVAL;
+}
+
+static int
+avif_decode_item_image(AVIF *h, FILE *f, uint64_t file_size,
+                       uint32_t rep_id, struct av1_image *img)
+{
+    uint32_t payload;
+    int idx;
+
+    if (avif_resolve_payload(h, rep_id, 0, &payload) < 0) {
+        return -EINVAL;
+    }
+    idx = avif_item_index(h, payload);
+    if (idx < 0) {
+        return -EINVAL;
+    }
+    if (h->items[idx].type == TYPE2UINT("av01")) {
+        if (pre_read_item(h, f, idx, file_size) < 0) {
+            return -EINVAL;
+        }
+        return avif_decode_item(h, payload, h->items[idx].data,
+                                (size_t)h->items[idx].length, img);
+    }
+    return avif_decode_grid_item(h, f, file_size, payload, img);
+}
+
+/* Decode the alpha auxiliary plane of rep_id, or of the coded item it
+ * references when the auxl edge points there. */
+static int
+avif_decode_alpha_for(AVIF *h, FILE *f, uint64_t file_size, uint32_t rep_id,
+                      uint32_t payload_id, struct av1_image *alpha)
+{
+    int ai = avif_find_alpha_item(h, rep_id);
+
+    if (ai < 0 && payload_id != rep_id) {
+        ai = avif_find_alpha_item(h, payload_id);
+    }
+    if (ai < 0 || pre_read_item(h, f, ai, file_size) < 0 ||
+        h->items[ai].length == 0) {
+        return 0;
+    }
+    memset(alpha, 0, sizeof(*alpha));
+    return avif_decode_item(h, h->items[ai].item->item_id,
+                            h->items[ai].data,
+                            (size_t)h->items[ai].length, alpha) == 0;
+}
+
+/* Compose an 'iovl' item into out.  Children are packed with the overlay's
+ * colour profile (or their own when the overlay has none), so the canvas
+ * fill values are already in the output colour space. */
+static int
+avif_decode_overlay_item(AVIF *h, FILE *f, uint64_t file_size, uint32_t id,
+                         struct pic *out)
+{
+    const struct itemtype_ref_box *ref = NULL;
+    struct avif_iovl_header ov;
+    struct pic *canvas = NULL;
+    struct avif_item *it;
+    size_t pos;
+    int use_outer_color;
+
+    int idx = avif_item_index(h, id);
+    if (idx < 0 || pre_read_item(h, f, idx, file_size) < 0) {
+        return -EINVAL;
+    }
+    it = &h->items[idx];
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        if (h->meta.iref.refs[i].type == FOURCC2UINT('d','i','m','g') &&
+            h->meta.iref.refs[i].from_item_id == id) {
+            ref = &h->meta.iref.refs[i];
+            break;
+        }
+    }
+    if (!ref || ref->ref_count == 0) {
+        VERR(avif, "overlay item %u has no dimg reference", id);
+        return -EINVAL;
+    }
+    if (avif_parse_iovl(it, ref->ref_count, &ov, &pos) < 0) {
+        VERR(avif, "malformed overlay item %u", id);
+        return -EINVAL;
+    }
+
+    use_outer_color = avif_item_colr(h, id) != NULL;
+    for (int j = 0; j < ref->ref_count; j++) {
+        uint32_t child = ref->to_item_ids[j];
+        uint32_t payload;
+        struct av1_image img, alpha;
+        struct pic *cp;
+        int dx, dy, has_alpha;
+
+        if (ov.field_len == 2) {
+            dx = (int16_t)avif_be16(it->data + pos);
+            dy = (int16_t)avif_be16(it->data + pos + 2);
+        } else {
+            dx = (int32_t)avif_be32(it->data + pos);
+            dy = (int32_t)avif_be32(it->data + pos + 4);
+        }
+        pos += (size_t)2 * ov.field_len;
+
+        if (avif_resolve_payload(h, child, 0, &payload) < 0) {
+            VERR(avif, "overlay child %d (item %u) has no coded payload",
+                 j, child);
+            goto fail;
+        }
+        memset(&img, 0, sizeof(img));
+        if (avif_decode_item_image(h, f, file_size, child, &img) != 0) {
+            VERR(avif, "overlay child %d (item %u) failed to decode", j,
+                 child);
+            av1_image_free(&img);
+            goto fail;
+        }
+        has_alpha = avif_decode_alpha_for(h, f, file_size, child, payload,
+                                          &alpha);
+        cp = pic_alloc(sizeof(AVIF));
+        if (!cp) {
+            av1_image_free(&img);
+            if (has_alpha) {
+                av1_image_free(&alpha);
+            }
+            goto fail;
+        }
+        if (avif_pack_image(h, cp, use_outer_color ? id : child, &img,
+                            &alpha, has_alpha) < 0) {
+            AVIF_free(cp);
+            goto fail;
+        }
+        avif_apply_transforms_pic(h, child, cp);
+        if (!canvas) {
+            out->width = (int)ov.width;
+            out->height = (int)ov.height;
+            out->depth = cp->depth;
+            out->pitch = ((out->width + 15) >> 4) * 16 *
+                         (out->depth >> 3);
+            out->format = out->depth > 32 ? CS_PIXELFORMAT_BGRA64
+                                          : CS_PIXELFORMAT_BGRA_BYTES;
+            out->pixels = calloc(1, (size_t)out->pitch * out->height);
+            if (!out->pixels) {
+                AVIF_free(cp);
+                goto fail;
+            }
+            avif_fill_canvas(out, ov.fill);
+            canvas = out;
+        }
+        if (cp->depth != canvas->depth) {
+            VERR(avif, "overlay children mix %d and %d bit samples",
+                 cp->depth, canvas->depth);
+            AVIF_free(cp);
+            goto fail;
+        }
+        avif_overlay_blit(canvas, cp, dx, dy);
+        AVIF_free(cp);
+    }
+    if (!canvas) {
+        goto fail;
+    }
+    struct av1_image oalpha;
+    if (avif_decode_alpha_for(h, f, file_size, id, id, &oalpha)) {
+        int prem = avif_color_is_premultiplied(h, id);
+
+        if (oalpha.width == canvas->width &&
+            oalpha.height == canvas->height) {
+            if (canvas->depth > 32) {
+                avif_apply_alpha16(&oalpha, canvas->pixels, canvas->pitch,
+                                   canvas->width, canvas->height, prem);
+            } else {
+                avif_apply_alpha(&oalpha, canvas->pixels, canvas->pitch,
+                                 canvas->width, canvas->height, prem);
+            }
+        } else {
+            VWARN(avif, "overlay alpha is %dx%d, canvas is %dx%d",
+                  oalpha.width, oalpha.height, canvas->width, canvas->height);
+        }
+        av1_image_free(&oalpha);
+    }
+    avif_apply_transforms_pic(h, id, out);
+    return 0;
+
+fail:
+    if (canvas && canvas->pixels) {
+        free(canvas->pixels);
+        canvas->pixels = NULL;
+    }
+    return -EINVAL;
+}
+
+/* Decode an iden or iovl primary and return its picture, reusing out as the
+ * AVIF container.  Returns NULL on failure; the caller must not fall back
+ * to the blank container view for these items. */
+static struct pic *
+avif_decode_derived_primary(AVIF *h, FILE *f, uint64_t file_size,
+                            uint32_t id, struct pic *out)
+{
+    int idx = avif_item_index(h, id);
+    uint32_t payload;
+    struct av1_image img, alpha;
+    int has_alpha;
+
+    if (idx < 0) {
+        return NULL;
+    }
+    if (h->items[idx].type == TYPE2UINT("iovl")) {
+        if (avif_decode_overlay_item(h, f, file_size, id, out) < 0) {
+            return NULL;
+        }
+        return out;
+    }
+    if (h->items[idx].type != TYPE2UINT("iden")) {
+        return NULL;
+    }
+    if (avif_resolve_payload(h, id, 0, &payload) < 0) {
+        VERR(avif, "identity item %u has no coded payload", id);
+        return NULL;
+    }
+    memset(&img, 0, sizeof(img));
+    if (avif_decode_item_image(h, f, file_size, id, &img) != 0) {
+        VERR(avif, "identity item %u failed to decode", id);
+        av1_image_free(&img);
+        return NULL;
+    }
+    has_alpha = avif_decode_alpha_for(h, f, file_size, id, payload, &alpha);
+    return avif_build_picture(h, out, id, &img, &alpha, has_alpha);
+}
+
 static struct pic*
 AVIF_load(const char *filename, int skip_flag UNUSED)
 {
@@ -1931,6 +2392,34 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         }
         VWARN(avif, "grid item %u could not be composed", primary_id);
         /* fall through to the container-only path */
+    }
+
+    /* Static identity and overlay derived images.  These have no coded
+     * payload of their own, and must not fall through to the blank
+     * container view when their referenced items cannot be decoded. */
+    if (primary_idx >= 0 &&
+        (h->items[primary_idx].type == FOURCC2UINT('i','d','e','n') ||
+         h->items[primary_idx].type == FOURCC2UINT('i','o','v','l'))) {
+        struct pic *out;
+
+        if (avif_item_protected(h, primary_id)) {
+            VERR(avif, "derived primary item %u is protected", primary_id);
+            fclose(f);
+            AVIF_free(p);
+            return NULL;
+        }
+        out = avif_decode_derived_primary(h, f, (uint64_t)file_size,
+                                          primary_id, p);
+        fclose(f);
+        if (out) {
+            VINFO(avif, "decoded %dx%d derived item with the built-in AV1 "
+                  "decoder", out->width, out->height);
+            return out;
+        }
+        VERR(avif, "derived primary item %u could not be decoded",
+             primary_id);
+        AVIF_free(p);
+        return NULL;
     }
 
     /* Decode the primary AV1 image item with the in-house spec-based

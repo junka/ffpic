@@ -140,7 +140,7 @@ md5_hex(const uint8_t *buf, size_t len, char out[33])
     memcpy(digest, &a0, 4); memcpy(digest + 4, &b0, 4);
     memcpy(digest + 8, &c0, 4); memcpy(digest + 12, &d0, 4);
     for (int i = 0; i < 16; i++)
-        sprintf(out + i*2, "%02x", digest[i]);
+        snprintf(out + i*2, 3, "%02x", digest[i]);
     out[32] = 0;
     return 0;
 }
@@ -518,8 +518,11 @@ int main(void)
      * value (from our decoder), not an ffmpeg reference — BT.601 default
      * matrix + limited range is shared by both, but the HEVC encoder's SAO /
      * deblocking between x265 and ffmpeg differ enough that MD5 will never
-     * match exactly.  The hash verifies output stability on CI. */
-    const char OUR_REF_MD5[] = "652fda5ba8ef9e52d2358afae71658b3";
+     * match exactly.  The hash verifies output stability on CI.  Recomputed
+     * after the SAO vertical edge-offset table fix (the previous value was
+     * produced while the decoder compared a pixel against itself on the top
+     * CTB row). */
+    const char OUR_REF_MD5[] = "f69a7a73b8df043dbbcc3f54bea38e80";
     char got[33];
     int pitch = p->pitch > 0 ? p->pitch : p->width * 4;
     size_t bgra_bytes = (size_t)pitch * (size_t)p->height;

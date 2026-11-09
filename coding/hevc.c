@@ -7086,7 +7086,7 @@ static void sao_ctb_modification_process(struct slice_segment_header *slice, str
                 bool cond = false;
                 for (int k = 0; k < 2; k++) {
                     int xSik = xSi + hPosTable[k][sao->SaoEoClass[cIdx]];
-                    int ySjk = ySj + hPosTable[k][sao->SaoEoClass[cIdx]];
+                    int ySjk = ySj + vPosTable[k][sao->SaoEoClass[cIdx]];
                     int xYik = (cIdx == 0) ? xSik : (xSik * sps->SubWidthC);
                     int yYjk = (cIdx == 0) ? ySjk : (ySjk * sps->SubHeightC);
                     if (xSik < 0 || ySjk < 0 ||

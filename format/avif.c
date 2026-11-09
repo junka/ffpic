@@ -649,10 +649,13 @@ static uint32_t avif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {
 static int
 avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_out)
 {
-    *first_pic_out = NULL;
+    if (first_pic_out)
+        *first_pic_out = NULL;
     int trak_idx = -1, stsd_idx = -1;
     for (int t = 0; t < moov->trak_num && trak_idx < 0; t++) {
         struct stbl_box *stbl = &moov->trak[t].mdia.minf.stbl;
+        if (moov->trak[t].mdia.hdlr.handler_type == FOURCC2UINT('a','u','x','v'))
+            continue;   /* alpha plane, not a colour frame */
         for (uint32_t s = 0; s < stbl->stsd.entry_count; s++)
             if (stbl->stsd.entries[s] && stbl->stsd.entries[s]->type == FOURCC2UINT('a','v','0','1')) {
                 trak_idx = t; stsd_idx = (int)s; break;
@@ -678,15 +681,23 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             uint8_t *data = malloc(sz ? sz : 1);
             if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
             struct av1_image img;
+            memset(&img, 0, sizeof(img));
             int rc = av1_decode_track_sample(data, sz, &entry->config, &img);
             free(data);
+            if (rc != 0) {
+                VERR(avif, "track sample %u failed: %d; AVIF animation "
+                     "requires all-intra samples", si, rc);
+                av1_image_free(&img);
+                si = stbl->stsz.sample_count;
+                break;
+            }
             if (rc == 0) {
                 int wide = img.bitdepth > 8;
                 struct pic *p = pic_alloc(sizeof(AVIF));
                 p->width = img.width; p->height = img.height;
                 p->depth = wide ? 64 : 32;
                 p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
-                p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGBA8888;
+                p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_BGRA_BYTES;
                 p->pixels = malloc((size_t)p->pitch * p->height);
                 if (p->pixels) {
                     if (wide) av1_image_to_rgba16(&img, p->pixels, p->pitch);
@@ -702,7 +713,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
                 }
                 uint32_t dms = (uint32_t)((dt * 1000 + timescale/2) / timescale);
                 pic_set_duration(p, dms);
-                if (decoded == 0) *first_pic_out = p;
+                if (decoded == 0 && first_pic_out) *first_pic_out = p;
                 else file_enqueue_pic(p);
                 decoded++;
                 av1_image_free(&img);
@@ -1315,6 +1326,221 @@ avif_collect_metadata(AVIF *h, uint32_t primary, FILE *f, uint64_t file_size)
     }
 }
 
+/* Pack one decoded image into p (BGRA / 16 bit BGRA), then apply the
+ * container colour profile, the alpha auxiliary plane and the iprp
+ * transforms.  Consumes img and alpha. */
+static struct pic *
+avif_build_picture(AVIF *h, struct pic *p, uint32_t color_id,
+                   struct av1_image *img, struct av1_image *alpha,
+                   int has_alpha)
+{
+    int wide = img->bitdepth > 8;
+
+    p->width = img->width;
+    p->height = img->height;
+    p->depth = wide ? 64 : 32;
+    p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
+    p->format = wide ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_BGRA_BYTES;
+    p->pixels = malloc((size_t)p->pitch * p->height);
+    if (p->pixels) {
+        struct cs_profile *cp;
+
+        if (wide) {
+            av1_image_to_rgba16(img, p->pixels, p->pitch);
+        } else {
+            av1_image_to_bgra(img, p->pixels, p->pitch);
+        }
+        cp = avif_color_profile(h, color_id, img);
+        if (cp) {
+            if (wide) {
+                cs_profile_apply_bgra16(cp, p->pixels, img->width,
+                                        img->height, p->pitch);
+            } else {
+                cs_profile_apply_bgra(cp, p->pixels, img->width,
+                                      img->height, p->pitch);
+            }
+            cs_profile_free(cp);
+        }
+        if (has_alpha) {
+            if (alpha->width == img->width &&
+                alpha->height == img->height) {
+                int prem = avif_color_is_premultiplied(h, color_id);
+                VDBG(avif, "colour item %u has prem=%d alpha",
+                     color_id, prem);
+                if (wide) {
+                    avif_apply_alpha16(alpha, p->pixels, p->pitch,
+                                       img->width, img->height, prem);
+                } else {
+                    avif_apply_alpha(alpha, p->pixels, p->pitch,
+                                     img->width, img->height, prem);
+                }
+            } else {
+                VWARN(avif, "alpha item is %dx%d, picture is %dx%d",
+                     alpha->width, alpha->height, img->width, img->height);
+            }
+        }
+        struct packed_frame frame = {
+            .pixels = p->pixels,
+            .width = p->width,
+            .height = p->height,
+            .pitch = p->pitch,
+            .bpp = p->depth >> 3,
+        };
+
+        packed_apply_transforms(&h->meta.iprp, color_id, &frame);
+        p->pixels = frame.pixels;
+        p->width = frame.width;
+        p->height = frame.height;
+        p->pitch = frame.pitch;
+    }
+    av1_image_free(img);
+    if (has_alpha) {
+        av1_image_free(alpha);
+    }
+    return p->pixels ? p : NULL;
+}
+
+/* Compose a 'grid' derived item from its dimg tile items.  The tiles are
+ * listed in raster order and all have the same coded format; the canvas is
+ * the grid's output size. */
+static int
+avif_decode_grid_item(AVIF *h, FILE *f, uint64_t file_size, uint32_t grid_id,
+                      struct av1_image *out)
+{
+    int gi = avif_item_index(h, grid_id);
+    if (gi < 0) {
+        return -EINVAL;
+    }
+    if (pre_read_item(h, f, gi, file_size) < 0) {
+        return -EINVAL;
+    }
+    const uint8_t *d = h->items[gi].data;
+    size_t dl = (size_t)h->items[gi].length;
+    if (dl < 4) {
+        return -EINVAL;
+    }
+    int flags = d[1];
+    int rows = d[2] + 1;
+    int cols = d[3] + 1;
+    uint32_t ow, oh;
+
+    if ((flags & 1) == 0) {
+        if (dl < 8) return -EINVAL;
+        ow = ((uint32_t)d[4] << 8) | d[5];
+        oh = ((uint32_t)d[6] << 8) | d[7];
+    } else {
+        if (dl < 12) return -EINVAL;
+        ow = ((uint32_t)d[4] << 24) | ((uint32_t)d[5] << 16) |
+             ((uint32_t)d[6] << 8) | d[7];
+        oh = ((uint32_t)d[8] << 24) | ((uint32_t)d[9] << 16) |
+             ((uint32_t)d[10] << 8) | d[11];
+    }
+    if (ow == 0 || oh == 0 || rows <= 0 || cols <= 0 ||
+        (int64_t)rows * cols > 1024) {
+        return -EINVAL;
+    }
+    const struct itemtype_ref_box *dimg = NULL;
+    for (int i = 0; i < h->meta.iref.refs_count; i++) {
+        const struct itemtype_ref_box *r = &h->meta.iref.refs[i];
+        if (r->type == FOURCC2UINT('d','i','m','g') &&
+            r->from_item_id == grid_id &&
+            r->ref_count >= (uint32_t)(rows * cols)) {
+            dimg = r;
+            break;
+        }
+    }
+    if (!dimg) {
+        VERR(avif, "grid item %u has no matching dimg reference", grid_id);
+        return -EINVAL;
+    }
+    memset(out, 0, sizeof(*out));
+    int tile_w = ((int)ow + cols - 1) / cols;
+    int tile_h = ((int)oh + rows - 1) / rows;
+    int got = 0;
+
+    for (int j = 0; j < rows * cols; j++) {
+        int ti = avif_item_index(h, dimg->to_item_ids[j]);
+        struct av1_image tile;
+
+        if (ti < 0 || pre_read_item(h, f, ti, file_size) < 0) {
+            goto fail;
+        }
+        memset(&tile, 0, sizeof(tile));
+        if (avif_decode_item(h, dimg->to_item_ids[j], h->items[ti].data,
+                             (size_t)h->items[ti].length, &tile) != 0) {
+            VERR(avif, "grid tile %d failed to decode", j);
+            av1_image_free(&tile);
+            goto fail;
+        }
+        if (!got) {
+            out->width = (int)ow;
+            out->height = (int)oh;
+            out->bitdepth = tile.bitdepth;
+            out->num_planes = tile.num_planes;
+            out->mono_chrome = tile.mono_chrome;
+            out->subsampling_x = tile.subsampling_x;
+            out->subsampling_y = tile.subsampling_y;
+            out->color_range = tile.color_range;
+            out->matrix_coefficients = tile.matrix_coefficients;
+            out->color_primaries = tile.color_primaries;
+            out->transfer_characteristics = tile.transfer_characteristics;
+            out->chroma_sample_position = tile.chroma_sample_position;
+            for (int pl = 0; pl < tile.num_planes && pl < 3; pl++) {
+                int sx = pl ? tile.subsampling_x : 0;
+                int sy = pl ? tile.subsampling_y : 0;
+                int pw = ((int)ow + (1 << sx) - 1) >> sx;
+                int ph = ((int)oh + (1 << sy) - 1) >> sy;
+                out->stride[pl] = pw;
+                out->plane[pl] = calloc((size_t)pw * ph, sizeof(uint16_t));
+                if (!out->plane[pl]) {
+                    av1_image_free(&tile);
+                    goto fail;
+                }
+            }
+            got = 1;
+        }
+        if (tile.bitdepth != out->bitdepth ||
+            tile.subsampling_x != out->subsampling_x ||
+            tile.subsampling_y != out->subsampling_y ||
+            tile.num_planes != out->num_planes) {
+            VERR(avif, "grid tile %d has a different pixel format", j);
+            av1_image_free(&tile);
+            goto fail;
+        }
+        int x0 = (j % cols) * tile_w;
+        int y0 = (j / cols) * tile_h;
+        for (int pl = 0; pl < out->num_planes && pl < 3; pl++) {
+            int sx = pl ? out->subsampling_x : 0;
+            int sy = pl ? out->subsampling_y : 0;
+            int x = x0 >> sx;
+            int y = y0 >> sy;
+            int tw = tile.width >> sx;
+            int th = tile.height >> sy;
+            int pw = ((int)ow + (1 << sx) - 1) >> sx;
+            int ph = ((int)oh + (1 << sy) - 1) >> sy;
+            if (x >= pw || y >= ph) {
+                continue;
+            }
+            int cw = tw < pw - x ? tw : pw - x;
+            int ch = th < ph - y ? th : ph - y;
+            for (int r = 0; r < ch; r++) {
+                memcpy(out->plane[pl] + (size_t)(y + r) * out->stride[pl] + x,
+                       tile.plane[pl] + (size_t)r * tile.stride[pl],
+                       (size_t)cw * sizeof(uint16_t));
+            }
+        }
+        av1_image_free(&tile);
+    }
+    return got ? 0 : -EINVAL;
+
+fail:
+    for (int pl = 0; pl < 3; pl++) {
+        free(out->plane[pl]);
+        out->plane[pl] = NULL;
+    }
+    return -EINVAL;
+}
+
 static struct pic*
 AVIF_load(const char *filename, int skip_flag UNUSED)
 {
@@ -1355,8 +1581,58 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
             avif_decode_moov_track(f, h->moov + m, m == 0 ? &first : NULL);
         }
         if (first) {
-            fclose(f); first->pic = p->pic; AVIF_free(p); return first;
+            fclose(f);
+            /* p only carries the moov/meta box tree; the returned frame owns
+             * its own empty AVIF container.  Keeping a pointer to p->pic
+             * would dangle once p is freed. */
+            AVIF_free(p);
+            return first;
         }
+    }
+
+    /* Static grid items: the primary is a 'grid' derived image and the
+     * pixels live in the dimg tile items. */
+    int primary_idx = primary_id ? avif_item_index(h, primary_id) : -1;
+    if (primary_idx >= 0 &&
+        h->items[primary_idx].type == FOURCC2UINT('g','r','i','d') &&
+        !avif_item_protected(h, primary_id)) {
+        uint32_t color_id = primary_id;
+        int alpha_idx = avif_find_alpha_item(h, color_id);
+        struct av1_image alpha;
+        int has_alpha = 0;
+
+        if (alpha_idx >= 0 &&
+            pre_read_item(h, f, alpha_idx, (uint64_t)file_size) == 0 &&
+            h->items[alpha_idx].length > 0) {
+            has_alpha = avif_decode_item(h, h->items[alpha_idx].item->item_id,
+                                         h->items[alpha_idx].data,
+                                         (size_t)h->items[alpha_idx].length,
+                                         &alpha) == 0;
+            free(h->items[alpha_idx].data);
+            h->items[alpha_idx].data = NULL;
+            if (!has_alpha) {
+                VWARN(avif, "cannot decode the alpha item of the grid");
+            }
+        }
+        struct av1_image gimg;
+        if (avif_decode_grid_item(h, f, (uint64_t)file_size, color_id,
+                                  &gimg) == 0) {
+            fclose(f);
+            struct pic *out = avif_build_picture(h, p, color_id, &gimg,
+                                                 &alpha, has_alpha);
+            if (out) {
+                VINFO(avif, "decoded %dx%d grid with the built-in AV1 decoder",
+                      p->width, p->height);
+                return out;
+            }
+            AVIF_free(p);
+            return NULL;
+        }
+        if (has_alpha) {
+            av1_image_free(&alpha);
+        }
+        VWARN(avif, "grid item %u could not be composed", primary_id);
+        /* fall through to the container-only path */
     }
 
     /* Decode the primary AV1 image item with the in-house spec-based
@@ -1399,80 +1675,18 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         free(h->items[av01_idx].data);
         h->items[av01_idx].data = NULL;
         if (rc == 0 && img.width > 0 && img.height > 0) {
-            /* Keep the AVIF box metadata in p->pic so AVIF_info() still has
-             * the container data to report. */
-            /* 10 and 12 bit streams keep their precision in 16 bit
-             * channels; 8 bit streams stay packed BGRA. */
-            int wide = img.bitdepth > 8;
-
-            p->width = img.width;
-            p->height = img.height;
-            p->depth = wide ? 64 : 32;
-            p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
-            p->format = wide ? CS_PIXELFORMAT_BGRA64
-                             : CS_PIXELFORMAT_RGBA8888;
-            p->pixels = malloc((size_t)p->pitch * p->height);
-            if (p->pixels) {
-                struct cs_profile *cp;
-
-                if (wide) {
-                    av1_image_to_rgba16(&img, p->pixels, p->pitch);
-                } else {
-                    av1_image_to_bgra(&img, p->pixels, p->pitch);
-                }
-                cp = avif_color_profile(h, color_id, &img);
-                if (cp) {
-                    if (wide) {
-                        cs_profile_apply_bgra16(cp, p->pixels, img.width,
-                                                img.height, p->pitch);
-                    } else {
-                        cs_profile_apply_bgra(cp, p->pixels, img.width,
-                                              img.height, p->pitch);
-                    }
-                    cs_profile_free(cp);
-                }
-                if (has_alpha) {
-                    if (alpha.width == img.width &&
-                        alpha.height == img.height) {
-                        int prem = avif_color_is_premultiplied(h, color_id);
-                        VDBG(avif, "colour item %u has prem=%d alpha",
-                             color_id, prem);
-                        if (wide) {
-                            avif_apply_alpha16(&alpha, p->pixels, p->pitch,
-                                               img.width, img.height, prem);
-                        } else {
-                            avif_apply_alpha(&alpha, p->pixels, p->pitch,
-                                             img.width, img.height, prem);
-                        }
-                    } else {
-                        VWARN(avif, "alpha item is %dx%d, picture is %dx%d",
-                             alpha.width, alpha.height, img.width, img.height);
-                    }
-                }
-                struct packed_frame frame;
-
-                frame.pixels = p->pixels;
-                frame.width = p->width;
-                frame.height = p->height;
-                frame.pitch = p->pitch;
-                frame.bpp = p->depth >> 3;
-                packed_apply_transforms(&h->meta.iprp, color_id, &frame);
-                p->pixels = frame.pixels;
-                p->width = frame.width;
-                p->height = frame.height;
-                p->pitch = frame.pitch;
+            struct pic *out = avif_build_picture(h, p, color_id, &img,
+                                                 &alpha, has_alpha);
+            if (out) {
+                VINFO(avif, "decoded %dx%d with the built-in AV1 decoder",
+                      p->width, p->height);
+                return out;
             }
+            AVIF_free(p);
+            return NULL;
+        }
+        if (rc == 0) {
             av1_image_free(&img);
-            if (has_alpha) {
-                av1_image_free(&alpha);
-            }
-            if (!p->pixels) {
-                AVIF_free(p);
-                return NULL;
-            }
-            VINFO(avif, "decoded %dx%d with the built-in AV1 decoder",
-                  p->width, p->height);
-            return p;
         }
         if (has_alpha) {
             av1_image_free(&alpha);
@@ -1519,7 +1733,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     p->depth = 32;
     p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
     p->pixels = calloc(1, (size_t)p->pitch * p->height);
-    p->format = CS_PIXELFORMAT_RGBA8888;
+    p->format = CS_PIXELFORMAT_BGRA_BYTES;
     if (h->items) {
         decode_items(h, f, (uint64_t)file_size, (uint8_t **)&p->pixels);
     }

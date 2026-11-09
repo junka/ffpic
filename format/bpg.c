@@ -23,11 +23,12 @@
  * 现有 parse_nalu.  这让我们完全复用 coding/hevc.c 的参数集解析、slice
  * 解码和 YUV→BGRA 路径, 不复制解码器, 也不改动 hevc.c 的既有语义.
  *
- * alpha 暂不支持 (alpha1_flag / alpha2_flag 任一置位即拒绝). 原因:
- *   BPG alpha 要么是 alpha1_flag=1 的同码流辅助 HEVC 平面, 需要把 alpha
- *   aux 码流另起一条解码路径与主图对齐; 要么是 extension tag==5 里的独立
- *   alpha HEVC 流. 两种都需要额外工程量. 遇到 alpha 文件直接返回 NULL,
- *   明确告知拒绝, 避免输出不透明图丢 alpha 而静默失真.
+ * alpha 暂不支持 (alpha1_flag / alpha2_flag 任一置位即拒绝). alpha1 是
+ * 同一 Annex-B 流里 nuh_layer_id==1 的辅助 HEVC 平面, 需要把两层码流分开
+ * 解码并按 premultiplied 语义合并; alpha2 单独置位时是 W 平面. 两者都
+ * 需要额外工程量和真实样本. 遇到 alpha 文件直接返回 NULL, 明确告知拒绝,
+ * 避免输出不透明图丢 alpha 而静默失真.  (extension tag 5 是动画控制,
+ * 不是 alpha.)
  */
 
 #include <errno.h>
@@ -333,7 +334,33 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     }
     memset(pixels, 0, (size_t)pitch * display_h);
 
+    /* BPG keeps the colour matrix and range in its own header; the HEVC
+     * stream may carry no VUI at all.  BPG colour space values follow
+     * libbpg: 0 = YCbCr/BT.601, 3 = BT.709, 4 = BT.2020 NCL.  RGB and
+     * YCgCo need conversions this decoder does not have. */
+    struct hevc_color_override color_override = {
+        .full_range = info.limited_range_flag ? 0 : 1,
+        .matrix_coeffs = 5,     /* BT.601 / SMPTE 170M */
+    };
+    int have_color_override = 1;
+    switch (info.color_space) {
+    case 0: color_override.matrix_coeffs = 5; break;
+    case 3: color_override.matrix_coeffs = 1; break;
+    case 4: color_override.matrix_coeffs = 9; break;
+    default:
+        VWARN(bpg, "colour space %d is not supported, using the HEVC VUI",
+              info.color_space);
+        have_color_override = 0;
+        break;
+    }
+
+    if (info.animation_flag) {
+        VWARN(bpg, "animated BPG: only the first frame is decoded (inter "
+              "frames are not supported)");
+    }
+
     int slice_count = 0;
+    int seen_first_slice = 0;
     for (int k = 0; k < n_nals; k++) {
         uint8_t *nal = nals[k];
         int nut = (nal[0] & 0x7E) >> 1;
@@ -343,9 +370,20 @@ BPG_load(const char *filename, int skip_flag UNUSED)
          * unbounded VPS layer-set loops off the end of the RBSP. */
         if (nal_lens[k] < 3)
             continue;
-        int ret = parse_nalu(nal, nal_lens[k], is_slice ? pixels : NULL,
-                             pitch, display_h, NULL, &hps, out_bits);
-        if (is_slice && ret > 0) slice_count++;
+        /* In an animation the following pictures carry their own
+         * first_slice_segment_in_pic_flag; stop before overwriting the
+         * frame we have already composited. */
+        if (info.animation_flag && is_slice && seen_first_slice &&
+            (nal[2] & 0x80))
+            break;
+        int ret = parse_nalu_ex(nal, nal_lens[k], is_slice ? pixels : NULL,
+                                pitch, display_h, NULL, &hps, out_bits,
+                                have_color_override ? &color_override : NULL);
+        if (is_slice && ret > 0) {
+            slice_count++;
+            if (nal[2] & 0x80)
+                seen_first_slice = 1;
+        }
     }
 
     if (slice_count == 0) {
@@ -366,7 +404,8 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     p->depth  = out_bits;
     p->pitch  = pitch;
     p->pixels = pixels;
-    p->format = (out_bits > 32) ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_BGRA8888;
+    p->format = (out_bits > 32) ? CS_PIXELFORMAT_BGRA64
+                             : CS_PIXELFORMAT_BGRA_BYTES;
     p->left = p->top = 0;
 
     BPG *h = (BPG *)p->pic;

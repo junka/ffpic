@@ -48,7 +48,7 @@ int av1_decode_image(const uint8_t *data, size_t len, struct av1_image *img);
 void av1_image_free(struct av1_image *img);
 
 /* Converts the decoded planes to packed BGRA (the byte order used by the
- * RGBA8888 pictures in this project).  dst has room for pitch * height
+ * BGRA_BYTES pictures in this project).  dst has room for pitch * height
  * bytes. */
 int av1_image_to_bgra(const struct av1_image *img, uint8_t *dst, int pitch);
 

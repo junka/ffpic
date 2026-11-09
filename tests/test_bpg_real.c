@@ -181,6 +181,66 @@ build_tmp_bpg(const char *suffix, int pixel_format, int bit_depth,
     return path[0] ? path : NULL;
 }
 
+/* Decode one of the extra fixtures and check that it produced real pixels
+ * with an opaque alpha channel.  This is the regression for 4:0:0 streams
+ * (the luma plane used to be copied into alpha) and for 16 bit 4:4:4. */
+static int
+check_extra_fixture(const char *name, int want_depth)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", TEST_DATA_DIR, name);
+    struct file_ops *ops = file_probe(path);
+    if (!ops) {
+        printf("FAIL[%s]: probe refused\n", name);
+        return -1;
+    }
+    struct pic *p = file_load(ops, path, 0);
+    if (!p) {
+        printf("FAIL[%s]: load returned NULL\n", name);
+        return -1;
+    }
+    int rc = 0;
+    if (p->width != 64 || p->height != 64 || p->depth != want_depth) {
+        printf("FAIL[%s]: %dx%d depth %d, want 64x64 depth %d\n", name,
+               p->width, p->height, p->depth, want_depth);
+        rc = -1;
+    } else {
+        int bpp = p->depth >> 3;
+        uint32_t amax = bpp == 4 ? 0xFFu : 0xFFFFu;
+        long nonzero = 0;
+        for (int y = 0; y < p->height; y++) {
+            uint8_t *row = (uint8_t *)p->pixels + (size_t)y * p->pitch;
+            for (int x = 0; x < p->width; x++) {
+                uint8_t *px = row + (size_t)x * bpp;
+                uint32_t a;
+                if (bpp == 4) {
+                    a = px[3];
+                    if (px[0] || px[1] || px[2]) nonzero++;
+                } else {
+                    const uint16_t *q = (const uint16_t *)px;
+                    a = q[3];
+                    if (q[0] || q[1] || q[2]) nonzero++;
+                }
+                if (a != amax) {
+                    printf("FAIL[%s]: alpha %u at %d,%d\n", name, a, x, y);
+                    rc = -1;
+                    goto out;
+                }
+            }
+        }
+        if (nonzero == 0) {
+            printf("FAIL[%s]: decoded to an all-zero picture\n", name);
+            rc = -1;
+        } else {
+            printf("OK[%s]: %dx%d depth %d, %ld nonzero pixels\n", name,
+                   p->width, p->height, p->depth, nonzero);
+        }
+    }
+out:
+    file_free(ops, p);
+    return rc;
+}
+
 int main(void)
 {
     int rc = 0;
@@ -206,8 +266,8 @@ int main(void)
         printf("FAIL[real]: dims %dx%d want 128x128\n", p->width, p->height);
         rc = -1; goto free_real;
     }
-    if (p->format != CS_PIXELFORMAT_BGRA8888) {
-        printf("FAIL[real]: format %d want BGRA8888\n", p->format);
+    if (p->format != CS_PIXELFORMAT_BGRA_BYTES) {
+        printf("FAIL[real]: format %d want BGRA byte order\n", p->format);
         rc = -1; goto free_real;
     }
 
@@ -228,12 +288,19 @@ int main(void)
         printf("FAIL[real]: MD5 mismatch got %s want %s\n", got, OUR_REF_MD5);
         rc = -1;
     } else {
-        printf("OK[real]: %dx%d BGRA8888 MD5 %s (pitch=%d)\n",
+        printf("OK[real]: %dx%d BGRA bytes MD5 %s (pitch=%d)\n",
                p->width, p->height, got, pitch);
     }
 
 free_real:
     file_free(ops, p);
+
+    if (check_extra_fixture("bpg_gray.bpg", 32) != 0) {
+        rc = -1;
+    }
+    if (check_extra_fixture("bpg_grad444_10bit.bpg", 64) != 0) {
+        rc = -1;
+    }
 
     /* ============================================================== *
      * TEST 2: Magic correct, picture_data_len over EOF → reject       *

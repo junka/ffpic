@@ -1350,9 +1350,20 @@ struct hevc_slice {
 
 #pragma pack(pop)
 
+/* Container-level colour metadata can override the VUI (BPG carries the
+ * matrix and range in its own header rather than in the HEVC stream). */
+struct hevc_color_override {
+    int full_range;
+    int matrix_coeffs;      /* H.273 value, as in the HEVC VUI */
+};
+
 int parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
                int dst_height, void **param_set, struct hevc_param_set *hps,
                int out_bits);
+
+int parse_nalu_ex(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
+                  int dst_height, void **param_set, struct hevc_param_set *hps,
+                  int out_bits, const struct hevc_color_override *color);
 
 /* the coded picture is padded up to the coding block size, the conformance
  * window crops it back to the display size. offsets and size are in luma

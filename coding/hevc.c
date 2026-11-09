@@ -7455,7 +7455,8 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
                                      struct bits_vec *v,
                                      struct hevc_param_set *hps,
                                      uint8_t *pixels, int buf_pitch,
-                                     int buf_height, int out_bits) {
+                                     int buf_height, int out_bits,
+                                     const struct hevc_color_override *color) {
     int ret = 0;
     uint32_t SliceAddrRs;
     struct hevc_slice hslice = {
@@ -7617,7 +7618,10 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         int sub_w = sps->SubWidthC;
         int sub_h = sps->SubHeightC;
 
-        if (sps->vui && sps->vui->video_signal_type_present_flag) {
+        if (color) {
+            full_range = color->full_range;
+            matrix_coeffs = color->matrix_coeffs;
+        } else if (sps->vui && sps->vui->video_signal_type_present_flag) {
             full_range = sps->vui->video_full_range_flag;
             if (sps->vui->colour_description_present_flag) {
                 matrix_coeffs = sps->vui->matrix_coeffs;
@@ -7641,7 +7645,9 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
             }
         } else if (sps->chroma_format_idc == CHROMA_422) {
             if (out_bits > 32) {
-                VDBG(hevc, "CHROMA_422 16-bit BGRA output not yet implemented");
+                YUV422_to_BGRA64(pixels, out_pitch, y_plane, u_plane,
+                        v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                        sps->BitDepthY, full_range, matrix_coeffs);
             } else {
                 YUV422_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
                         v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
@@ -7649,7 +7655,9 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
             }
         } else { /* CHROMA_444 */
             if (out_bits > 32) {
-                VDBG(hevc, "CHROMA_444 16-bit BGRA output not yet implemented");
+                YUV444_to_BGRA64(pixels, out_pitch, y_plane, u_plane,
+                        v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
+                        sps->BitDepthY, full_range, matrix_coeffs);
             } else {
                 YUV444_to_BGRA32_16bit(pixels, out_pitch, y_plane, u_plane,
                         v_plane, y_stride, uv_stride, crop_w, crop_h, ctu,
@@ -7743,9 +7751,9 @@ static void hevc_free_vps(struct vps *vps)
 }
 
 int
-parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
-           int dst_height, void **param_set, struct hevc_param_set *hps,
-           int out_bits)
+parse_nalu_ex(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
+              int dst_height, void **param_set, struct hevc_param_set *hps,
+              int out_bits, const struct hevc_color_override *color)
 {
     struct hevc_nalu_header h;
     int ret = -EINVAL;
@@ -7827,7 +7835,7 @@ parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
             break;
         }
         if (parse_slice_segment_layer(&h, v, hps, pixels, dst_pitch,
-                                      dst_height, out_bits) == 0) {
+                                      dst_height, out_bits, color) == 0) {
             ret = h.nal_unit_type;
         } else {
             VERR(hevc, "failed to decode slice nal");
@@ -7888,6 +7896,15 @@ parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
     }
     bits_vec_free(v);
     return ret;
+}
+
+int
+parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
+           int dst_height, void **param_set, struct hevc_param_set *hps,
+           int out_bits)
+{
+    return parse_nalu_ex(data, len, pixels, dst_pitch, dst_height, param_set,
+                         hps, out_bits, NULL);
 }
 
 void free_hevc_param_set(struct hevc_param_set *hps)

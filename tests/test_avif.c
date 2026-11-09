@@ -120,6 +120,13 @@ test_real_samples(void)
             rc = -1;
             continue;
         }
+        int want_fmt = cases[i].wide ? CS_PIXELFORMAT_BGRA64
+                                     : CS_PIXELFORMAT_BGRA_BYTES;
+        if (p->format != want_fmt) {
+            printf("%s: format %d, expected %d\n", path, p->format, want_fmt);
+            rc = -1;
+            goto next;
+        }
         if (p->width != cases[i].w || p->height != cases[i].h) {
             printf("%s: decoded as %dx%d, expected %dx%d\n", path, p->width,
                    p->height, cases[i].w, cases[i].h);
@@ -305,10 +312,63 @@ test_protected(void)
     return rc;
 }
 
+/* tests/data/avif_grid.avif is avif_lossless.avif wrapped as a 2x2 'grid'
+ * derived image.  Every quadrant must equal the single-tile picture. */
+static int
+test_grid(void)
+{
+    const char *grid_path = TEST_DATA_DIR "/avif_grid.avif";
+    const char *tile_path = TEST_DATA_DIR "/avif_lossless.avif";
+    struct file_ops *gops = file_probe(grid_path);
+    struct file_ops *tops = file_probe(tile_path);
+    int rc = 0;
+
+    if (!gops || strcmp(gops->name, "AVIF") ||
+        !tops || strcmp(tops->name, "AVIF")) {
+        printf("grid: probe failed\n");
+        return -1;
+    }
+    struct pic *g = file_load(gops, grid_path, 0);
+    struct pic *t = file_load(tops, tile_path, 0);
+    if (!g || !t) {
+        printf("grid: load failed\n");
+        rc = -1;
+        goto out;
+    }
+    if (g->width != 128 || g->height != 128 ||
+        t->width != 64 || t->height != 64) {
+        printf("grid: got %dx%d from a 64x64 tile, expected 128x128\n",
+               g->width, g->height);
+        rc = -1;
+        goto out;
+    }
+    for (int y = 0; y < 128 && !rc; y++) {
+        uint8_t *grow = (uint8_t *)g->pixels + (size_t)y * g->pitch;
+        uint8_t *trow = (uint8_t *)t->pixels + (size_t)(y % 64) * t->pitch;
+        for (int x = 0; x < 128 && !rc; x++) {
+            if (memcmp(grow + (size_t)x * 4,
+                       trow + (size_t)(x % 64) * 4, 4) != 0) {
+                printf("grid: pixel %d,%d differs from the tile\n", x, y);
+                rc = -1;
+            }
+        }
+    }
+    if (!rc) {
+        printf("OK[avif_grid]: 2x2 grid composed from four tiles\n");
+    }
+out:
+    if (g) file_free(gops, g);
+    if (t) file_free(tops, t);
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
     if (test_real_samples()) {
+        return -1;
+    }
+    if (test_grid()) {
         return -1;
     }
     if (test_protected()) {

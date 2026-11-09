@@ -499,7 +499,8 @@ heif_pic_alloc(int width, int height, int bits)
     p->depth = bits;
     p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
     p->pixels = malloc((size_t)p->pitch * p->height);
-    p->format = bits > 32 ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGBA8888;
+    p->format = bits > 32 ? CS_PIXELFORMAT_BGRA64
+                            : CS_PIXELFORMAT_BGRA_BYTES;
     if (!p->pixels) {
         pic_free(p);
         return NULL;
@@ -622,11 +623,18 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
             if (copy_h > (int)ispe->image_height) {
                 copy_h = (int)ispe->image_height;
             }
+            int bpp = p->depth >> 3;
+            if (tile->depth != p->depth) {
+                VERR(heif, "grid tile %d is %d-bit, grid is %d-bit", j,
+                     tile->depth, p->depth);
+                heif_pic_free(tile);
+                return 0;
+            }
             for (int r = 0; r < copy_h; r++) {
                 memcpy((uint8_t *)p->pixels + (size_t)(y + r) * p->pitch +
-                           (size_t)x * 4,
+                           (size_t)x * bpp,
                        (uint8_t *)tile->pixels + (size_t)r * tile->pitch,
-                       (size_t)copy_w * 4);
+                       (size_t)copy_w * bpp);
             }
             heif_pic_free(tile);
             decoded++;
@@ -754,10 +762,10 @@ heif_apply_alpha(struct pic *p, const struct pic *alpha, bool premultiplied)
             uint8_t *px = dst + (size_t)x * (p->depth >> 3);
 
             if (wide) {
-                a = ((const uint16_t *)src)[x * 4 + 3];
+                a = ((const uint16_t *)src)[x * 4 + 0];
                 ((uint16_t *)px)[3] = (uint16_t)a;
             } else {
-                a = src[x * 4 + 3];
+                a = src[x * 4 + 0];
                 px[3] = (uint8_t)a;
             }
             if (!premultiplied) {
@@ -1102,6 +1110,12 @@ decode_moov(FILE *f, struct moov_box *b)
         struct stbl_box *stbl = &trak->mdia.minf.stbl;
         struct mdhd_box *mdhd = &trak->mdia.mdhd;
         if (stbl->stsz.sample_count == 0 || stbl->stco.entry_count == 0) continue;
+        /* an alpha track is an auxiliary plane of the colour track, not a
+         * frame of its own */
+        if (trak->mdia.hdlr.handler_type == FOURCC2UINT('a','u','x','v')) {
+            VDBG(heif, "skipping auxiliary video track %d", t);
+            continue;
+        }
         int width = (int)fix16_16(trak->tkhd.width);
         int height = (int)fix16_16(trak->tkhd.height);
         struct hevc_param_set *hps = NULL; int out_bits = 8; int stsd_idx = -1;
@@ -1128,6 +1142,12 @@ decode_moov(FILE *f, struct moov_box *b)
                 if (sz > 0) FFREAD_IGNORE(data, sz, 1, f);
                 struct pic *p1 = HEIF_load_one(width, height, data, sz, hps, out_bits);
                 free(data);
+                if (!p1) {
+                    VERR(heif, "track %d sample %u failed to decode; "
+                         "animation requires all-intra samples", t, si);
+                    si = stbl->stsz.sample_count;
+                    break;
+                }
                 if (p1) {
                     uint64_t dt = 0;
                     if (stbl->stts.entry_count > 0) {

@@ -50,6 +50,16 @@ void YUV420_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
 void YUV400_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int y_stride,
                       int width, int height, int ctbsize, int bitdepth);
 
+void YUV444_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize, int bitdepth, int full_range,
+                      int matrix_coeffs);
+
+void YUV422_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize, int bitdepth, int full_range,
+                      int matrix_coeffs);
+
 struct cs_ops {
     void (*YUV_to_BGRA32)(uint8_t* dst, int pitch, void *Y, void *U, void *V, int vertical, int horizontal);
 
@@ -241,6 +251,15 @@ typedef enum
     CS_PIXELFORMAT_BGRA64 =
         CS_DEFINE_PIXELFORMAT(CS_PIXELTYPE_ARRAYU16, CS_ARRAYORDER_BGRA, 0,
                               64, 8),
+
+#if BYTE_ORDER == LITTLE_ENDIAN
+/* A byte sequence B,G,R,A is what the YUV and AV1 converters write.  SDL's
+ * packed orders are named high-bit-first, so the matching packed format is
+ * ARGB8888 on little-endian and BGRA8888 on big-endian. */
+#define CS_PIXELFORMAT_BGRA_BYTES CS_PIXELFORMAT_ARGB8888
+#else
+#define CS_PIXELFORMAT_BGRA_BYTES CS_PIXELFORMAT_BGRA8888
+#endif
 
     /* Aliases for RGBA byte arrays of color data, for the current platform */
 #if BYTE_ORDER == LITTLE_ENDIAN

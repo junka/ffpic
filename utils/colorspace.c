@@ -792,7 +792,7 @@ void YUV400_to_BGRA32_16bit(uint8_t *ptr, int pitch, int16_t *yout,
                     p[4 * j] = yy;
                     p[4 * j + 1] = yy;
                     p[4 * j + 2] = yy;
-                    p[4 * j + 3] = yy;
+                    p[4 * j + 3] = 0xFF;
                 }
                 p += pitch;
             }
@@ -956,6 +956,101 @@ void YUV420_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
     }
 }
 
+/* 16 bit counterparts of the 4:4:4 and 4:2:2 paths.  YUV444 has full
+ * resolution chroma; YUV422 keeps the full vertical resolution but one
+ * chroma sample per two luma samples horizontally. */
+void YUV444_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize, int bitdepth, int full_range,
+                      int matrix_coeffs) {
+    int16_t *Y, *U, *V;
+    int max_val = (1 << bitdepth) - 1;
+    int dc = 1 << (bitdepth - 1);
+    float y_scale, c_scale, y_offset;
+    float rv, gu, gv, bu;
+    float kr, kb;
+
+    yuv_coefficients(matrix_coeffs, &kr, &kb);
+    y_scale = full_range ? 65535.0f / max_val
+                         : 65535.0f / (219 << (bitdepth - 8));
+    c_scale = full_range ? 65535.0f / max_val
+                         : 65535.0f / (224 << (bitdepth - 8));
+    y_offset = full_range ? 0.0f : -(16 << (bitdepth - 8)) * y_scale;
+    rv = 2.0f * (1.0f - kr) * c_scale;
+    bu = 2.0f * (1.0f - kb) * c_scale;
+    gu = 2.0f * kb * (1.0f - kb) / (1.0f - kr - kb) * c_scale;
+    gv = 2.0f * kr * (1.0f - kr) / (1.0f - kr - kb) * c_scale;
+
+    for (int y = 0; y < height; y += ctbsize) {
+        for (int x = 0; x < width; x += ctbsize) {
+            int cw = (width - x < ctbsize) ? width - x : ctbsize;
+            int ch = (height - y < ctbsize) ? height - y : ctbsize;
+            Y = yout + y_stride * y + x;
+            U = uout + y * uv_stride + x;
+            V = vout + y * uv_stride + x;
+            uint16_t *p = (uint16_t *)(ptr + (size_t)y * pitch + (size_t)x * 8);
+            for (int i = 0; i < ch; i++) {
+                for (int j = 0; j < cw; j++) {
+                    float yy = Y[i * y_stride + j] * y_scale + y_offset;
+                    float u = U[i * uv_stride + j] - dc;
+                    float v = V[i * uv_stride + j] - dc;
+                    p[4 * j] = clip_sample16(yy + bu * u);
+                    p[4 * j + 1] = clip_sample16(yy - gu * u - gv * v);
+                    p[4 * j + 2] = clip_sample16(yy + rv * v);
+                    p[4 * j + 3] = 0xFFFF;
+                }
+                p = (uint16_t *)((uint8_t *)p + pitch);
+            }
+        }
+    }
+}
+
+void YUV422_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int16_t *uout,
+                      int16_t *vout, int y_stride, int uv_stride, int width,
+                      int height, int ctbsize, int bitdepth, int full_range,
+                      int matrix_coeffs) {
+    int16_t *Y, *U, *V;
+    int max_val = (1 << bitdepth) - 1;
+    int dc = 1 << (bitdepth - 1);
+    float y_scale, c_scale, y_offset;
+    float rv, gu, gv, bu;
+    float kr, kb;
+
+    yuv_coefficients(matrix_coeffs, &kr, &kb);
+    y_scale = full_range ? 65535.0f / max_val
+                         : 65535.0f / (219 << (bitdepth - 8));
+    c_scale = full_range ? 65535.0f / max_val
+                         : 65535.0f / (224 << (bitdepth - 8));
+    y_offset = full_range ? 0.0f : -(16 << (bitdepth - 8)) * y_scale;
+    rv = 2.0f * (1.0f - kr) * c_scale;
+    bu = 2.0f * (1.0f - kb) * c_scale;
+    gu = 2.0f * kb * (1.0f - kb) / (1.0f - kr - kb) * c_scale;
+    gv = 2.0f * kr * (1.0f - kr) / (1.0f - kr - kb) * c_scale;
+
+    for (int y = 0; y < height; y += ctbsize) {
+        for (int x = 0; x < width; x += ctbsize) {
+            int cw = (width - x < ctbsize) ? width - x : ctbsize;
+            int ch = (height - y < ctbsize) ? height - y : ctbsize;
+            Y = yout + y_stride * y + x;
+            U = uout + y * uv_stride + x / 2;
+            V = vout + y * uv_stride + x / 2;
+            uint16_t *p = (uint16_t *)(ptr + (size_t)y * pitch + (size_t)x * 8);
+            for (int i = 0; i < ch; i++) {
+                for (int j = 0; j < cw; j++) {
+                    float yy = Y[i * y_stride + j] * y_scale + y_offset;
+                    float u = U[i * uv_stride + (j / 2)] - dc;
+                    float v = V[i * uv_stride + (j / 2)] - dc;
+                    p[4 * j] = clip_sample16(yy + bu * u);
+                    p[4 * j + 1] = clip_sample16(yy - gu * u - gv * v);
+                    p[4 * j + 2] = clip_sample16(yy + rv * v);
+                    p[4 * j + 3] = 0xFFFF;
+                }
+                p = (uint16_t *)((uint8_t *)p + pitch);
+            }
+        }
+    }
+}
+
 void YUV400_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int y_stride,
                       int width, int height, int ctbsize, int bitdepth) {
     int max = (1 << bitdepth) - 1;
@@ -978,7 +1073,7 @@ void YUV400_to_BGRA64(uint8_t *ptr, int pitch, int16_t *yout, int y_stride,
                     p[4 * j] = v;
                     p[4 * j + 1] = v;
                     p[4 * j + 2] = v;
-                    p[4 * j + 3] = v;
+                    p[4 * j + 3] = 0xFFFF;
                 }
                 p = (uint16_t *)((uint8_t *)p + pitch);
             }
@@ -1005,7 +1100,7 @@ void YUV400_to_BGRA32_8bit(uint8_t *ptr, int pitch, uint8_t *yout,
                     p[4 * j] = yy;
                     p[4 * j + 1] = yy;
                     p[4 * j + 2] = yy;
-                    p[4 * j + 3] = yy;
+                    p[4 * j + 3] = 0xFF;
                 }
                 p += pitch;
             }

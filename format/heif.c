@@ -93,6 +93,13 @@ void free_hvcc_box(struct box *bn)
     free_hevc_param_set(&b->hps);
 }
 
+void free_HEVCSampleEntry(struct SampleEntry *e)
+{
+    struct HEVCSampleEntry *h = (struct HEVCSampleEntry *)e;
+    free_hvcc_box((struct box *)&h->config);
+    free(h->colr.icc_data);
+}
+
 int
 read_hvcc_box(FILE *f, struct box **bn)
 {

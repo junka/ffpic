@@ -960,7 +960,11 @@ int read_stsz_box(FILE *f, struct stsz_box *b)
     VDBG(basemedia, "%s size %" PRIu64 ", sample_size %d, sample_count %d",
            type2name(b->type), b->size, b->sample_size, b->sample_count);
 
+    free(b->entry_size);
     b->entry_size = calloc(b->sample_count, 4);
+    if (!b->entry_size) {
+        return -ENOMEM;
+    }
     for (uint32_t i = 0; i < b->sample_count; i++) {
         b->entry_size[i] = (b->sample_size == 0) ? read_u32(f) : b->sample_size;
         VDBG(basemedia, "entry size %d", b->entry_size[i]);
@@ -1435,8 +1439,19 @@ void free_elng_box(struct elng_box *b)
 
 void free_stsd_box(struct stsd_box *b)
 {
+    extern void free_AV1SampleEntry(struct SampleEntry *e);
+    extern void free_HEVCSampleEntry(struct SampleEntry *e);
     for (uint32_t i = 0; i < b->entry_count; i++) {
-        free(b->entries[i]);
+        struct SampleEntry *e = b->entries[i];
+        if (!e)
+            continue;
+        if (e->type == FOURCC2UINT('a', 'v', '0', '1')) {
+            free_AV1SampleEntry(e);
+        } else if (e->type == FOURCC2UINT('h', 'v', 'c', '1') ||
+                   e->type == FOURCC2UINT('h', 'e', 'v', '1')) {
+            free_HEVCSampleEntry(e);
+        }
+        free(e);
     }
 }
 
@@ -1508,6 +1523,8 @@ void free_stbl_box(struct stbl_box *b) {
     free_stdp_box(&b->stdp);
     free_sbgp_box(&b->sbgp);
     free_sgpd_box(&b->sgpd);
+    free(b->stsz.entry_size);
+    b->stsz.entry_size = NULL;
 }
 
 void free_minf_box(struct minf_box *b)

@@ -609,6 +609,13 @@ free_av1c_box(void *box)
     free(((struct av1C_box *)box)->config_obus);
 }
 
+void free_AV1SampleEntry(struct SampleEntry *e)
+{
+    struct AV1SampleEntry *a = (struct AV1SampleEntry *)e;
+    free_av1c_box(&a->config);
+    free(a->colr.icc_data);
+}
+
 /* Read AV1 Sample Entry (ISO/IEC 23008-12 6.6.2.3). */
 int read_AV1SampleEntry(FILE *f, struct SampleEntry **b)
 {
@@ -956,6 +963,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
         struct pic **grown = realloc(frames, (size_t)(decoded + 1) *
                                              sizeof(*frames));
         if (!grown) {
+            free(p->pixels);
             pic_free(p);
             av1_image_free(&img);
             if (has_alpha)
@@ -975,6 +983,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             *first_pic_out = frames[i];
         } else if (!file_enqueue_pic(frames[i])) {
             VERR(avif, "animation queue is full at frame %d", i);
+            free(frames[i]->pixels);
             pic_free(frames[i]);
         }
     }
@@ -984,8 +993,10 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
     return decoded;
 
 fail:
-    for (int i = 0; i < decoded; i++)
+    for (int i = 0; i < decoded; i++) {
+        free(frames[i]->pixels);
         pic_free(frames[i]);
+    }
     free(frames);
     free(ctab);
     free(atab);

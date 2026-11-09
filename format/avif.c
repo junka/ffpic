@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "bitstream.h"
+#include "mfile.h"
 #include "colorspace.h"
 #include "vlog.h"
 #include "file.h"
@@ -2285,7 +2286,7 @@ avif_decode_derived_primary(AVIF *h, FILE *f, uint64_t file_size,
 static struct pic*
 AVIF_load(const char *filename, int skip_flag UNUSED)
 {
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     if (f == NULL) {
         return NULL;
     }
@@ -2484,7 +2485,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
          * attempt and its box tree have to go before p is reused. */
         AVIF_free(p);
         p = NULL;
-        f = fopen(filename, "rb");
+        f = mfile_open(filename);
         if (f == NULL) {
             return NULL;
         }
@@ -2497,7 +2498,7 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
         }
     } else {
         fclose(f);
-        f = fopen(filename, "rb");
+        f = mfile_open(filename);
         if (f == NULL) {
             return NULL;
         }

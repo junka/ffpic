@@ -5,6 +5,7 @@
 #include <limits.h>
 
 #include "colorspace.h"
+#include "mfile.h"
 #include "gif.h"
 #include "file.h"
 #include "lzw.h"
@@ -535,7 +536,7 @@ GIF_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *holder = pic_alloc(sizeof(GIF));
     GIF* g = (GIF *)holder->pic;
-    FILE* f = fopen(filename, "rb");
+    FILE* f = mfile_open(filename);
     if (f == NULL) { pic_free(holder); return NULL; }
     read_gif(f, g);
     fclose(f);

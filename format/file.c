@@ -4,6 +4,7 @@
 
 #include "accl.h"
 #include "file.h"
+#include "mfile.h"
 #include "bmp.h"
 #include "gif.h"
 #include "png.h"
@@ -32,7 +33,7 @@ struct file_ops*
 file_probe(const char *filename)
 {
     struct file_ops* ops;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     if (f == NULL) {
         return NULL;
     }

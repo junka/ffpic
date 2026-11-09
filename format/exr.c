@@ -6,6 +6,7 @@
 #include <math.h>
 
 #include "colorspace.h"
+#include "mfile.h"
 #include "exr.h"
 #include "file.h"
 #include "vlog.h"
@@ -181,7 +182,7 @@ EXR_load(const char* filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(EXR));
     EXR * e = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     FFREAD_IGNORE(&e->h, sizeof(struct exr_header), 1, f);
 
     /* read headers */

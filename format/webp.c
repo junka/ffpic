@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include "bitstream.h"
+#include "mfile.h"
 #include "predict.h"
 #include "booldec.h"
 #include "file.h"
@@ -2061,7 +2062,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(WEBP));
     WEBP *w = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     // read riff 12 bytes header
     FFREAD_IGNORE(&w->header, sizeof(w->header), 1, f);
     if (w->header.riff != CHUNCK_HEADER("RIFF") ||

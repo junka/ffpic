@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "basemedia.h"
+#include "mfile.h"
 #include "file.h"
 #include "jp2.h"
 #include "vlog.h"
@@ -831,7 +832,7 @@ JP2_load(const char *filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(JP2));
     JP2 *j = p->pic;
     struct jp2_signature_box h;
-    FILE * f = fopen(filename, "rb");
+    FILE * f = mfile_open(filename);
     if (f == NULL) {
         pic_free(p);
         return NULL;

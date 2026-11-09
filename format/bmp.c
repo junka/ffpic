@@ -6,6 +6,7 @@
 #include <limits.h>
 
 #include "bmp.h"
+#include "mfile.h"
 #include "file.h"
 #include "utils.h"
 #include "vlog.h"
@@ -220,7 +221,7 @@ BMP_load(const char* filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(BMP));
     BMP *b = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     if (!f) {
         BMP_free(p);
         return NULL;

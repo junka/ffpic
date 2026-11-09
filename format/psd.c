@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include "colorspace.h"
+#include "mfile.h"
 #include "file.h"
 #include "psd.h"
 #include "vlog.h"
@@ -300,7 +301,7 @@ PSD_load(const char* filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(PSD));
     PSD * s = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     FFREAD_IGNORE(&s->h, sizeof(struct psd_file_header), 1, f);
     s->h.height = SWAP(s->h.height);
     s->h.width = SWAP(s->h.width);

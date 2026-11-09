@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include "file.h"
+#include "mfile.h"
 #include "tga.h"
 #include "colorspace.h"
 #include "utils.h"
@@ -133,7 +134,7 @@ TGA_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(TGA));
     TGA *t = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     FFREAD_IGNORE(&t->head, sizeof(struct tga_header), 1, f);
     p->depth = 32;
     p->width = ((t->head.width + 3) >> 2) << 2;

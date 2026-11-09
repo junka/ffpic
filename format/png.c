@@ -8,6 +8,7 @@
 #include <sys/cdefs.h>
 
 #include "basemedia.h"
+#include "mfile.h"
 #include "colorspace.h"
 #include "crc.h"
 #include "deflate.h"
@@ -938,7 +939,7 @@ PNG_load(const char* filename, int skip_flag)
     uint64_t out_pitch, out_size;
     int depth, decomp_len;
 
-    f = fopen(filename, "rb");
+    f = mfile_open(filename);
     if (f == NULL) {
         VERR(png, "cannot open %s", filename);
         goto fail;

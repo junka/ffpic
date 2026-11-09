@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "colorspace.h"
+#include "mfile.h"
 #include "utils.h"
 #include "file.h"
 #include "pnm.h"
@@ -289,7 +290,7 @@ PNM_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(PNM));
     PNM *m = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     FFREAD_IGNORE(&m->pn, sizeof(struct file_header), 1, f);
     fgetc(f);
     uint8_t v = m->pn.version - '0';

@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include "colorspace.h"
+#include "mfile.h"
 #include "utils.h"
 #include "ico.h"
 #include "file.h"
@@ -39,7 +40,7 @@ ICO_load(const char *filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(ICO));
     ICO *c = p->pic;
     p->depth = 32;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     FFREAD_IGNORE(&c->head, sizeof(struct ico_header), 1, f);
     // ICO_free walks these, so the entries a bail out skipped must be null
     c->dir = (struct ico_directory *)calloc(c->head.num, sizeof(struct ico_directory));

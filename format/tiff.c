@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include "file.h"
+#include "mfile.h"
 #include "tiff.h"
 #include "lzw.h"
 #include "vlog.h"
@@ -354,7 +355,7 @@ TIFF_load(const char *filename, int skip_flag UNUSED)
     struct pic *p = pic_alloc(sizeof(TIFF));
     TIFF *t = p->pic;
     t->ifd = NULL;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     p->pic = t;
     p->depth = 32;
     FFREAD_IGNORE(&t->ifh, sizeof(struct tiff_file_header), 1, f);

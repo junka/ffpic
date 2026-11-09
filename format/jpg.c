@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "bitstream.h"
+#include "mfile.h"
 #include "byteorder.h"
 #include "file.h"
 #include "jpg.h"
@@ -1142,7 +1143,7 @@ JPG_load_one(FILE *f, int skip_flag)
 static struct pic *
 JPG_load(const char *filename, int skip_flag)
 {
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     fseek(f, 0, SEEK_END);
     long end = ftell(f);
     fseek(f, 0, SEEK_SET);

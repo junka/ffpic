@@ -51,6 +51,7 @@
 #include <string.h>
 
 #include "basemedia.h"
+#include "mfile.h"
 #include "bitstream.h"
 #include "byteorder.h"
 #include "file.h"
@@ -311,32 +312,24 @@ struct pic *
 BPG_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic *p = pic_alloc(sizeof(BPG));
-    FILE *f = fopen(filename, "rb");
-    if (!f) {
-        VERR(bpg, "fopen %s failed: %s", filename, strerror(errno));
+    struct mfile_buf fb = {0};
+
+    /* the whole container has to stay addressable: the header gives the
+     * offsets the HEVC payload is read from, so parse it in place instead of
+     * copying the file out of a stream */
+    if (mfile_map_file(filename, &fb) != 0) {
+        VERR(bpg, "open %s failed: %s", filename, strerror(errno));
         pic_free(p);
         return NULL;
     }
-
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (fsize < 10 || fsize > 200 * 1024 * 1024) {
-        VERR(bpg, "file size %ld out of range", fsize);
-        fclose(f); pic_free(p); return NULL;
-    }
-    uint8_t *file_buf = malloc((size_t)fsize);
-    if (!file_buf) { fclose(f); pic_free(p); return NULL; }
-    size_t n = fread(file_buf, 1, (size_t)fsize, f);
-    fclose(f);
-    if (n != (size_t)fsize) {
-        VERR(bpg, "short read: %zu != %ld", n, fsize);
-        free(file_buf); pic_free(p); return NULL;
+    if (fb.size < 10 || fb.size > 200 * 1024 * 1024) {
+        VERR(bpg, "file size %zu out of range", fb.size);
+        mfile_unmap(&fb); pic_free(p); return NULL;
     }
 
     bpg_header_info info = {0};
-    if (BPG_parse_header(file_buf, (size_t)fsize, &info) < 0) {
-        free(file_buf); pic_free(p); return NULL;
+    if (BPG_parse_header(fb.data, fb.size, &info) < 0) {
+        mfile_unmap(&fb); pic_free(p); return NULL;
     }
 
     /* alpha2 without alpha1 is the "W plane" (libbpg has_w_plane): it is not
@@ -346,7 +339,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
      * the alpha channel and losing its meaning.  See the file header comment. */
     if (!info.alpha1_flag && info.alpha2_flag) {
         VERR(bpg, "BPG W plane (alpha2 without alpha1) is not supported");
-        free(file_buf); pic_free(p); return NULL;
+        mfile_unmap(&fb); pic_free(p); return NULL;
     }
     int has_alpha = info.alpha1_flag;
     int premultiplied = info.alpha1_flag && info.alpha2_flag;
@@ -354,20 +347,20 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     /* hevc_data 前补 4 字节起始码 00 00 00 01 — 恢复完整 Annex-B. */
     if (info.hevc_data_len < 2) {
         VERR(bpg, "hevc_data too short");
-        free(file_buf); pic_free(p); return NULL;
+        mfile_unmap(&fb); pic_free(p); return NULL;
     }
     size_t annex_b_len = info.hevc_data_len + 4;
     uint8_t *annex_b = malloc(annex_b_len);
-    if (!annex_b) { free(file_buf); pic_free(p); return NULL; }
+    if (!annex_b) { mfile_unmap(&fb); pic_free(p); return NULL; }
     annex_b[0] = 0x00; annex_b[1] = 0x00; annex_b[2] = 0x00; annex_b[3] = 0x01;
-    memcpy(annex_b + 4, file_buf + info.hevc_data_off, info.hevc_data_len);
+    memcpy(annex_b + 4, fb.data + info.hevc_data_off, info.hevc_data_len);
 
     /* 按起始码切 NAL payload (起始码之间的内容, 不含起始码本身) */
     int cap = 16, n_nals = 0;
     uint8_t **nals = malloc((size_t)cap * sizeof(*nals));
     int *nal_lens  = malloc((size_t)cap * sizeof(*nal_lens));
     if (!nals || !nal_lens) {
-        free(annex_b); free(file_buf); pic_free(p); return NULL;
+        free(annex_b); mfile_unmap(&fb); pic_free(p); return NULL;
     }
 
     size_t i = 0;
@@ -440,7 +433,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
     if (!pixels || (has_alpha && !alpha_pixels)) {
         free(pixels); free(alpha_pixels);
         for (int k = 0; k < n_nals; k++) free(nals[k]);
-        free(nals); free(nal_lens); free(annex_b); free(file_buf);
+        free(nals); free(nal_lens); free(annex_b); mfile_unmap(&fb);
         free_hevc_param_set(&hps); pic_free(p); return NULL;
     }
     memset(pixels, 0, (size_t)pitch * display_h);
@@ -523,7 +516,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
         VERR(bpg, "no slice decoded");
         free(pixels); free(alpha_pixels);
         for (int k = 0; k < n_nals; k++) free(nals[k]);
-        free(nals); free(nal_lens); free(annex_b); free(file_buf);
+        free(nals); free(nal_lens); free(annex_b); mfile_unmap(&fb);
         free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
         pic_free(p); return NULL;
     }
@@ -533,7 +526,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
         VERR(bpg, "alpha1 signalled but the alpha plane did not decode");
         free(pixels); free(alpha_pixels);
         for (int k = 0; k < n_nals; k++) free(nals[k]);
-        free(nals); free(nal_lens); free(annex_b); free(file_buf);
+        free(nals); free(nal_lens); free(annex_b); mfile_unmap(&fb);
         free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
         pic_free(p); return NULL;
     }
@@ -544,7 +537,7 @@ BPG_load(const char *filename, int skip_flag UNUSED)
 
     /* 清理 */
     for (int k = 0; k < n_nals; k++) free(nals[k]);
-    free(nals); free(nal_lens); free(annex_b); free(file_buf);
+    free(nals); free(nal_lens); free(annex_b); mfile_unmap(&fb);
     free_hevc_param_set(&hps); free_hevc_param_set(&ahps);
     free(alpha_pixels);
 

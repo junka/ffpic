@@ -8,6 +8,7 @@
 #include <inttypes.h>
 
 #include "hevc.h"
+#include "mfile.h"
 #include "vlog.h"
 #include "utils.h"
 #include "heif.h"
@@ -2038,7 +2039,7 @@ HEIF_load(const char *filename, int skip_flag)
 {
     struct pic *p = pic_alloc(sizeof(HEIF));
     HEIF *h = p->pic;
-    FILE *f = fopen(filename, "rb");
+    FILE *f = mfile_open(filename);
     fseek(f, 0, SEEK_END);
     int64_t size = ftell(f);
     fseek(f, 0, SEEK_SET);

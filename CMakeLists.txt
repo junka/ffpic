@@ -92,6 +92,7 @@ list(APPEND FFPIC_CODING
   "${FFPIC_ROOT}/utils/idct.c"
   "${FFPIC_ROOT}/utils/queue.c"
   "${FFPIC_ROOT}/utils/colorspace.c"
+  "${FFPIC_ROOT}/utils/mfile.c"
   "${FFPIC_ROOT}/coding/hevc.c")
 
 list(APPEND FFPIC_FORMART

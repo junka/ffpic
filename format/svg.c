@@ -6,6 +6,7 @@
 #include <ctype.h>
 
 #include "file.h"
+#include "mfile.h"
 #include "utils.h"
 #include "svg.h"
 
@@ -536,7 +537,7 @@ SVG_load(const char *filename, int skip_flag UNUSED)
 {
     struct pic * p = pic_alloc(sizeof(SVG));
     SVG * s = p->pic;
-    FILE *f = fopen(filename, "r");
+    FILE *f = mfile_open(filename);
     read_xml(s, f);
 
     return p;

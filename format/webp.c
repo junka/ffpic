@@ -2066,6 +2066,9 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
 
     uint32_t chead;
     uint32_t chunk_size;
+    /* the two payloads below lay their pixels out differently: VP8 works on
+     * 16 pixel macroblocks and pads, VP8L stores the image tight */
+    int lossless = 0;
     while (!feof(f)) {
         FFREAD_IGNORE(&chead, 4, 1, f);
         if (chead == CHUNCK_HEADER("VP8X")) {
@@ -2111,6 +2114,7 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
             /* VP8L header carries exact dims, no macroblock padding */
             if (!p->width)  p->width  = w->fi.width;
             if (!p->height) p->height = w->fi.height;
+            lossless = 1;
             break;
         } else {
             // skip other chuck as optional
@@ -2127,7 +2131,16 @@ WEBP_load(const char *filename, int skip_flag UNUSED)
         p->height = ((w->fi.height + 3) >> 2) << 2;
     }
     p->depth = 32;
-    p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    if (lossless) {
+        /* WEBP_read_lossless allocates exactly width * height * 4 bytes and
+         * writes the rows back to back, so a row is width * 4 bytes.  The
+         * macroblock pitch below describes the lossy layout and would make
+         * every consumer that walks the rows read past the end of that
+         * buffer as soon as the width is not a multiple of 16. */
+        p->pitch = p->width * 4;
+    } else {
+        p->pitch = ((((p->width + 15) >> 4) * 16 * p->depth + p->depth - 1) >> 5) << 2;
+    }
     VDBG(webp, "decoded with width %d, pitch %d\n", p->width, p->pitch);
     p->pixels = w->data;
     p->format = CS_PIXELFORMAT_RGB888;

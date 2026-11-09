@@ -3105,8 +3105,16 @@ check_webp_lossless_md5(const char *name)
         printf("%s: decoded with no pixels\n", name);
         rc = -1;
     } else {
-        /* VP8L width is exact (no macroblock padding); use width*4*height
-         * to avoid hashing any uninitialised tail padding bytes. */
+        /* VP8L rows are stored back to back, so one tight read is exactly the
+         * image a consumer that walks the rows by pitch sees.  Pin the pitch
+         * down first: the lossy macroblock pitch would be 64 here for a 32
+         * byte row, and such a consumer would then read 256 bytes past the
+         * end of the allocation. */
+        if (p->pitch != p->width * 4) {
+            printf("%s: pitch %d for a %d wide VP8L image, expected %d\n",
+                   name, p->pitch, p->width, p->width * 4);
+            rc = -1;
+        }
         size_t tight = (size_t)p->width * 4 * p->height;
         const char *got = md5_hex((const uint8_t *)p->pixels, tight);
         if (strcmp(got, WEBP_LOSSLESS_REF_MD5) != 0) {

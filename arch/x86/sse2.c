@@ -151,33 +151,16 @@ static void x86_idct_4x4_sse2_16bit(int16_t *in, int bitdepth UNUSED) {
                                &T1, &T2, &T3);
     }
 
-    // Add inverse transform to 'dst' and store.
+    /* Store the residual.  This used to load the block back and add it to
+     * the result, which is libwebp's TransformOne shape (prediction plus
+     * residual) - but the accl_ops contract is a bare inverse transform, so
+     * it added every block's own coefficients to its residual.  There is
+     * nothing to add here either way. */
     {
-      const __m128i zero = _mm_setzero_si128();
-      // Load the reference(s).
-      __m128i dst0, dst1, dst2, dst3;
-      __m128i dst_w0, dst_w1;
-
-      // Load 16 * 8 = 128 which is just two lines
-      dst_w0 = _mm_loadu_si128((__m128i *)in);
-      dst_w1 = _mm_loadu_si128((__m128i *)(in + 8));
-
-      // Convert to 16b.
-      dst0 = _mm_unpacklo_epi16(dst_w0, zero);
-      dst1 = _mm_unpackhi_epi16(dst_w0, zero);
-      dst2 = _mm_unpacklo_epi16(dst_w1, zero);
-      dst3 = _mm_unpackhi_epi16(dst_w1, zero);
-      // Add the inverse transform(s).
-      dst0 = _mm_add_epi16(dst0, T0);
-      dst1 = _mm_add_epi16(dst1, T1);
-      dst2 = _mm_add_epi16(dst2, T2);
-      dst3 = _mm_add_epi16(dst3, T3);
-
-      // Store four bytes/pixels per line.
-      _mm_storeu_si64((__m128i* )in, dst0);
-      _mm_storel_epi64((__m128i *)(in + 4), dst1);
-      _mm_storeu_si64((__m128i *)(in + 8), dst2);
-      _mm_storel_epi64((__m128i *)(in + 12), dst3);
+      _mm_storeu_si64((__m128i *)in, T0);
+      _mm_storeu_si64((__m128i *)(in + 4), T1);
+      _mm_storeu_si64((__m128i *)(in + 8), T2);
+      _mm_storeu_si64((__m128i *)(in + 12), T3);
     }
 }
 

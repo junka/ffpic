@@ -297,6 +297,50 @@ int test_idct4x4(void) {
 }
 
 
+/* The accl idct_4x4 slot holds VP8's transform, and the VP8 decoder asks for
+ * the SSE2 backend (format/webp.c).  That backend used to be libwebp's
+ * TransformOne - prediction plus residual - dropped into a slot that expects a
+ * bare inverse transform, so it added every block's own coefficients back into
+ * its residual.  A DC only block is the clearest case: its transform is flat,
+ * so anything that comes out proportional to the input is that bug.
+ *
+ * The AVX2 backend is a different transform altogether (an HEVC shaped matrix
+ * with bdShift = 20 - depth), so it is deliberately not compared here. */
+static int
+test_idct4x4_simd(void)
+{
+    int16_t data[16], want[16];
+    uint32_t seed = 1;
+    struct accl_ops *ops;
+    int t;
+
+    accl_ops_init();
+    ops = accl_find(SIMD_TYPE_SSE2);
+    if (!ops) {
+        return 0;               /* no SIMD backend registered on this machine */
+    }
+    for (t = 0; t < 64; t++) {
+        for (int i = 0; i < 16; i++) {
+            seed = seed * 1103515245u + 12345u;
+            data[i] = (int16_t)((int)((seed >> 16) % 400) - 200);
+        }
+        if (t == 0) {           /* DC only */
+            memset(data, 0, sizeof(data));
+            data[0] = 400;
+        }
+        memcpy(want, data, sizeof(data));
+        ops->idct_4x4(data, 8);
+        idct2d4x4(want);
+        if (test_verify(16, data, want)) {
+            printf("sse2 idct_4x4 mismatch on case %d\n", t);
+            accl_ops_uninit();
+            return -1;
+        }
+    }
+    accl_ops_uninit();
+    return 0;
+}
+
 #ifdef ENABLE_VULKAN
 int test_idct4x4_accl(void) {
   accl_ops_init();
@@ -413,6 +457,8 @@ int main(void)
     if (test_idct8x8_16bit())
       return -1;
     if (test_idct4x4())
+      return -1;
+    if (test_idct4x4_simd())
       return -1;
 #ifdef ENABLE_VULKAN
     if (test_idct4x4_accl())

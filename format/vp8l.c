@@ -198,8 +198,10 @@ static int vp8l_build_huff_table(vp8l_huff_table_t *t, const int *code_lengths,
         offset[len + 1] = offset[len] + count[len];
     }
 
-    /* sort symbols by ascending code length */
-    int sorted[288];
+    /* sort symbols by ascending code length.  The green table carries the
+     * colour cache slots, so its alphabet is the widest the format allows:
+     * 256 literals + 24 lengths + 2^11 cache slots. */
+    int sorted[NUM_LITERAL_CODES + NUM_LENGTH_CODES + (1 << MAX_CACHE_BITS)];
     int tmp[VP8L_MAX_CODE_LEN + 2];
     memcpy(tmp, offset, sizeof(offset));
     for (int sym = 0; sym < num_syms; sym++) {
@@ -360,6 +362,15 @@ static int vp8l_huff_decode(struct bits_vec *v, const vp8l_huff_table_t *t) {
         }
         int idx = (int)e.value + (int)(low_key & HUFFMAN_TABLE_MASK) +
                   (int)(suffix & ((1u << nbits) - 1));
+        /* A subtable groups codes of several lengths behind one 8 bit prefix,
+         * and e.bits is the width of the whole subtable.  Only as many of the
+         * suffix bits as the matched entry's own code length needs are real;
+         * the rest belong to the next code and have to go back, otherwise the
+         * wrong symbol comes out (libwebp consumes the entry's length, not the
+         * subtable's). */
+        if ((int)t->table[idx].bits < nbits) {
+            STEP_BACK(v, nbits - (int)t->table[idx].bits);
+        }
         return t->table[idx].value;
     }
     /* short code: e.bits ≤ root_bits, step back unused prefix bits */
@@ -506,12 +517,33 @@ static inline uint32_t clip255(uint32_t a) {
     return ~a >> 24;
 }
 
+/* (a + b - c) per channel, clamped into a byte: Clip255 of the sum has to be
+ * taken per component, clipping the packed pixel would keep the carry of one
+ * channel in the next. */
+static inline int add_subtract_full(int a, int b, int c) {
+    return (int)clip255((uint32_t)(a + b - c));
+}
+
 static inline uint32_t clamped_add_subtract_full(uint32_t c0, uint32_t c1, uint32_t c2) {
-    const int a = clip255((uint32_t)(c0 + c1 - c2));
-    const int r = clip255((uint32_t)(((c0 >> 16) & 0xff) + ((c1 >> 16) & 0xff) - ((c2 >> 16) & 0xff)));
-    const int g = clip255((uint32_t)(((c0 >> 8) & 0xff) + ((c1 >> 8) & 0xff) - ((c2 >> 8) & 0xff)));
-    const int b = clip255((uint32_t)((c0 & 0xff) + (c1 & 0xff) - (c2 & 0xff)));
-    return ((uint32_t)a << 24) | (r << 16) | (g << 8) | b;
+    const int a = add_subtract_full((int)(c0 >> 24), (int)(c1 >> 24), (int)(c2 >> 24));
+    const int r = add_subtract_full((int)((c0 >> 16) & 0xff), (int)((c1 >> 16) & 0xff), (int)((c2 >> 16) & 0xff));
+    const int g = add_subtract_full((int)((c0 >> 8) & 0xff), (int)((c1 >> 8) & 0xff), (int)((c2 >> 8) & 0xff));
+    const int b = add_subtract_full((int)(c0 & 0xff), (int)(c1 & 0xff), (int)(c2 & 0xff));
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+/* a + (a - b) / 2, clamped into a byte (libwebp's AddSubtractComponentHalf) */
+static inline int add_subtract_half(int a, int b) {
+    return (int)clip255((uint32_t)(a + (a - b) / 2));
+}
+
+static inline uint32_t clamped_add_subtract_half(uint32_t c0, uint32_t c1, uint32_t c2) {
+    const uint32_t ave = avg2(c0, c1);
+    const int a = add_subtract_half((int)(ave >> 24), (int)(c2 >> 24));
+    const int r = add_subtract_half((int)((ave >> 16) & 0xff), (int)((c2 >> 16) & 0xff));
+    const int g = add_subtract_half((int)((ave >> 8) & 0xff), (int)((c2 >> 8) & 0xff));
+    const int b = add_subtract_half((int)(ave & 0xff), (int)(c2 & 0xff));
+    return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
 static int sub3(int a, int b, int c) {
@@ -571,13 +603,7 @@ static uint32_t predictor12(const uint32_t *left, const uint32_t *top) {
     return clamped_add_subtract_full(*left, top[0], top[-1]);
 }
 static uint32_t predictor13(const uint32_t *left, const uint32_t *top) {
-    /* ClampedAddSubtractHalf: add/ subtract halved per component */
-    const uint32_t a0 = avg2(*left, top[0]);
-    const uint32_t a1 = avg2(0xff000000u, top[-1]); /* not quite right; let's
-     * just copy lossless.c exactly. Skip the Half version (complex). */
-    (void)a0; (void)a1;
-    /* Fallback: use predictor12 (AddSubtractFull), which is valid. */
-    return clamped_add_subtract_full(*left, top[0], top[-1]);
+    return clamped_add_subtract_half(*left, top[0], top[-1]);
 }
 
 static predictor_func predictors[16] = {
@@ -587,14 +613,14 @@ static predictor_func predictors[16] = {
     predictor12, predictor13, /* 14,15 unused */ NULL, NULL,
 };
 
-/* Add pixel-wise (ARGB components). Clamped mod 256 naturally from uint8
- * arithmetic when stored in uint32_t. */
+/* Add pixel-wise (ARGB components), each channel wrapping mod 256.  Alpha
+ * and green share one add: they sit eight bits apart with an empty byte
+ * between them, so the carry out of green lands in that gap, not in alpha
+ * (libwebp's VP8LAddPixels). */
 static uint32_t vp8l_add_pixels(uint32_t a, uint32_t b) {
-    const uint32_t a_mask = a & 0xff00ff00u;
-    const uint32_t b_mask = b & 0xff00ff00u;
-    uint32_t r = ((a & 0x00ff00ffu) + (b & 0x00ff00ffu)) & 0x00ff00ffu;
-    uint32_t g = ((a_mask >> 8) + (b_mask >> 8)) & 0xff00ff00u;
-    return (r & 0x00ff00ffu) | g;
+    const uint32_t alpha_and_green = (a & 0xff00ff00u) + (b & 0xff00ff00u);
+    const uint32_t red_and_blue = (a & 0x00ff00ffu) + (b & 0x00ff00ffu);
+    return (alpha_and_green & 0xff00ff00u) | (red_and_blue & 0x00ff00ffu);
 }
 
 /* Inverse Predictor transform */
@@ -658,21 +684,26 @@ static void vp8l_color_transform_inverse(const vp8l_transform_t *t,
     int width = t->xsize;
     int tile_width = 1 << t->bits;
     int mask = tile_width - 1;
-    int safe_width = width & ~mask;
     int tiles_per_row = vp8l_subsample_size(width, t->bits);
     int y = y_start;
     const uint32_t *pred_row = t->data + (y >> t->bits) * tiles_per_row;
 
     while (y < y_end) {
         const uint32_t *pred = pred_row;
-        /* ColorCodeToMultipliers */
-        int8_t green_to_red  = (int8_t)((*pred >> 0)  & 0xff);
-        int8_t green_to_blue = (int8_t)((*pred >> 8)  & 0xff);
-        int8_t red_to_blue   = (int8_t)((*pred >> 16) & 0xff);
-        pred++;
-        int remaining = safe_width;
-        while (remaining >= tile_width) {
-            for (int k = 0; k < tile_width; k++) {
+        int x = 0;
+        while (x < width) {
+            /* one multiplier entry per tile, the last one may be partial
+             * (libwebp reads it in the same order, so a row whose width is
+             * below one tile still takes its entry, not the next one) */
+            uint32_t m = *pred++;
+            int8_t green_to_red  = (int8_t)((m >> 0)  & 0xff);
+            int8_t green_to_blue = (int8_t)((m >> 8)  & 0xff);
+            int8_t red_to_blue   = (int8_t)((m >> 16) & 0xff);
+            int x_end = x + tile_width;
+            if (x_end > width) {
+                x_end = width;
+            }
+            for (; x < x_end; x++) {
                 uint32_t argb = *in++;
                 int8_t green = (int8_t)(argb >> 8);
                 int new_r = (int)(argb >> 16) & 0xff;
@@ -680,36 +711,18 @@ static void vp8l_color_transform_inverse(const vp8l_transform_t *t,
                 new_r += ((int)green_to_red * (int)green) >> 5;
                 new_r &= 0xff;
                 new_b += ((int)green_to_blue * (int)green) >> 5;
-                new_b += ((int)red_to_blue * (int)new_r) >> 5;
+                /* the red that feeds blue is read as a signed byte, like in
+                 * libwebp: it is a delta, not a colour */
+                new_b += ((int)red_to_blue * (int)(int8_t)new_r) >> 5;
                 new_b &= 0xff;
-                *out++ = (argb & 0xff00ff00u) | ((uint32_t)new_r << 16) | (uint32_t)new_b;
-            }
-            remaining -= tile_width;
-            if (remaining > 0) {
-                green_to_red  = (int8_t)((*pred >> 0)  & 0xff);
-                green_to_blue = (int8_t)((*pred >> 8)  & 0xff);
-                red_to_blue   = (int8_t)((*pred >> 16) & 0xff);
-                pred++;
-            }
-        }
-        /* tail */
-        int tail = width - safe_width;
-        if (tail > 0) {
-            for (int k = 0; k < tail; k++) {
-                uint32_t argb = *in++;
-                int8_t green = (int8_t)(argb >> 8);
-                int new_r = (int)(argb >> 16) & 0xff;
-                int new_b = (int)(argb) & 0xff;
-                new_r += ((int)green_to_red * (int)green) >> 5;
-                new_r &= 0xff;
-                new_b += ((int)green_to_blue * (int)green) >> 5;
-                new_b += ((int)red_to_blue * (int)new_r) >> 5;
-                new_b &= 0xff;
-                *out++ = (argb & 0xff00ff00u) | ((uint32_t)new_r << 16) | (uint32_t)new_b;
+                *out++ = (argb & 0xff00ff00u) | ((uint32_t)new_r << 16) |
+                         (uint32_t)new_b;
             }
         }
         y++;
-        if ((y & mask) == 0) pred_row += tiles_per_row;
+        if ((y & mask) == 0) {
+            pred_row += tiles_per_row;
+        }
     }
 }
 
@@ -782,13 +795,14 @@ static int vp8l_cc_init(vp8l_color_cache_t *cc, int bits) {
 static void vp8l_cc_free(vp8l_color_cache_t *cc) {
     free(cc->entries); cc->entries = NULL;
 }
+static inline int vp8l_cc_hash(const vp8l_color_cache_t *cc, uint32_t pixel) {
+    /* the slot index is the hash the encoder used (libwebp's VP8LHashPix)
+     * and doubles as the entropy code: a cache reference is coded as
+     * len_code_limit + slot, so both sides have to agree on this. */
+    return (int)((pixel * 0x1e35a7bdu) >> (32 - cc->hash_bits));
+}
 static inline void vp8l_cc_insert(vp8l_color_cache_t *cc, uint32_t pixel) {
-    /* hash = (A*2654435761u + R*2246822519u + G*3266489917u + B*668265263u) >> (32 - cc->hash_bits) */
-    uint32_t h = (pixel * 2654435761u) ^ (uint32_t)(((pixel >> 16) & 0xff) * 2246822519u) ^
-                 (uint32_t)(((pixel >> 8) & 0xff) * 3266489917u) ^
-                 (uint32_t)((pixel & 0xff) * 668265263u);
-    int idx = h >> (32 - cc->hash_bits);
-    cc->entries[idx] = pixel;
+    cc->entries[vp8l_cc_hash(cc, pixel)] = pixel;
 }
 static inline uint32_t vp8l_cc_lookup(const vp8l_color_cache_t *cc, int idx) {
     return cc->entries[idx];
@@ -963,6 +977,7 @@ static int vp8l_decode_pixels(struct bits_vec *v, const vp8l_ctx_t *ctx,
     vp8l_color_cache_t *cc = ctx->color_cache_enabled ? (vp8l_color_cache_t*)&ctx->color_cache : NULL;
     int cc_limit = NUM_LITERAL_CODES + NUM_LENGTH_CODES + (cc ? (1 << cc->hash_bits) : 0);
     int pos = 0;
+    int cached = 0;   /* everything below this index is in the colour cache */
     while (pos < width * height) {
         int code = vp8l_huff_decode(v, &ctx->huff.tables[0]);
         if (code < 0) return -1;
@@ -995,7 +1010,12 @@ static int vp8l_decode_pixels(struct bits_vec *v, const vp8l_ctx_t *ctx,
             }
             pos += length;
         } else if (cc && code < cc_limit) {
-            /* color cache */
+            /* color cache: the stream carries only the slot, and every pixel
+             * produced so far (literals and back references alike) has to be
+             * in the table by then, inserted in output order like libwebp */
+            while (cached < pos) {
+                vp8l_cc_insert(cc, out[cached++]);
+            }
             int key = code - (NUM_LITERAL_CODES + NUM_LENGTH_CODES);
             out[pos] = vp8l_cc_lookup(cc, key);
             pos++;

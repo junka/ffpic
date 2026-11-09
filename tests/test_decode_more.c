@@ -3131,6 +3131,88 @@ check_webp_lossless_md5(const char *name)
     return rc;
 }
 
+/* A lossless WebP fixture from tests/gen_webp_samples.py, paired with the
+ * BGRA frame ffmpeg's own WebP decoder produced for it.  The samples are
+ * picked so that the VP8L encoder reaches for the tools that are easy to get
+ * wrong: the predictor, subtract-green and colour transforms, the colour
+ * cache, and Huffman codes long enough to need a second level lookup table. */
+static int
+check_webp_lossless_file(const char *name, int want_w, int want_h)
+{
+    char path[512], refpath[512];
+    struct file_ops *ops;
+    struct pic *p;
+    FILE *f;
+    uint8_t *ref;
+    uint8_t *row;
+    size_t rowbytes;
+    int rc = 0;
+    int y;
+
+    snprintf(path, sizeof(path), "%s/%s.webp", TEST_DATA_DIR, name);
+    snprintf(refpath, sizeof(refpath), "%s/%s.ref", TEST_DATA_DIR, name);
+
+    ops = file_probe(path);
+    if (!ops || strcmp(ops->name, "WEBP") != 0) {
+        printf("%s: not detected as WEBP\n", name);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (!p) {
+        printf("%s: WEBP decoder rejected it\n", name);
+        return -1;
+    }
+
+    if (p->width != want_w || p->height != want_h || !p->pixels) {
+        printf("%s: got %dx%d, expected %dx%d with pixels\n", name, p->width,
+               p->height, want_w, want_h);
+        rc = -1;
+    } else if (p->pitch != p->width * 4) {
+        /* VP8L keeps the rows back to back, so a macroblock padded pitch
+         * would send a consumer that walks the rows into whatever follows
+         * the buffer */
+        printf("%s: pitch %d for a %d wide VP8L image, expected %d\n", name,
+               p->pitch, p->width, p->width * 4);
+        rc = -1;
+    } else {
+        rowbytes = (size_t)p->width * 4;
+        ref = malloc(rowbytes * (size_t)p->height);
+        f = fopen(refpath, "rb");
+        if (!ref || !f ||
+            fread(ref, 1, rowbytes * (size_t)p->height, f) !=
+                rowbytes * (size_t)p->height) {
+            printf("%s: cannot read %s\n", name, refpath);
+            free(ref);
+            rc = -1;
+        } else {
+            for (y = 0; y < p->height && !rc; y++) {
+                const uint8_t *got = (const uint8_t *)p->pixels +
+                                     (size_t)y * p->pitch;
+                row = ref + (size_t)y * rowbytes;
+                for (size_t x = 0; x < rowbytes; x++) {
+                    if (got[x] != row[x]) {
+                        printf("%s: (%d,%d) byte %d is %d, reference %d\n",
+                               name, (int)(x / 4), y, (int)(x % 4), got[x],
+                               row[x]);
+                        rc = -1;
+                        break;
+                    }
+                }
+            }
+            free(ref);
+        }
+        if (f) {
+            fclose(f);
+        }
+    }
+
+    file_free(ops, p);
+    if (!rc) {
+        printf("%s: ok\n", name);
+    }
+    return rc;
+}
+
 /* RIFF/WEBP container whose vp8 chunk size promises 104 bytes that are not
  * there, the frame header read has to fail instead of decoding stale memory */
 static int
@@ -3843,6 +3925,16 @@ int main(void)
     }
     if (emit_webp_lossless() ||
         check_webp_lossless_md5("webp_lossless.webp")) {
+        failed++;
+    }
+    /* all three run: a short circuit here would hide the next one's failure */
+    if (check_webp_lossless_file("webp_lossless_pred", 40, 32)) {
+        failed++;
+    }
+    if (check_webp_lossless_file("webp_lossless_cross", 40, 32)) {
+        failed++;
+    }
+    if (check_webp_lossless_file("webp_lossless_cache", 32, 24)) {
         failed++;
     }
     if (emit_webp_truncated() || check_reject("webp_short.webp", "WEBP")) {

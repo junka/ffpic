@@ -855,6 +855,55 @@ test_animation_inter(void)
     return rc;
 }
 
+/* Two files with the same HEVC stream: one has no container colour box, the
+ * other carries an nclx matrix/range with an unspecified VUI matrix.  The
+ * container values must drive the YUV->RGB conversion, so the decoded
+ * pictures differ. */
+static int
+test_colr_fallback(void)
+{
+    const char *base_path = TEST_DATA_DIR "/hevc_colr_fallback_base.heic";
+    const char *fb_path = TEST_DATA_DIR "/hevc_colr_fallback.heic";
+    struct file_ops *bops = file_probe(base_path);
+    struct file_ops *fops = file_probe(fb_path);
+    struct pic *base = NULL, *fb = NULL;
+    int rc = 0, maxdiff = 0;
+
+    if (!bops || !fops) {
+        printf("colr fallback: probe failed\n");
+        return -1;
+    }
+    base = file_load(bops, base_path, 0);
+    fb = file_load(fops, fb_path, 0);
+    if (!base || !fb || base->width != 96 || base->height != 96 ||
+        fb->width != 96 || fb->height != 96) {
+        printf("colr fallback: load failed\n");
+        rc = -1;
+        goto out;
+    }
+    for (int y = 0; y < 96; y++) {
+        uint8_t *a = (uint8_t *)base->pixels + (size_t)y * base->pitch;
+        uint8_t *b = (uint8_t *)fb->pixels + (size_t)y * fb->pitch;
+        for (int x = 0; x < 96 * 4; x++) {
+            int d = abs(a[x] - b[x]);
+            if (d > maxdiff)
+                maxdiff = d;
+        }
+    }
+    if (maxdiff < 8) {
+        printf("colr fallback: pictures differ by only %d, the container "
+               "matrix/range was ignored\n", maxdiff);
+        rc = -1;
+    } else {
+        printf("OK[colr_fallback]: container matrix/range applied "
+               "(max diff %d)\n", maxdiff);
+    }
+out:
+    if (base) file_free(bops, base);
+    if (fb) file_free(fops, fb);
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -900,6 +949,9 @@ int main(void)
         return -1;
     }
     if (test_animation_inter()) {
+        return -1;
+    }
+    if (test_colr_fallback()) {
         return -1;
     }
     return 0;

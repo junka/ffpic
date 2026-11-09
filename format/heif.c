@@ -20,6 +20,8 @@
 VLOG_REGISTER(heif, DEBUG)
 
 static void HEIF_free(struct pic *p);
+static int heif_colr_override(const struct colr_box *colr,
+                              struct hevc_color_override *ov);
 
 static int
 HEIF_probe(FILE *f)
@@ -399,7 +401,7 @@ fail:
 
 int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
                 int height, struct hevc_param_set *hps, int out_bits,
-                int length_size) {
+                int length_size, const struct hevc_color_override *color) {
     // hexdump(stdout, "coded ", "", data, 256);
     uint8_t *p = data;
     if (length_size < 1 || length_size > 4)
@@ -414,8 +416,8 @@ int decode_hvc1(uint8_t *data, uint64_t len, uint8_t *pixels, int pitch,
             VERR(heif, "sample length %u runs past the item", sample_len);
             return -EINVAL;
         }
-        if (parse_nalu(p, (int)sample_len, pixels, pitch, height, NULL, hps,
-                       out_bits) < 0) {
+        if (parse_nalu_ex(p, (int)sample_len, pixels, pitch, height, NULL,
+                          hps, out_bits, color) < 0) {
             VERR(heif, "failed to parse nal unit");
             return -EINVAL;
         }
@@ -543,13 +545,14 @@ heif_pic_alloc(int width, int height, int bits)
 
 static struct pic *
 HEIF_load_one(int width, int height, uint8_t *data, int length,
-              struct hevc_param_set *hps, int bits, int length_size) {
+              struct hevc_param_set *hps, int bits, int length_size,
+              const struct hevc_color_override *color) {
     struct pic *p = heif_pic_alloc(width, height, bits);
     if (!p) {
         return NULL;
     }
     if (decode_hvc1(data, length, p->pixels, p->pitch, p->height, hps, bits,
-                    length_size) < 0) {
+                    length_size, color) < 0) {
         VERR(heif, "failed to decode a %dx%d item", p->width, p->height);
         heif_pic_free(p);
         return NULL;
@@ -620,6 +623,10 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
             ref->type != TYPE2UINT("dimg")) {
             continue;
         }
+        struct hevc_color_override gov;
+        int ghave = heif_colr_override((struct colr_box *)
+            get_ipma_item_from_item_id(h, it->item->item_id,
+                                       FOURCC2UINT('c','o','l','r')), &gov);
         int decoded = 0;
         for (int j = 0; j < ref->ref_count; j++) {
             struct heif_item *item = find_item_by_id(h, ref->to_item_ids[j]);
@@ -637,7 +644,8 @@ decode_grid_items(HEIF *h, struct heif_item *it, struct pic *p)
                                              item->data, item->length,
                                              &conf->hps,
                                              heif_output_bits(conf),
-                                             conf->lengthSizeMinusOne + 1);
+                                             conf->lengthSizeMinusOne + 1,
+                                             ghave ? &gov : NULL);
             if (!tile) {
                 VERR(heif, "failed to decode grid tile %d", j);
                 continue;
@@ -724,9 +732,14 @@ decode_primary_item(HEIF *h, struct pic *p)
             VERR(heif, "no hvcC for the primary item");
             return 0;
         }
+        struct hevc_color_override pov;
+        int phave = heif_colr_override((struct colr_box *)
+            get_ipma_item_from_item_id(h, primary_id,
+                                       FOURCC2UINT('c','o','l','r')), &pov);
         if (decode_hvc1(pri_item->data, pri_item->length, p->pixels, p->pitch,
                         p->height, &conf->hps, p->depth,
-                        conf->lengthSizeMinusOne + 1) < 0) {
+                        conf->lengthSizeMinusOne + 1,
+                        phave ? &pov : NULL) < 0) {
             VERR(heif, "failed to decode the primary item");
             return 0;
         }
@@ -824,6 +837,20 @@ heif_apply_alpha(struct pic *p, const struct pic *alpha, bool premultiplied)
             }
         }
     }
+}
+
+/* The nclx matrix/range drive the YUV->RGB conversion; the primaries and
+ * transfer curve are applied afterwards by cs_profile. */
+static int
+heif_colr_override(const struct colr_box *colr,
+                   struct hevc_color_override *ov)
+{
+    if (!colr || colr->color_type != FOURCC2UINT('n','c','l','x'))
+        return 0;
+    ov->full_range = colr->full_range_flag;
+    ov->matrix_coeffs = colr->matrix_coefficients;
+    ov->only_if_missing = 1;
+    return 1;
 }
 
 /* Container colour information wins over the CICP codes in the HEVC VUI. */
@@ -929,7 +956,8 @@ decode_reference_items_for_primary(HEIF *h, uint32_t primary_id, struct pic *p)
                         struct pic *p1 = HEIF_load_one(aw, ah, r->data,
                                                        r->length, &conf->hps,
                                                        p->depth,
-                                                       conf->lengthSizeMinusOne + 1);
+                                                       conf->lengthSizeMinusOne + 1,
+                                                       NULL);
                         if (!p1) {
                             VWARN(heif, "cannot decode the alpha item");
                             continue;
@@ -1095,7 +1123,8 @@ decode_items(HEIF *h, FILE *f, struct pic *p)
             struct pic *p1 = HEIF_load_one((int)ispe->image_width, (int)ispe->image_height,
                                            h->items[i].data, h->items[i].length,
                                            &conf->hps, heif_output_bits(conf),
-                                           conf->lengthSizeMinusOne + 1);
+                                           conf->lengthSizeMinusOne + 1,
+                                           NULL);
             if (!p1) {
                 continue;
             }
@@ -1326,10 +1355,14 @@ decode_moov(FILE *f, struct moov_box *b)
         int stsd_idx = -1;
         if (!heif_trak_supported(trak, &stsd_idx))
             continue;
+        struct hevc_color_override tov;
+        int thave = 0;
         struct HEVCSampleEntry *ce = (struct HEVCSampleEntry *)
             stbl->stsd.entries[stsd_idx];
         struct hevc_param_set *hps = &ce->config.hps;
         int out_bits = heif_output_bits(&ce->config);
+        if (ce->has_colr)
+            thave = heif_colr_override(&ce->colr, &tov);
         int width = (int)fix16_16(trak->tkhd.width);
         int height = (int)fix16_16(trak->tkhd.height);
         if (width <= 0 || height <= 0) {
@@ -1390,7 +1423,8 @@ decode_moov(FILE *f, struct moov_box *b)
             if (cdata)
                 p1 = HEIF_load_one(width, height, cdata, ctab[i].size, hps,
                                    out_bits,
-                                   ce->config.lengthSizeMinusOne + 1);
+                                   ce->config.lengthSizeMinusOne + 1,
+                                   thave ? &tov : NULL);
             free(cdata);
             if (!p1) {
                 VERR(heif, "track %d sample %d failed to decode; animation "
@@ -1414,7 +1448,8 @@ decode_moov(FILE *f, struct moov_box *b)
                 if (adata)
                     pa = HEIF_load_one(aw, ah, adata, atab[i].size,
                                        &ae->config.hps, p1->depth,
-                                       ae->config.lengthSizeMinusOne + 1);
+                                       ae->config.lengthSizeMinusOne + 1,
+                                       NULL);
                 free(adata);
                 if (pa) {
                     heif_apply_alpha(p1, pa, false);

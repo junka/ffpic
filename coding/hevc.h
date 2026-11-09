@@ -1355,6 +1355,7 @@ struct hevc_slice {
 struct hevc_color_override {
     int full_range;
     int matrix_coeffs;      /* H.273 value, as in the HEVC VUI */
+    int only_if_missing;    /* container metadata is a fallback, not a force */
 };
 
 int parse_nalu(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,

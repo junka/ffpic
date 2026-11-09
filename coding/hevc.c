@@ -7612,17 +7612,23 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         int16_t *y_plane, *u_plane, *v_plane;
         int full_range = 0;
         int matrix_coeffs = 2;
+        int have_range = 0, have_matrix = 0;
         int sub_w = sps->SubWidthC;
         int sub_h = sps->SubHeightC;
 
-        if (color) {
-            full_range = color->full_range;
-            matrix_coeffs = color->matrix_coeffs;
-        } else if (sps->vui && sps->vui->video_signal_type_present_flag) {
+        if (sps->vui && sps->vui->video_signal_type_present_flag) {
             full_range = sps->vui->video_full_range_flag;
+            have_range = 1;
             if (sps->vui->colour_description_present_flag) {
                 matrix_coeffs = sps->vui->matrix_coeffs;
+                have_matrix = 1;
             }
+        }
+        if (color) {
+            if (!color->only_if_missing || !have_range)
+                full_range = color->full_range;
+            if (!color->only_if_missing || !have_matrix)
+                matrix_coeffs = color->matrix_coeffs;
         }
         y_plane = p.pixel + crop_y * y_stride + crop_x;
         u_plane = p.pixel + p.u_offset +

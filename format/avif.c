@@ -23,6 +23,8 @@ static void avif_apply_alpha16(const struct av1_image *alpha, uint8_t *pixels,
                                int pitch, int w, int h, int premultiplied);
 static void avif_apply_alpha(const struct av1_image *alpha, uint8_t *pixels,
                              int pitch, int w, int h, int premultiplied);
+static void avif_colr_override_image(const struct colr_box *colr,
+                                     struct av1_image *img);
 
 static int
 AVIF_probe(FILE *f)
@@ -910,6 +912,8 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             free(adata);
         }
 
+        if (ce->has_colr)
+            avif_colr_override_image(&ce->colr, &img);
         int wide = img.bitdepth > 8;
         struct pic *p = pic_alloc(sizeof(AVIF));
         p->width = img.width;
@@ -1174,6 +1178,19 @@ avif_item_colr(const AVIF *h, uint32_t item_id)
         }
     }
     return nclx;
+}
+
+/* The nclx matrix/range fill in when the sequence header leaves the matrix
+ * unspecified (the same fallback contract as HEIF). */
+static void
+avif_colr_override_image(const struct colr_box *colr, struct av1_image *img)
+{
+    if (!colr || colr->color_type != FOURCC2UINT('n','c','l','x'))
+        return;
+    if (img->matrix_coefficients != MC_UNSPECIFIED)
+        return;
+    img->matrix_coefficients = colr->matrix_coefficients;
+    img->color_range = colr->full_range_flag;
 }
 
 /* Container colour information wins over the CICP codes in the bitstream.
@@ -1596,6 +1613,7 @@ avif_build_picture(AVIF *h, struct pic *p, uint32_t color_id,
                    struct av1_image *img, struct av1_image *alpha,
                    int has_alpha)
 {
+    avif_colr_override_image(avif_item_colr(h, color_id), img);
     int wide = img->bitdepth > 8;
 
     p->width = img->width;

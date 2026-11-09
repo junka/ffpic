@@ -571,6 +571,10 @@ BPG_load(const char *filename, int skip_flag UNUSED)
 static void
 BPG_free(struct pic *p)
 {
+    /* the pixels are the malloc'd plane from BPG_load, not a buffer the BPG
+     * container owns, so pic_free alone would drop them */
+    free(p->pixels);
+    p->pixels = NULL;
     pic_free(p);
 }
 

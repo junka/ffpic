@@ -35,7 +35,7 @@ struct cu_info {
     uint8_t CuPredMode : 2;
     uint8_t pcm_flag : 1;
     uint8_t cu_transquant_bypass_flag:1; //for sao
-    uint8_t qpy;
+    int8_t qpy;
 };
 #pragma pack(pop)
 
@@ -3705,7 +3705,7 @@ static void set_cu_transquant_bypass_flag(struct sps *sps, struct picture *p,
                 cu_transquant_bypass_flag);
 }
 
-static uint8_t get_qpy(struct sps *sps, struct picture *p, int x, int y) {
+static int8_t get_qpy(struct sps *sps, struct picture *p, int x, int y) {
     return get_cu_info(sps, p, x, y)->qpy;
 }
 
@@ -4152,9 +4152,8 @@ quatization_parameters(int xCb, int yCb,
          "avalaibleA %d, avalaibleB %d, qPY_A %d, qPY_B %d, qpy_pred %d, "
          "QpBdOffsetY %d",
          availableA, availableB, qPY_A, qPY_B, qPY_pred, sps->QpBdOffsetY);
-    int qPcb, qPcr;
-    int Qpy = ((qPY_pred + slice->CuQpDeltaVal + 52 + 2 * (sps->QpBdOffsetY)) %
-               (52 + sps->QpBdOffsetY)) - sps->QpBdOffsetY;
+    int qPcb = 0, qPcr = 0;
+    int Qpy = clip3(-sps->QpBdOffsetY, 51, qPY_pred + slice->CuQpDeltaVal);
     VDBG(hevc, "Qpy %d, CuQpDeltaVal %d, log2CbSize %d, %d", Qpy,
          slice->CuQpDeltaVal, cu->log2CbSize, sps->CtbLog2SizeY);
 
@@ -4203,12 +4202,17 @@ quatization_parameters(int xCb, int yCb,
         Qp_Cb = qPcb + sps->QpBdOffsetC;
         Qp_Cr = qPcr + sps->QpBdOffsetC;
     }
-    last_q.q_y = Qp_Y;
-    last_q.q_cb = Qp_Cb;
-    last_q.q_cr = Qp_Cr;
+    last_q.q_y = Qpy;
+    last_q.q_cb = qPcb;
+    last_q.q_cr = qPcr;
     VDBG(hevc, "qp (%d, %d, %d)", Qp_Y, Qp_Cb, Qp_Cr);
 
-    return last_q;
+    struct quant_pixel ret_q = {
+        .q_y = Qp_Y,
+        .q_cb = Qp_Cb,
+        .q_cr = Qp_Cr,
+    };
+    return ret_q;
 }
 
 // see 8.6.2 Scaling and transformation process
@@ -4263,6 +4267,7 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
     } else {
         int tsShift = 5 + log2floor(nTbS);
         int32_t d[32*32];
+
         // step 1, invoke 8.6.3
         scale_transform_coefficients(sps, cu, slice, p, transform_skip_flag, xTbY, yTbY, nTbS,
                                      cIdx, qP, d);
@@ -4278,7 +4283,6 @@ static int scale_and_transform(struct cu *cu, int transform_skip_flag,
             // invoke 8.6.4
             transform_scaled_coeffients(sps, p, xTbY, yTbY, nTbS, cIdx, d, r);
         }
-
         // step 3, move this step in transform_scaled_coeffients so int16 array
         // can hold the right value range
         //  for (int y = 0; y < nTbS; y++) {
@@ -4768,7 +4772,7 @@ void decode_intra_block(struct slice_segment_header *slice, struct cu *cu,
                     scale_and_transform(cu, transform_skip_flag,
                                     hps, slice, xTbY, yTbY + yTbOffsetY,
                                     cIdx, nTbS, resSamples, p);
-                    
+
                     //step 7
                     VDBG(hevc, "residualDpcm %d", residualDpcm);
                     if (residualDpcm == 1) {
@@ -6249,6 +6253,7 @@ static void parse_transform_tree(cabac_dec *d, struct cu *cu,
                 CABAC(d, CTX_TYPE_TU_CBF_LUMA + ((trafoDepth == 0) ? 1 : 0));
             VDBG(hevc, "cbf_luma %d", cbf_luma);
         }
+
         parse_transform_unit(d, cu, slice, hps, x0, y0, xBase, yBase,
                              log2TrafoSize, blkIdx, p, cbf_luma,
                              cbf_cb, cbf_cr);

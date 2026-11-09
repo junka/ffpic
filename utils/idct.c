@@ -376,13 +376,42 @@ idct_1d_8_8bit(const uint8_t *in, const int stride, int out[8]) {
     }
 }
 
+/* One 8 point pass.  The matrix rows come in mirror pairs:
+ * M[7 - x][u] == (-1)^u * M[x][u], so the even taps (u = 0, 2, 4, 6) add into
+ * an even part and the odd taps into an odd part that the pair shares.  That
+ * halves the multiplies while adding up exactly the same integer sum, so
+ * every output is bit for bit what the plain 64 multiply version produced;
+ * the rounding stays in the caller, where it was. */
 static inline void 
 idct_1d_8_16bit(const int16_t *in, const int stride, int out[8]) {
-    for (int i = 0; i < 8; i++) {
-        out[i] = 0;
-        for (int u = 0; u < 8; ++u) {
-            out[i] += idct_transform_p13[8 * i + u] * in[u * stride];
+    int v[8];
+    int last = -1;
+    for (int u = 0; u < 8; ++u) {
+        v[u] = in[u * stride];
+        if (v[u] != 0) {
+            last = u;
         }
+    }
+    if (last < 0) {
+        for (int i = 0; i < 8; i++) {
+            out[i] = 0;
+        }
+        return;
+    }
+    if (last == 0) {
+        /* only the DC tap survived: the row of the matrix is 8192 all over */
+        const int dc = v[0] * 8192;
+        for (int i = 0; i < 8; i++) {
+            out[i] = dc;
+        }
+        return;
+    }
+    for (int x = 0; x < 4; ++x) {
+        const int *m = &idct_transform_p13[8 * x];
+        const int even = m[0] * v[0] + m[2] * v[2] + m[4] * v[4] + m[6] * v[6];
+        const int odd  = m[1] * v[1] + m[3] * v[3] + m[5] * v[5] + m[7] * v[7];
+        out[x] = even + odd;
+        out[7 - x] = even - odd;
     }
 #if 0
     // which can be expanded to below
@@ -514,6 +543,28 @@ static void idct_8x8_16(void *block, int depth UNUSED) {
     int16_t colidcts[64];
     const int kColScale = 11;
     const int kColRound = 1 << (kColScale - 1);
+    const int kRowScale = 18;
+    const int kRowRound = 257 << (kRowScale - 1);
+    /* A block whose AC terms are all zero comes out flat: the column pass
+     * leaves one value per column, the row pass then reads only its DC tap
+     * (8192 times that value), so every pixel ends up the same.  Quantised
+     * blocks hit this often enough to be worth the scan. */
+    int ac_zero = 1;
+    for (int i = 1; i < 64; i++) {
+        if (in[i]) {
+            ac_zero = 0;
+            break;
+        }
+    }
+    if (ac_zero) {
+        const int c = ((int)in[0] * 8192 + kColRound) >> kColScale;
+        const int16_t px =
+            (int16_t)clamp((8192 * c + kRowRound) >> kRowScale, 65535);
+        for (int i = 0; i < 64; i++) {
+            out[i] = px;
+        }
+        return;
+    }
     for (int x = 0; x < 8; ++x) {
         int colbuf[8] = {0};
         idct_1d_8_16bit(in + x, 8, colbuf);
@@ -521,8 +572,6 @@ static void idct_8x8_16(void *block, int depth UNUSED) {
             colidcts[8 * y + x] = (colbuf[y] + kColRound) >> kColScale;
         }
     }
-    const int kRowScale = 18;
-    const int kRowRound = 257 << (kRowScale - 1); // includes offset by 128
     for (int y = 0; y < 8; ++y) {
         int rowbuf[8] = {0};
         idct_1d_8_16bit(&colidcts[8 * y], 1, rowbuf);

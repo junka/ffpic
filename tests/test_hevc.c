@@ -819,6 +819,42 @@ test_animation_primary(void)
     return rc;
 }
 
+/* An inter-coded HEVC sequence cannot be presented by a still-image
+ * decoder: the loader must refuse the whole sequence, not queue the leading
+ * keyframe or blank frames. */
+static int
+test_animation_inter(void)
+{
+    const char *path = TEST_DATA_DIR "/hevc_anim_inter.heic";
+    struct file_ops *ops = file_probe(path);
+    int frames = 0, rc = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: an inter-coded sequence decoded to a picture\n", path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    while ((q = file_dequeue_pic()) != NULL) {
+        frames++;
+        file_free(ops, q);
+    }
+    if (frames != 0) {
+        printf("%s: queued %d frames from an inter-coded sequence\n",
+               path, frames);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[hevc_anim_inter]: inter-coded sequence refused\n");
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -861,6 +897,9 @@ int main(void)
         return -1;
     }
     if (test_animation_primary()) {
+        return -1;
+    }
+    if (test_animation_inter()) {
         return -1;
     }
     return 0;

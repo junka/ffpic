@@ -1373,6 +1373,9 @@ decode_moov(FILE *f, struct moov_box *b)
         if (an > cn)
             an = cn;
 
+        struct pic **frames = NULL;
+        int decoded = 0;
+        int track_failed = 0;
         for (int i = 0; i < cn; i++) {
             uint8_t *cdata = malloc(ctab[i].size ? ctab[i].size : 1);
             struct pic *p1 = NULL;
@@ -1392,6 +1395,7 @@ decode_moov(FILE *f, struct moov_box *b)
             if (!p1) {
                 VERR(heif, "track %d sample %d failed to decode; animation "
                      "requires all-intra samples", t, i);
+                track_failed = 1;
                 break;
             }
             if (ce->has_colr)
@@ -1423,13 +1427,31 @@ decode_moov(FILE *f, struct moov_box *b)
                 heif_apply_entry_clap(&ce->clap, p1);
             heif_apply_tkhd_transform(trak, p1);
             pic_set_duration(p1, ctab[i].duration_ms);
-            if (!file_enqueue_pic(p1)) {
-                VERR(heif, "animation queue is full at frame %d", i);
+            struct pic **grown = realloc(frames, (size_t)(decoded + 1) *
+                                                 sizeof(*frames));
+            if (!grown) {
                 heif_pic_free(p1);
+                track_failed = 1;
                 break;
             }
-            total++;
+            frames = grown;
+            frames[decoded++] = p1;
         }
+        /* an inter-coded sample poisons the whole sequence */
+        if (!track_failed) {
+            for (int i = 0; i < decoded; i++) {
+                if (!file_enqueue_pic(frames[i])) {
+                    VERR(heif, "animation queue is full at frame %d", i);
+                    heif_pic_free(frames[i]);
+                } else {
+                    total++;
+                }
+            }
+        } else {
+            for (int i = 0; i < decoded; i++)
+                heif_pic_free(frames[i]);
+        }
+        free(frames);
         free(ctab);
         free(atab);
     }

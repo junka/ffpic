@@ -877,6 +877,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
     if (an > cn)
         an = cn;                /* the alpha track may be shorter */
 
+    struct pic **frames = NULL;
     int decoded = 0;
     for (int i = 0; i < cn; i++) {
         uint8_t *cdata = avif_read_sample(f, &ctab[i]);
@@ -889,7 +890,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
                  "all-intra samples", i);
             free(cdata);
             av1_image_free(&img);
-            break;
+            goto fail;
         }
         free(cdata);
 
@@ -922,7 +923,7 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             av1_image_free(&img);
             if (has_alpha)
                 av1_image_free(&alpha);
-            break;
+            goto fail;
         }
         if (wide)
             av1_image_to_rgba16(&img, p->pixels, p->pitch);
@@ -947,20 +948,43 @@ avif_decode_moov_track(FILE *f, struct moov_box *moov, struct pic **first_pic_ou
             avif_apply_entry_clap(&ce->clap, p);
         avif_apply_tkhd_transform(&moov->trak[ct], p);
         pic_set_duration(p, ctab[i].duration_ms);
-        if (decoded == 0 && first_pic_out) {
-            *first_pic_out = p;
-        } else if (!file_enqueue_pic(p)) {
-            VERR(avif, "animation queue is full at frame %d", i);
+        struct pic **grown = realloc(frames, (size_t)(decoded + 1) *
+                                             sizeof(*frames));
+        if (!grown) {
             pic_free(p);
+            av1_image_free(&img);
+            if (has_alpha)
+                av1_image_free(&alpha);
+            goto fail;
         }
-        decoded++;
+        frames = grown;
+        frames[decoded++] = p;
         av1_image_free(&img);
         if (has_alpha)
             av1_image_free(&alpha);
     }
+    /* an inter-coded sample poisons the whole sequence: reference frames
+     * are missing, so do not present the leading keyframes */
+    for (int i = 0; i < decoded; i++) {
+        if (i == 0 && first_pic_out) {
+            *first_pic_out = frames[i];
+        } else if (!file_enqueue_pic(frames[i])) {
+            VERR(avif, "animation queue is full at frame %d", i);
+            pic_free(frames[i]);
+        }
+    }
+    free(frames);
     free(ctab);
     free(atab);
     return decoded;
+
+fail:
+    for (int i = 0; i < decoded; i++)
+        pic_free(frames[i]);
+    free(frames);
+    free(ctab);
+    free(atab);
+    return -1;
 }
 
 
@@ -1815,8 +1839,17 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
     /* Track-based animation (avis brand + moov). */
     if (h->moov_num > 0 && avif_is_avis(h)) {
         struct pic *first = NULL;
+        int has_tracks = 0;
+
         for (int m = 0; m < h->moov_num; m++) {
-            avif_decode_moov_track(f, h->moov + m, m == 0 ? &first : NULL);
+            for (int t = 0; t < h->moov[m].trak_num; t++) {
+                if (h->moov[m].trak[t].mdia.minf.stbl.stsz.sample_count > 0)
+                    has_tracks = 1;
+            }
+        }
+        for (int m = 0; m < h->moov_num; m++) {
+            avif_decode_moov_track(f, h->moov + m,
+                                   m == 0 ? &first : NULL);
         }
         if (first) {
             fclose(f);
@@ -1825,6 +1858,15 @@ AVIF_load(const char *filename, int skip_flag UNUSED)
              * would dangle once p is freed. */
             AVIF_free(p);
             return first;
+        }
+        if (has_tracks) {
+            /* Do not silently present a blank still for a sequence whose
+             * inter-coded samples we cannot decode. */
+            VERR(avif, "no decodable AVIF animation frames; all-intra "
+                 "tracks are required");
+            fclose(f);
+            AVIF_free(p);
+            return NULL;
         }
     }
 

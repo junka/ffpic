@@ -7887,6 +7887,15 @@ parse_nalu_ex(uint8_t *data, int len, uint8_t *pixels, int dst_pitch,
         ret = h.nal_unit_type;
         break;
     default:
+        /* Only IDR slices can be decoded: every other VCL NAL (TRAIL, CRA,
+         * BLA, ...) needs reference pictures this still-image decoder does
+         * not keep.  Return an error instead of pretending it was handled. */
+        if (h.nal_unit_type >= 1 && h.nal_unit_type <= 31) {
+            VERR(hevc, "unsupported slice nal type %d; only IDR slices are "
+                 "supported", h.nal_unit_type);
+            ret = -ENOTSUP;
+            break;
+        }
         VDBG(hevc, "unhandle nal_unit_type %d", h.nal_unit_type);
         ret = h.nal_unit_type;
         break;

@@ -608,6 +608,39 @@ test_animation_variants(void)
     return rc;
 }
 
+static int
+test_animation_inter(void)
+{
+    const char *path = TEST_DATA_DIR "/avif_anim_inter.avif";
+    struct file_ops *ops = file_probe(path);
+    int frames = 0, rc = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "AVIF")) {
+        printf("%s: not detected as AVIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: an inter-coded sequence decoded to a picture\n", path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    while ((q = file_dequeue_pic()) != NULL) {
+        frames++;
+        file_free(ops, q);
+    }
+    if (frames != 0) {
+        printf("%s: queued %d frames from an inter-coded sequence\n",
+               path, frames);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[avif_anim_inter]: inter-coded sequence refused\n");
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -624,6 +657,9 @@ int main(void)
         return -1;
     }
     if (test_animation_variants()) {
+        return -1;
+    }
+    if (test_animation_inter()) {
         return -1;
     }
     if (test_protected()) {

@@ -133,6 +133,15 @@ const float u2b_8bit[] = {
     538.97, 541.19, 543.41, 545.63, 547.85, 550.06, 552.28, 554.50, 556.72,
     558.94, 561.15, 563.37, 565.59};
 
+/* Fixed point JFIF colour deltas (JFIF3 page 3, the same constants libjpeg
+ * uses in jdcolor.c).  A delta only depends on the chroma sample, so they are
+ * computed once per row and the pixel loop is three adds and three clamps.
+ * The version this replaces did the whole thing in double, with a division
+ * and a modulo per pixel to reach the chroma plane. */
+#define CS_SCALEBITS 16
+#define CS_ONE_HALF  (1 << (CS_SCALEBITS - 1))
+#define CS_FIX(x)    ((int)((x) * (1 << CS_SCALEBITS) + 0.5))
+
 static void
 YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
                     void *V, int v, int h)
@@ -141,34 +150,41 @@ YUV_to_BGRA32_16bit(uint8_t *ptr, int pitch, void *Y, void *U,
     int16_t *sU = (int16_t *)U;
     int16_t *sV = (int16_t *)V;
     uint8_t *p = ptr;
-    int16_t yy, uu, vv;
+    int cidx[16];                 /* chroma column of each output column */
+
+    for (int k = 0; k < 8 * h; k++) {
+        cidx[k] = k / h;
+    }
 
     for (int i = 0; i < 8 * v; i++) {
+        /* the Y plane holds h * v separate 8x8 blocks, not one 16x16 array */
+        const int16_t *yrow = sY + ((i >> 3) * h) * 64 + (i & 7) * 8;
+        const int16_t *urow = sU + (i / v) * 8;
+        const int16_t *vrow = sV + (i / v) * 8;
+        int rd[16], gd[16], bd[16];
+
         for (int k = 0; k < 8 * h; k++) {
-            int r, g, b;
+            const int uu = urow[cidx[k]] - 128;
+            const int vv = vrow[cidx[k]] - 128;
 
-            // The Y[64 * 4] store the Y componets, but not in the 16 * 16 array, just four 8 * 8 array
-            yy = sY[((i / 8) * h + (k / 8)) * 64 + (i % 8) * 8 + k % 8];
-            uu = sU[(i / v) * 8 + (k / h)] - 128;
-            vv = sV[(i / v) * 8 + (k / h)] - 128;
+            rd[k] = (CS_FIX(1.40200) * vv + CS_ONE_HALF) >> CS_SCALEBITS;
+            gd[k] = (-CS_FIX(0.34414) * uu - CS_FIX(0.71414) * vv +
+                     CS_ONE_HALF) >> CS_SCALEBITS;
+            bd[k] = (CS_FIX(1.77200) * uu + CS_ONE_HALF) >> CS_SCALEBITS;
+        }
 
-            //see JFIF3
-            // add_r = FIX(1.40200) * vv + ONE_HALF;
-            // add_g = -FIX(0.34414) * uu - FIX(0.71414) * vv + ONE_HALF;
-            // add_b = FIX(1.772) * uu + ONE_HALF;
+        for (int bx = 0; bx < h; bx++) {
+            const int16_t *yb = yrow + bx * 64;
 
-            // y = (yy) << SCALEBITS;
-            // b = (y + add_b) >> SCALEBITS;
-            // g = (y + add_g) >> SCALEBITS;
-            // r = (y + add_r) >> SCALEBITS;
+            for (int k = 0; k < 8; k++) {
+                const int yy = yb[k];
+                const int o = bx * 8 + k;
 
-            r = clamp(yy + 1.402 * vv, 255);
-            g = clamp(yy - 0.34414 * uu - 0.71414 * vv, 255);
-            b = clamp(yy + 1.772 * uu, 255);
-            p[4 * k] = b;
-            p[4 * k + 1] = g;
-            p[4 * k + 2] = r;
-            p[4 * k + 3] = 0xff; // alpha
+                p[o * 4]     = (uint8_t)clamp(yy + bd[o], 255);
+                p[o * 4 + 1] = (uint8_t)clamp(yy + gd[o], 255);
+                p[o * 4 + 2] = (uint8_t)clamp(yy + rd[o], 255);
+                p[o * 4 + 3] = 0xff;  /* alpha */
+            }
         }
         p += pitch;
     }

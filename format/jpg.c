@@ -15,6 +15,7 @@
 #include "utils.h"
 #include "huffman.h"
 #include "vlog.h"
+#include "accl.h"
 #include "idct.h"
 #include "colorspace.h"
 
@@ -686,6 +687,9 @@ JPG_flush_image(JPG *j, int pitch)
 
     const struct dct_ops *dct = get_dct_ops(16);
     const struct cs_ops *cs_bgr = get_cs_ops(16);
+    /* the SSE2 8x8 produces exactly what the scalar does, at about twice the
+     * speed, so take it when the registry has one */
+    struct accl_ops *acc = accl_find_idct8x8();
     int ncomp = j->sof.components_num > 3 ? 3 : j->sof.components_num;
     int yh, yv;
     component_sampling(j, 0, &yh, &yv);
@@ -710,7 +714,11 @@ JPG_flush_image(JPG *j, int pitch)
                                   mx * j->hmax + hi;
                         dequant_data_unit(quant, &blk[k][64 * (vi * h + hi)],
                                           j->yuv[k] + 64 * idx);
-                        dct->idct_8x8(&blk[k][64 * (vi * h + hi)], 8);
+                        if (acc) {
+                            acc->idct_8x8(&blk[k][64 * (vi * h + hi)], 8);
+                        } else {
+                            dct->idct_8x8(&blk[k][64 * (vi * h + hi)], 8);
+                        }
                     }
                 }
             }

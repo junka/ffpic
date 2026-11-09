@@ -297,6 +297,50 @@ int test_idct4x4(void) {
 }
 
 
+/* The 8x8 slot is the SSE2 port of the scalar idct_8x8_16: same matrix, same
+ * rounding, same int16 round trip between the passes, so it has to match it
+ * exactly - not within one step.  The DC only block comes first because that
+ * shortcut is where the two could drift apart. */
+static int
+test_idct8x8_simd(void)
+{
+    int16_t data[64], want[64];
+    const struct dct_ops *dct = get_dct_ops(16);
+    struct accl_ops *ops;
+    uint32_t seed = 7;
+    int t;
+
+    accl_ops_init();
+    ops = accl_find_idct8x8();
+    if (!ops) {
+        return 0;               /* no 8x8 backend registered on this machine */
+    }
+    for (t = 0; t < 256; t++) {
+        for (int i = 0; i < 64; i++) {
+            seed = seed * 1103515245u + 12345u;
+            data[i] = (int16_t)((int)((seed >> 16) % 240) - 120);
+        }
+        if (t == 0) {           /* DC only */
+            memset(data, 0, sizeof(data));
+            data[0] = 400;
+        }
+        memcpy(want, data, sizeof(data));
+        ops->idct_8x8(data, 8);
+        dct->idct_8x8(want, 8);
+        for (int i = 0; i < 64; i++) {
+            if (data[i] != want[i]) {
+                printf("%s idct_8x8 differs on case %d at %d: %d vs %d\n",
+                       ops->type == SIMD_TYPE_SSE2 ? "sse2" : "simd", t, i,
+                       data[i], want[i]);
+                accl_ops_uninit();
+                return -1;
+            }
+        }
+    }
+    accl_ops_uninit();
+    return 0;
+}
+
 /* The accl idct_4x4 slot holds VP8's transform, and the VP8 decoder asks for
  * the SSE2 backend (format/webp.c).  That backend used to be libwebp's
  * TransformOne - prediction plus residual - dropped into a slot that expects a
@@ -459,6 +503,8 @@ int main(void)
     if (test_idct4x4())
       return -1;
     if (test_idct4x4_simd())
+      return -1;
+    if (test_idct8x8_simd())
       return -1;
 #ifdef ENABLE_VULKAN
     if (test_idct4x4_accl())

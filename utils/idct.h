@@ -22,6 +22,11 @@ struct dct_ops {
 
 const struct dct_ops *get_dct_ops(int component_bits);
 
+/* The 8x8 inverse transform matrix (13 bit fixed point) the scalar path uses.
+ * The SIMD paths build their constants from this same table so the two stay
+ * in step. */
+extern const int idct_transform_p13[64];
+
 void idct_4x4_hevc(const int32_t *in, int32_t *out, int bitdepth, bool epp);
 
 void dct_float(float *data);

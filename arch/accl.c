@@ -34,6 +34,22 @@ void accl_ops_init(void)
 #endif
 }
 
+/* The fastest registered backend that can do an 8x8 inverse transform.  The
+ * decoders that need one ask for this rather than naming a backend, so a new
+ * one only has to register itself. */
+struct accl_ops *
+accl_find_idct8x8(void)
+{
+    struct accl_ops *ops;
+
+    TAILQ_FOREACH(ops, &ops_list, next) {
+        if (ops->idct_8x8) {
+            return ops;
+        }
+    }
+    return NULL;
+}
+
 struct accl_ops *
 accl_first_available(void)
 {

@@ -1137,7 +1137,10 @@ static int vp8_decode_residual_block(WEBP *w, struct macro_block *block,
 
     struct WEBP_decoder *d = &w->d[block->segment_id];
 
-    struct accl_ops* ops = accl_find(SIMD_TYPE_SSE2);
+    /* The SSE2 4x4 backend is not wired in: its output tracks the scalar
+     * transform within one but drifts further from libwebp through VP8's
+     * prediction than the scalar path does. */
+    struct accl_ops* ops = NULL;
     const struct dct_ops *dct = get_dct_ops(16);
 
     int firstCoeff;

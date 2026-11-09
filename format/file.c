@@ -2,6 +2,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "accl.h"
 #include "file.h"
 #include "bmp.h"
 #include "gif.h"
@@ -111,6 +112,9 @@ file_find_codec(const char *name)
 void
 file_ops_init(void)
 {
+    /* the decoders pick their transforms out of this registry, so it has to
+     * be populated before anything is loaded */
+    accl_ops_init();
     BMP_init();
     GIF_init();
     PNG_init();

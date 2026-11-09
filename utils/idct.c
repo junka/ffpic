@@ -354,7 +354,7 @@ idct_float(int *buf, int *output, int stride)
 // idct_transform[8*x+u] = alpha(u)*cos((2*x+1)*u*M_PI/16)*sqrt(2), with fixed 13
 // bit precision, where alpha(0) = 1/sqrt(2) and alpha(u) = 1 for u > 0.
 // Some coefficients are off by +-1 to mimick libjpeg's behaviour.
-static const int idct_transform_p13[64] = {
+const int idct_transform_p13[64] = {
     8192,  11363,  10703, 9633, 8192, 6437, 4433, 2260,
     8192,  9633, 4433, -2259, -8192, -11362, -10704, -6436,
     8192, 6437, -4433, -11362, -8192, 2261, 10704, 9633,

@@ -31,6 +31,8 @@ void accl_ops_uninit(void);
 
 struct accl_ops *accl_first_available(void);
 
+struct accl_ops *accl_find_idct8x8(void);
+
 struct accl_ops *accl_find(int type);
 
 #ifdef __cplusplus

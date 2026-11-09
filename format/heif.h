@@ -89,6 +89,10 @@ struct hvcC_box {
     struct hevc_param_set hps;
 };
 
+#pragma pack(pop)
+
+/* Not packed: every member is parsed field by field, and the embedded
+ * colr/clap must be word aligned for their accessors. */
 // 14496-15 8.4
 struct HEVCSampleEntry {
     struct VisualSampleEntry sample;
@@ -99,8 +103,6 @@ struct HEVCSampleEntry {
     int has_clap;
     //MPEG4ExtensionDescriptorsBox; // optional
 };
-
-#pragma pack(pop)
 
 
 struct exif_block {

@@ -113,8 +113,9 @@ void
 file_ops_init(void)
 {
     /* the decoders pick their transforms out of this registry, so it has to
-     * be populated before anything is loaded */
-    accl_ops_init();
+     * be populated before anything is loaded.  CPU backends only: the GPU
+     * setup is expensive and its drivers keep taking CPU time. */
+    accl_ops_init_cpu();
     BMP_init();
     GIF_init();
     PNG_init();

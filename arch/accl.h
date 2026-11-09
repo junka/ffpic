@@ -27,6 +27,7 @@ struct accl_ops {
 void accl_ops_register(struct accl_ops *ops);
 
 void accl_ops_init(void);
+void accl_ops_init_cpu(void);
 void accl_ops_uninit(void);
 
 struct accl_ops *accl_first_available(void);

@@ -18,14 +18,32 @@ void accl_ops_register(struct accl_ops *ops) {
   TAILQ_INSERT_TAIL(&ops_list, ops, next);
 }
 
-void accl_ops_init(void)
+static int accl_cpu_inited;
+
+/* The CPU backends.  This is what a decoder wants: the SIMD transforms cost
+ * nothing to set up, unlike the GPU ones below. */
+void accl_ops_init_cpu(void)
 {
+    if (accl_cpu_inited) {
+        return;
+    }
+    accl_cpu_inited = 1;
 #ifdef __AVX2__
     x86_avx2_init();
 #endif
 #ifdef __SSE2__
     x86_sse2_init();
 #endif
+}
+
+/* Everything, GPU included.  Creating an OpenCL context and a Vulkan device
+ * takes about ten milliseconds and leaves a driver behind that goes on
+ * stealing CPU from the process - on a 2048x2048 JPEG that was worth more
+ * than the transform it accelerates - so only the applications, which ask
+ * for it explicitly, get this. */
+void accl_ops_init(void)
+{
+    accl_ops_init_cpu();
 #ifdef ENABLE_OPENCL
     opcl_amd_init();
 #endif

@@ -7001,8 +7001,6 @@ parse_slice_segment_data(struct bits_vec *v, struct hevc_slice *hslice,
              * FFmpeg cabac_reinit。二次 terminate 会从已被旧 tile 消耗完的
              * CABAC 状态中读垃圾值，导致 range/value 错乱。
              */
-            bits_vec_dump(v);
-
             if (slice->num_entry_point_offsets > 0) {
                 int next_tile = pps->TileId[CtbAddrInTs];
                 if (next_tile > 0 && next_tile <= (int)slice->num_entry_point_offsets) {
@@ -7571,7 +7569,6 @@ static int parse_slice_segment_layer(struct hevc_nalu_header *headr,
         VERR(hevc, "failed to decode slice segment data");
         goto out;
     }
-    bits_vec_dump(v);
     if (!bits_vec_aligned(v) && rbsp_trailing_bits(v) < 0) {
         ret = -EINVAL;
         goto out;

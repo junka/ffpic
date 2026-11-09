@@ -1234,6 +1234,7 @@ read_meta_box(FILE *f, struct meta_box *meta)
 
 int read_trak_box(FILE *f, struct trak_box *b)
 {
+    memset(b, 0, sizeof(*b));
     FFREAD_BOX_ST(b, f, FOURCC2UINT('t', 'r', 'a', 'k'));
     read_tkhd_box(f, &b->tkhd);
     int64_t s = b->size - 8 - b->tkhd.size;
@@ -1264,6 +1265,7 @@ int read_trak_box(FILE *f, struct trak_box *b)
 int
 read_moov_box(FILE *f, struct moov_box *b)
 {
+    memset(b, 0, sizeof(*b));
     FFREAD_BOX_ST(b, f, FOURCC2UINT('m', 'o', 'o', 'v'));
     read_mvhd_box(f, &b->mvhd);
 

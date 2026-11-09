@@ -498,7 +498,8 @@ heif_pic_alloc(int width, int height, int bits)
     p->height = height;
     p->depth = bits;
     p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
-    p->pixels = malloc((size_t)p->pitch * p->height);
+    /* the width is padded to a multiple of four, so zero the padding too */
+    p->pixels = calloc(1, (size_t)p->pitch * p->height);
     p->format = bits > 32 ? CS_PIXELFORMAT_BGRA64
                             : CS_PIXELFORMAT_BGRA_BYTES;
     if (!p->pixels) {
@@ -1259,8 +1260,9 @@ HEIF_load(const char *filename, int skip_flag)
                         : heif_grid_output_bits(h, pid);
     }
     p->pitch = ((p->width + 15) >> 4) * 16 * (p->depth >> 3);
-    p->pixels = malloc((size_t)p->pitch * p->height);
-    p->format = p->depth > 32 ? CS_PIXELFORMAT_BGRA64 : CS_PIXELFORMAT_RGB888;
+    p->pixels = calloc(1, (size_t)p->pitch * p->height);
+    p->format = p->depth > 32 ? CS_PIXELFORMAT_BGRA64
+                              : CS_PIXELFORMAT_BGRA_BYTES;
     heif_collect_metadata(h, has_primary_item(h) ? get_primary_item_id(h) : 0,
                           f);
     int n = 0;

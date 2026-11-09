@@ -426,25 +426,25 @@ parse_metadata_obu(struct bits_vec *v)
 struct frame_header_obu * parse_frame_header_obu(struct bits_vec *v)
 {
     struct frame_header_obu * obu = malloc(sizeof(*obu));
-    bits_vec_dump(v);
+    (void)v;
     return obu;
 }
 
 int parse_tile_group_obu(struct bits_vec *v, int size UNUSED)
 {
-    bits_vec_dump(v);
+    (void)v;
     return 0;
 }
 
 int parse_frame_obu(struct bits_vec *v)
 {
-    bits_vec_dump(v);
+    (void)v;
     return 0;
 }
 
 int parse_tile_list_obu(struct bits_vec *v)
 {
-    bits_vec_dump(v);
+    (void)v;
     return 0;
 }
 
@@ -633,10 +633,14 @@ int av1_decode_track_sample(const uint8_t *sample_data, size_t sample_len,
 
 /* Track-based AVIF animation helpers. */
 static int avif_is_avis(const AVIF *h) {
-    if (h->ftyp.major_brand == FOURCC2UINT('a','v','i','s')) return 1;
-    if (h->ftyp.compatible_brands)
-        for (int i = 0; i < 64; i++)
-            if (h->ftyp.compatible_brands[i] == FOURCC2UINT('a','v','i','s')) return 1;
+    /* read_ftyp() stores the box type in major_brand and the file's major
+     * brand in minor_version; compatible_brands[0] is the file minor
+     * version, the actual brands start at index 1. */
+    if (h->ftyp.minor_version == FOURCC2UINT('a','v','i','s')) return 1;
+    if (!h->ftyp.compatible_brands) return 0;
+    int n = (int)((h->ftyp.size - 12) / 4);
+    for (int i = 1; i < n; i++)
+        if (h->ftyp.compatible_brands[i] == FOURCC2UINT('a','v','i','s')) return 1;
     return 0;
 }
 static uint32_t avif_stsc_spc(const struct stsc_box *stsc, uint32_t ci) {

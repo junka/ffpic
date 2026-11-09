@@ -502,6 +502,77 @@ test_unsupported_method(void)
     return 0;
 }
 
+/* tests/data/hevc_anim.heic is an all-intra HEVC image sequence: the
+ * container has no primary item, so every frame is queued.  Check the
+ * frame count, the timing and that the frames actually differ. */
+static int
+check_animation_frame(const char *path, struct pic *p, int frames,
+                      uint64_t *prev, int *distinct, int *rc)
+{
+    if (!p) {
+        printf("%s: frame %d is missing\n", path, frames);
+        *rc = -1;
+        return -1;
+    }
+    if (p->width != 64 || p->height != 48 || p->duration_ms != 125) {
+        printf("%s: frame %d is %dx%d duration %u\n", path, frames,
+               p->width, p->height, p->duration_ms);
+        *rc = -1;
+    } else {
+        uint64_t h = 1469598103934665603ULL;
+        uint8_t *px = (uint8_t *)p->pixels;
+        for (size_t i = 0; i < (size_t)p->pitch * p->height; i++) {
+            h = (h ^ px[i]) * 1099511628211ULL;
+        }
+        if (*prev && h != *prev) {
+            (*distinct)++;
+        }
+        *prev = h;
+    }
+    return 0;
+}
+
+static int
+test_animation(void)
+{
+    const char *path = TEST_DATA_DIR "/hevc_anim.heic";
+    struct file_ops *ops = file_probe(path);
+    int rc = 0, frames = 0, distinct = 0;
+    uint64_t prev = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "HEIF")) {
+        printf("%s: not detected as HEIF\n", path);
+        return -1;
+    }
+    /* animated HEIF has no primary item, so file_load hands every frame to
+     * the queue instead of returning one */
+    p = file_load(ops, path, 0);
+    if (p) {
+        printf("%s: an animation returned a picture instead of queuing\n",
+               path);
+        file_free(ops, p);
+        rc = -1;
+    }
+    while ((q = file_dequeue_pic()) != NULL) {
+        frames++;
+        check_animation_frame(path, q, frames, &prev, &distinct, &rc);
+        file_free(ops, q);
+    }
+    if (frames != 8) {
+        printf("%s: %d frames queued, expected 8\n", path, frames);
+        rc = -1;
+    }
+    if (distinct == 0) {
+        printf("%s: every frame is identical\n", path);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[hevc_anim]: %d frames, 125 ms each\n", frames);
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -532,6 +603,9 @@ int main(void)
         return -1;
     }
     if (test_unsupported_method()) {
+        return -1;
+    }
+    if (test_animation()) {
         return -1;
     }
     return 0;

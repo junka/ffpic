@@ -362,6 +362,62 @@ out:
     return rc;
 }
 
+/* tests/data/avif_anim.avif is an all-intra AVIF sequence whose major brand
+ * is 'avis' and whose compatible brands do NOT list avis: the loader has to
+ * look at the major brand to take the track path.  The first frame is
+ * returned, the rest are queued. */
+static int
+test_animation(void)
+{
+    const char *path = TEST_DATA_DIR "/avif_anim.avif";
+    struct file_ops *ops = file_probe(path);
+    int rc = 0, frames = 0, distinct = 0;
+    uint64_t prev = 0;
+    struct pic *p, *q;
+
+    if (!ops || strcmp(ops->name, "AVIF")) {
+        printf("%s: not detected as AVIF\n", path);
+        return -1;
+    }
+    p = file_load(ops, path, 0);
+    if (!p) {
+        printf("%s: the first animation frame was not returned\n", path);
+        rc = -1;
+    }
+    while ((q = p ? p : file_dequeue_pic()) != NULL) {
+        frames++;
+        if (q->width != 64 || q->height != 48 || q->duration_ms != 125) {
+            printf("%s: frame %d is %dx%d duration %u\n", path, frames,
+                   q->width, q->height, q->duration_ms);
+            rc = -1;
+        } else {
+            uint64_t h = 1469598103934665603ULL;
+            uint8_t *px = (uint8_t *)q->pixels;
+            for (size_t i = 0; i < (size_t)q->pitch * q->height; i++) {
+                h = (h ^ px[i]) * 1099511628211ULL;
+            }
+            if (prev && h != prev) {
+                distinct++;
+            }
+            prev = h;
+        }
+        file_free(ops, q);
+        p = NULL;
+    }
+    if (frames != 8) {
+        printf("%s: %d frames, expected 8\n", path, frames);
+        rc = -1;
+    }
+    if (distinct == 0) {
+        printf("%s: every frame is identical\n", path);
+        rc = -1;
+    }
+    if (!rc) {
+        printf("OK[avif_anim]: %d frames, 125 ms each\n", frames);
+    }
+    return rc;
+}
+
 int main(void)
 {
     vlog_init();
@@ -369,6 +425,9 @@ int main(void)
         return -1;
     }
     if (test_grid()) {
+        return -1;
+    }
+    if (test_animation()) {
         return -1;
     }
     if (test_protected()) {

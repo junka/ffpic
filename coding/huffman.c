@@ -194,20 +194,21 @@ remaining:
         VERR(huffman, "end of stream %ld, %d", v->ptr - v->start, v->len);
         return -1;
     }
-    c = READ_BITS(v, trybits);
-    if (c == -1) {
-        VERR(huffman, "invalid bits read");
-        return -1;
-    }
+    /* The fast table is keyed on the next bits.  Peek them without moving the
+     * cursor: on a hit the stream advances by exactly the code length, so
+     * there is no over-read to step back afterwards. */
+    c = PEEK_BITS(v, trybits);
 
     /* looup fast table first */
     ct = tree->fast_symbol[c];
     if (ct != 0xFFFF) {
-        /* step back n bits if decoded symbol bit len less than we read */
-        STEP_BACK(v, trybits - tree->fast_bitlen[c]);
+        CONSUME_BITS(v, tree->fast_bitlen[c]);
         VDBG(huffman, "symbol %d, bitlen %d for (%x)", ct, tree->fast_bitlen[c], c);
         return ct;
     }
+
+    /* table miss: the key is really consumed, then extended one bit at a time */
+    CONSUME_BITS(v, trybits);
 
 #if SLOW_HF_BITS > 0
     if (tree->maxbitlen >= FAST_HF_BITS) {

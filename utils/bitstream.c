@@ -33,7 +33,13 @@ struct bits_vec *bits_vec_alloc(uint8_t *buff, int len, uint8_t msb) {
   vec->buff = buff;
   vec->offset = 0;
   vec->len = len;
+  vec->reserve = 0;
   vec->msb = msb;
+  vec->nostuff = 0;
+  vec->cache = 0;
+  vec->cache_ptr = buff;
+  vec->cache_off = 0;
+  vec->cache_bits = 0;
   return vec;
 }
 
@@ -42,6 +48,107 @@ void bits_vec_free(struct bits_vec *v) {
     free(v->buff);
   }
   free(v);
+}
+
+/* ---- reader bit cache ---------------------------------------------------
+ * A read used to walk the stream one bit at a time, with a function call and
+ * a bounds test per bit.  Instead the next bytes are pulled into a 64 bit
+ * window that always starts at the current position, so reading n bits is a
+ * shift.  The window is only ever filled with bytes from within the stream;
+ * past its end the missing bits read as zero, which is what the bit at a
+ * time reader did too.
+ */
+#define BITS_CACHE_MAX (57)     /* bits one fill can hold below the top bit */
+
+/* throw the window away; the next read rebuilds it from ptr/offset */
+static inline void
+bits_cache_drop(struct bits_vec *v)
+{
+    v->cache_bits = 0;
+}
+
+/* make sure at least n bits are waiting in the window */
+static void
+bits_cache_fill(struct bits_vec *v, int n)
+{
+    if (v->cache_ptr != v->ptr || v->cache_off != v->offset) {
+        /* the position moved behind our back, start a fresh window here */
+        v->cache = 0;
+        v->cache_bits = 0;
+        v->cache_ptr = v->ptr;
+        v->cache_off = v->offset;
+    }
+
+    int want = n + 8;
+    if (want > BITS_CACHE_MAX) {
+        want = BITS_CACHE_MAX;
+    }
+
+    uint64_t c = v->cache;
+    int bits = v->cache_bits;
+    uint8_t *end = v->start + v->len;
+
+    if (bits == 0) {
+        /* first byte: the bits before the current position are consumed */
+        uint8_t b = v->ptr < end ? *(v->ptr) : 0;
+        if (v->msb) {
+            c = ((uint64_t)b << 56) << v->offset;
+        } else {
+            c = (uint64_t)b >> v->offset;
+        }
+        bits = 8 - v->offset;
+    }
+
+    while (bits < want) {
+        /* whole bytes append at the tail, which stays byte aligned */
+        uint8_t *tail = v->cache_ptr + ((v->cache_off + bits) >> 3);
+        uint8_t b = tail < end ? *tail : 0;
+        if (v->msb) {
+            c |= (uint64_t)b << (56 - bits);
+        } else {
+            c |= (uint64_t)b << bits;
+        }
+        bits += 8;
+    }
+
+    v->cache = c;
+    v->cache_bits = (uint8_t)bits;
+}
+
+static inline uint32_t
+bits_cache_mask(int n)
+{
+    return n == 32 ? 0xFFFFFFFFu : (((uint32_t)1 << n) - 1u);
+}
+
+/* take n bits out of the window and move the position forward by n */
+static inline int
+bits_cache_take(struct bits_vec *v, int n)
+{
+    int ret;
+    if (v->msb) {
+        ret = (int)(v->cache >> (64 - n));
+        v->cache <<= n;
+    } else {
+        ret = (int)(v->cache & bits_cache_mask(n));
+        v->cache >>= n;
+    }
+    v->cache_bits -= (uint8_t)n;
+
+    int adv = v->offset + n;
+    v->ptr += adv >> 3;
+    v->offset = (uint8_t)(adv & 7);
+    v->cache_ptr = v->ptr;
+    v->cache_off = v->offset;
+    return ret;
+}
+
+/* the window must be valid and holding n bits when this is called */
+static inline int
+bits_cache_ready(struct bits_vec *v, int n)
+{
+    return v->cache_bits >= n && v->cache_ptr == v->ptr &&
+           v->cache_off == v->offset;
 }
 
 int bits_vec_eof_bits(struct bits_vec *v, int n) {
@@ -61,14 +168,17 @@ int bits_vec_left_bits(struct bits_vec *v)
 }
 
 void bits_vec_step_back(struct bits_vec *v, int n) {
-  while (n--) {
-    if (v->offset == 0) {
-      v->ptr--;
-      v->offset = 7;
-    } else {
-      v->offset--;
-    }
+  if (n <= 0) {
+    return;
   }
+  long pos = (long)(v->ptr - v->start) * 8 + v->offset - n;
+  if (pos < 0) {
+    /* never walk in front of the stream */
+    pos = 0;
+  }
+  v->ptr = v->start + (pos >> 3);
+  v->offset = (uint8_t)(pos & 7);
+  bits_cache_drop(v);
 }
 #if 0
 int 
@@ -113,6 +223,11 @@ read_bits(struct bits_vec *v, int n)
 #endif
 
 int bits_vec_read_bit(struct bits_vec *v) {
+  /* A single bit is cheaper to pick out of the byte directly than to pull a
+   * window in for it, and some coders walk a Huffman tree one bit at a time.
+   * The burst of bits the window may be holding is now behind the cursor, so
+   * drop it. */
+  v->cache_bits = 0;
   if (v->ptr - v->start >= (long)v->len) {
     // coders peek a few bits past the last byte to fill their lookup key;
     // pad with zeros rather than reading outside the buffer
@@ -138,32 +253,70 @@ int bits_vec_read_bit(struct bits_vec *v) {
 }
 
 int bits_vec_read_bits(struct bits_vec *v, int n) {
+  if (n <= 0) {
+    return 0;
+  }
+  if (n == 1) {
+    return bits_vec_read_bit(v);
+  }
+  if (n <= 32) {
+    if (!bits_cache_ready(v, n)) {
+      bits_cache_fill(v, n);
+    }
+    return bits_cache_take(v, n);
+  }
+  /* a read this wide would not fit an int anyway; keep the old behaviour */
   int ret = 0;
   for (int i = 0; i < n; i++) {
     int a = bits_vec_read_bit(v);
-    if (a == -1) {
-      return -1;
-    }
-    if (v->msb)
+    if (v->msb) {
       ret = ((ret << 1) | a);
-    else
+    } else {
       ret |= (a << i);
+    }
   }
   return ret;
 }
 
+int bits_vec_peek_bits(struct bits_vec *v, int n) {
+  if (n <= 0) {
+    return 0;
+  }
+  if (n > 32) {
+    n = 32;
+  }
+  if (!bits_cache_ready(v, n)) {
+    bits_cache_fill(v, n);
+  }
+  if (v->msb) {
+    return (int)(v->cache >> (64 - n));
+  }
+  return (int)(v->cache & bits_cache_mask(n));
+}
+
+void bits_vec_consume_bits(struct bits_vec *v, int n) {
+  if (n <= 0) {
+    return;
+  }
+  if (n > 32) {
+    bits_vec_skip_bits(v, n);
+    return;
+  }
+  if (!bits_cache_ready(v, n)) {
+    bits_cache_fill(v, n);
+  }
+  (void)bits_cache_take(v, n);
+}
+
 void bits_vec_skip_bits(struct bits_vec *v, int n) {
-  int skip = 0;
-  int bytes = n / 8;
-  while (skip < bytes) {
-    v->ptr++;
-    skip += 1;
+  if (n <= 0) {
+    return;
   }
-  v->offset += n % 8;
-  if (v->offset >= 8) {
-    v->ptr++;
-    v->offset -= 8;
-  }
+  /* unsigned so that a caller handing us a silly bit count cannot overflow */
+  unsigned adv = (unsigned)v->offset + (unsigned)n;
+  v->ptr += adv >> 3;
+  v->offset = (uint8_t)(adv & 7);
+  bits_cache_drop(v);
 }
 
 int bits_vec_aligned(struct bits_vec *v) {
@@ -186,6 +339,7 @@ void bits_vec_reset_border(struct bits_vec *v) {
   if (v->offset) {
     v->ptr++;
     v->offset = 0;
+    bits_cache_drop(v);
   }
 }
 
@@ -208,6 +362,7 @@ void bits_vec_reinit_cur(struct bits_vec *v) {
   assert(v->offset == 0);
   v->len -= (v->ptr - v->start);
   v->start = v->ptr;
+  bits_cache_drop(v);
 }
 
 //--- below is for bitstream writer ---
@@ -222,6 +377,10 @@ struct bits_vec *bits_writer_reserve(uint8_t msb, uint8_t nostuff) {
   vec->reserve = INIT_PART;
   vec->msb = msb;
   vec->nostuff = nostuff;
+  vec->cache = 0;
+  vec->cache_ptr = vec->ptr;
+  vec->cache_off = 0;
+  vec->cache_bits = 0;
   return vec;
 }
 

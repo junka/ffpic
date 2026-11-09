@@ -23,6 +23,17 @@ struct bits_vec {
     int reserve;
     uint8_t msb;        /* indicate bits read from which side */
     uint8_t nostuff;    /* if 1, suppress 0xFF→0x00 stuffing (deflate needs this, JPEG does not) */
+
+    /* Reader side bit cache.  ptr/offset stay the exact bit position of the
+     * stream (the rest of the library reads them); the fields below carry a
+     * window of the upcoming bits so a read is a shift instead of a per bit
+     * loop.  cache_ptr/cache_off remember the position the window was filled
+     * at: any caller that moves ptr/offset behind our back only makes the
+     * window look stale, and the next read rebuilds it. */
+    uint64_t cache;     /* pending bits, top aligned for msb, bottom aligned for lsb */
+    uint8_t *cache_ptr; /* position the window starts at */
+    uint8_t cache_off;
+    uint8_t cache_bits; /* valid bits in the window, zero padded past the end */
 };
 
 /* Allocate a bitstream reader */
@@ -42,6 +53,12 @@ int bits_vec_read_bit(struct bits_vec *v);
 
 /* read a bit from the stream */
 int bits_vec_read_bits(struct bits_vec *v, int n);
+
+/* look at the next n bits (n <= 32) without moving the cursor */
+int bits_vec_peek_bits(struct bits_vec *v, int n);
+
+/* drop the next n bits, they were already looked at */
+void bits_vec_consume_bits(struct bits_vec *v, int n);
 
 /* skip several bits without caring the value */
 void bits_vec_skip_bits(struct bits_vec *v, int n);
@@ -75,6 +92,8 @@ int bits_vec_left_bits(struct bits_vec *v);
 /* macro define for bitstream helper */
 #define READ_BIT(v) bits_vec_read_bit(v)
 #define READ_BITS(v, n) bits_vec_read_bits(v, n)
+#define PEEK_BITS(v, n) bits_vec_peek_bits(v, n)
+#define CONSUME_BITS(v, n) bits_vec_consume_bits(v, n)
 #define SKIP_BITS(v, n) bits_vec_skip_bits(v, n)
 #define STEP_BACK(v, n) bits_vec_step_back(v, n)
 #define RESET_BORDER(v) bits_vec_reset_border(v)
